@@ -118,10 +118,6 @@ MODEL_REGISTRY = {
         'id': 'digiplay/majicMIX_realistic_v7',
         'description': 'MajicMix Realistic - mix reality & fantasy, perfektný pre img2img',
     },
-    'revanimated': {
-        'id': 'stablediffusionapi/rev-animated',
-        'description': 'ReV Animated - concept art, ilustrácie, veľa detailov',
-    },
     'full': {
         'id': 'runwayml/stable-diffusion-v1-5',
         'description': 'Full (SD v1.5) - väčší, vyššia kvalita',
@@ -155,7 +151,7 @@ def load_pipeline(key: str):
         if key == 'realistic':
             from diffusers import EulerAncestralDiscreteScheduler
             pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
-        elif key in ['dreamshaper', 'revanimated', 'absolutereality', 'epicrealism', 'majicmix']:
+        elif key in ['dreamshaper', 'absolutereality', 'epicrealism', 'majicmix']:
             # Pre concept art modely použiť DDIM alebo Euler
             from diffusers import EulerDiscreteScheduler
             pipe.scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
@@ -166,7 +162,7 @@ def load_pipeline(key: str):
         if device == 'cuda':
             pipe.enable_attention_slicing()
             # Pridaj optimalizácie pre 8GB VRAM
-            if key in ['realistic', 'dreamshaper', 'revanimated', 'absolutereality', 'epicrealism', 'majicmix']:
+            if key in ['realistic', 'dreamshaper', 'absolutereality', 'epicrealism', 'majicmix']:
                 print(f"⚡ Zapínam optimalizácie pre {key} (8GB VRAM)")
                 pipe.enable_model_cpu_offload()  # Presúva modely medzi CPU/GPU
                 # pipe.enable_vae_slicing()  # Voliteľné, ak stále nestačí RAM

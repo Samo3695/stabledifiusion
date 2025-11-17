@@ -324,7 +324,6 @@ const generateDemo = () => {
           <option value="epicrealism">🎨 Epic Realism (reality + concept art)</option>
           <option value="majicmix">✨ MajicMix Realistic (reality & fantasy blend)</option>
           <option value="realistic">📷 Realistic Vision V5.1 (čistý fotorealizmus)</option>
-          <option value="revanimated">🖌️ ReV Animated (concept art, ilustrácie)</option>
           <option value="full">Full SD v1.5 (základný kvalitnejší)</option>
         </select>
       </div>
