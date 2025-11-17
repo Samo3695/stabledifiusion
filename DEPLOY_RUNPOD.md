@@ -9,38 +9,37 @@ Kompletný návod na nasadenie Stable Diffusion aplikácie na RunPod.
 2. Vytvor účet
 3. Pridaj kredit ($10-20 na začiatok)
 
-### 2. Push Docker Image na Docker Hub
+### 2. Docker Image sa builduje automaticky! 🎉
 
-```bash
-# 1. Vytvor účet na hub.docker.com
-# 2. Login
-docker login
+**GitHub Actions automaticky zbuilduje a nahrá Docker image pri každom pushu na `main` branch.**
 
-# 3. Build image
-docker build -t tvojemeno/stablediffusion:latest .
-
-# 4. Push na Docker Hub
-docker push tvojemeno/stablediffusion:latest
+Image je dostupný na:
+```
+ghcr.io/siven-samuel/stabledifiusion:latest
 ```
 
-**Alebo môžeš použiť GitHub Container Registry (ghcr.io):**
+**Ako to funguje:**
+1. Push kód na GitHub → automatický build
+2. GitHub Actions zbuilduje Docker image
+3. Image sa nahrá na GitHub Container Registry
+4. Môžeš ho hneď použiť v RunPod!
 
-```bash
-# Login do GitHub
-echo $GITHUB_TOKEN | docker login ghcr.io -u tvojemeno --password-stdin
+**Kontrola buildu:**
+- Choď na GitHub repo → **Actions tab**
+- Uvidíš "Build and Push Docker Image" workflow
+- Zelená fajka ✅ = build úspešný
 
-# Build a push
-docker build -t ghcr.io/siven-samuel/stablediffusion:latest .
-docker push ghcr.io/siven-samuel/stablediffusion:latest
-```
+**Manuálne spustenie buildu:**
+1. Choď na **Actions** → **Build and Push Docker Image**
+2. Klikni **Run workflow** → **Run workflow**
 
 ## 🎯 Deploy na RunPod
 
-### Metóda 1: Template (Odporúčané)
+### Použitie automaticky zbuildovaného image
 
 1. **Vytvor Template:**
    - V RunPod dashboard klikni na **Templates** → **New Template**
-   - **Container Image:** `tvojemeno/stablediffusion:latest`
+   - **Container Image:** `ghcr.io/siven-samuel/stabledifiusion:latest`
    - **Container Disk:** 20 GB (min)
    - **Volume Disk:** 50 GB (pre modely cache)
    - **Expose HTTP Ports:** `5000`
@@ -74,7 +73,7 @@ runpod config
 # Deploy
 runpod deploy \
   --name stablediffusion \
-  --image tvojemeno/stablediffusion:latest \
+  --image ghcr.io/siven-samuel/stabledifiusion:latest \
   --gpu-type "NVIDIA RTX 4090" \
   --gpu-count 1 \
   --ports 5000:5000 \
@@ -220,7 +219,8 @@ VITE_API_URL=http://RUNPOD_IP:5000
 
 ## 📝 Checklist
 
-- [ ] Docker image pushnutý na Docker Hub/GHCR
+- [ ] GitHub Actions workflow funguje (zelená fajka v Actions tab)
+- [ ] Docker image je na `ghcr.io/siven-samuel/stabledifiusion:latest`
 - [ ] RunPod template vytvorený
 - [ ] Pod deployed a running
 - [ ] `/health` endpoint funguje
@@ -232,6 +232,17 @@ VITE_API_URL=http://RUNPOD_IP:5000
 - [ ] Auto-stop nastavený (šetrí peniaze)
 
 ## 🆘 Troubleshooting
+
+### GitHub Actions build zlyháva
+```bash
+# Skontroluj Actions tab na GitHub
+# Klikni na failed workflow → pozri logy
+```
+
+### RunPod nemôže stiahnuť image
+- Image musí byť **public**
+- Choď na GitHub repo → **Packages** → tvoj package
+- Klikni **Package settings** → **Change visibility** → **Public**
 
 ### Container nezapína
 ```bash
@@ -264,7 +275,11 @@ ls -la /workspace/.cache/huggingface
 ---
 
 **Ready to deploy?** 🚀
-```bash
-docker build -t tvojemeno/stablediffusion:latest .
-docker push tvojemeno/stablediffusion:latest
-```
+
+1. **Commit a push zmeny** (GitHub Actions automaticky zbuilduje image)
+2. **Počkaj ~10-15 min** na dokončenie buildu (sleduj v Actions tab)
+3. **Nastav RunPod template** s `ghcr.io/siven-samuel/stabledifiusion:latest`
+4. **Deploy!**
+
+**Žiadne lokálne buildovanie potrebné!** ✨
+
