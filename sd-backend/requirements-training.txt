@@ -1,0 +1,23 @@
+# Dodatočné závislosti pre LoRA trénovanie
+# Inštalujte: pip install -r requirements-training.txt
+
+# Pre ukladanie LoRA modelov
+safetensors>=0.4.0
+
+# Pre LoRA support v diffusers
+peft>=0.7.0
+
+# Pre rýchlejší optimizer (voliteľné, ale odporúčané)
+bitsandbytes>=0.41.0
+
+# Pre monitoring trénovania (voliteľné)
+tensorboard>=2.15.0
+wandb>=0.16.0
+
+# Už máte z requirements.txt:
+# torch>=2.0.0
+# diffusers>=0.21.0
+# transformers>=4.30.0
+# accelerate>=0.20.0
+# pillow>=10.0.0
+# numpy>=1.24.0
