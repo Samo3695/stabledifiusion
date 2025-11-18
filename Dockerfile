@@ -6,7 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/workspace/.cache/huggingface \
-    TRANSFORMERS_CACHE=/workspace/.cache/huggingface
+    TRANSFORMERS_CACHE=/workspace/.cache/huggingface \
+    TORCH_HOME=/workspace/.cache/torch
 
 # Install Python and system dependencies
 RUN apt-get update && apt-get install -y \
@@ -15,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     git \
     wget \
+    curl \
     libgl1-mesa-glx \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -32,30 +34,27 @@ WORKDIR /app
 # Copy backend requirements first (for better caching)
 COPY sd-backend/requirements.txt /app/requirements.txt
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Install Python dependencies with CUDA support
+RUN pip3 install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121 && \
+    pip3 install --no-cache-dir -r requirements.txt
 
 # Copy backend code
 COPY sd-backend /app/sd-backend
 
-# Copy frontend build
-COPY sd-app /app/sd-app
-
 # Create necessary directories
 RUN mkdir -p /workspace/.cache/huggingface && \
-    mkdir -p /app/sd-backend/lora_models && \
-    mkdir -p /app/sd-app/public/generated
+    mkdir -p /workspace/.cache/torch && \
+    mkdir -p /app/sd-backend/lora_models
 
 # Set permissions
 RUN chmod -R 777 /workspace && \
-    chmod -R 777 /app/sd-backend/lora_models && \
-    chmod -R 777 /app/sd-app/public/generated
+    chmod -R 777 /app/sd-backend/lora_models
 
-# Expose ports
-EXPOSE 5000 5174
+# Expose port
+EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
 # Set working directory to backend

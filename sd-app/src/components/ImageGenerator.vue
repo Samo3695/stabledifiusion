@@ -21,12 +21,30 @@ const availableLoras = ref([])
 const selectedLora = ref('')
 const loraScale = ref(0.9) // Sila LoRA (0.0 - 1.0)
 
+// Veľkosť a pomer strán obrázka
+const aspectRatio = ref('square') // 'square', 'landscape', 'portrait', 'wide', 'ultrawide'
+const imageSize = ref('512') // '512', '768', '1024'
+
+// Mapa rozmerov podľa pomeru a veľkosti
+const getImageDimensions = (ratio, size) => {
+  const sizeNum = parseInt(size)
+  const dimensions = {
+    'square': { width: sizeNum, height: sizeNum },
+    'landscape': { width: Math.round(sizeNum * 1.5), height: sizeNum },
+    'portrait': { width: sizeNum, height: Math.round(sizeNum * 1.5) },
+    'wide': { width: Math.round(sizeNum * 16/9), height: sizeNum },
+    'ultrawide': { width: Math.round(sizeNum * 21/9), height: sizeNum }
+  }
+  return dimensions[ratio] || dimensions['square']
+}
+
 // RGB farebné kanály (1.0 = normálne, 0.0 = bez farby, 2.0 = zdvojnásobenie)
 
 
-// Konfigurácia pre lokálny Python backend
-const API_URL = 'http://localhost:5000/generate'
-const HEALTH_URL = 'http://localhost:5000/health'
+// Konfigurácia pre Python backend z environment premenných
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = `${API_BASE_URL}/generate`
+const HEALTH_URL = `${API_BASE_URL}/health`
 
 // Načítaj dostupné LoRA z backendu
 const fetchAvailableLoras = async () => {
@@ -79,12 +97,16 @@ const generateImage = async () => {
   error.value = ''
 
   try {
+    const dimensions = getImageDimensions(aspectRatio.value, imageSize.value)
+    
     const requestBody = {
       prompt: prompt.value,
       negative_prompt: negativePrompt.value,
       model: model.value,
       num_inference_steps: 50,
       guidance_scale: 7.5,
+      width: dimensions.width,
+      height: dimensions.height,
     }
     
     // Pridaj LoRA ak je vybraná
@@ -133,7 +155,7 @@ const generateImage = async () => {
   // using the ❌ Odstrániť button in the UI.
   } catch (err) {
     if (err.message.includes('Failed to fetch')) {
-      error.value = 'Nemôžem sa pripojiť k serveru. Uistite sa, že Python backend beží na http://localhost:5000'
+      error.value = `Nemôžem sa pripojiť k serveru. Uistite sa, že backend beží na ${API_BASE_URL}`
     } else {
       error.value = err.message || 'Neznáma chyba'
     }
@@ -153,7 +175,7 @@ const removeBackground = async () => {
   error.value = ''
 
   try {
-    const response = await fetch('http://localhost:5000/remove-background', {
+    const response = await fetch(`${API_BASE_URL}/remove-background`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -201,7 +223,7 @@ const adjustHue = async () => {
   error.value = ''
 
   try {
-    const response = await fetch('http://localhost:5000/adjust-hue', {
+    const response = await fetch(`${API_BASE_URL}/adjust-hue`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -325,6 +347,25 @@ const generateDemo = () => {
           <option value="majicmix">✨ MajicMix Realistic (reality & fantasy blend)</option>
           <option value="realistic">📷 Realistic Vision V5.1 (čistý fotorealizmus)</option>
           <option value="full">Full SD v1.5 (základný kvalitnejší)</option>
+        </select>
+      </div>
+
+      <!-- Veľkosť a pomer strán -->
+      <div class="input-group size-section">
+        <label for="aspect-ratio">📐 Pomer strán</label>
+        <select id="aspect-ratio" v-model="aspectRatio" :disabled="isGenerating">
+          <option value="square">⬛ Štvorcový (1:1) - {{ getImageDimensions('square', imageSize).width }}×{{ getImageDimensions('square', imageSize).height }}</option>
+          <option value="landscape">🖼️ Landscape (3:2) - {{ getImageDimensions('landscape', imageSize).width }}×{{ getImageDimensions('landscape', imageSize).height }}</option>
+          <option value="portrait">📱 Portrait (2:3) - {{ getImageDimensions('portrait', imageSize).width }}×{{ getImageDimensions('portrait', imageSize).height }}</option>
+          <option value="wide">🎬 Wide (16:9) - {{ getImageDimensions('wide', imageSize).width }}×{{ getImageDimensions('wide', imageSize).height }}</option>
+          <option value="ultrawide">🖥️ Ultra Wide (21:9) - {{ getImageDimensions('ultrawide', imageSize).width }}×{{ getImageDimensions('ultrawide', imageSize).height }}</option>
+        </select>
+
+        <label for="image-size" style="margin-top: 1rem;">📏 Základná veľkosť</label>
+        <select id="image-size" v-model="imageSize" :disabled="isGenerating">
+          <option value="512">512px (rýchle, menej VRAM)</option>
+          <option value="768">768px (vyvážené)</option>
+          <option value="1024">1024px (HD kvalita, viac VRAM)</option>
         </select>
       </div>
 
@@ -877,6 +918,19 @@ button:disabled {
 
 .lora-section label {
   color: #764ba2;
+}
+
+/* Size section */
+.size-section {
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  padding: 1.5rem;
+  border-radius: 12px;
+  border: 2px solid #0ea5e9;
+}
+
+.size-section label {
+  color: #0369a1;
+  font-weight: 600;
 }
 
 select {

@@ -247,6 +247,14 @@ def generate():
         guidance_scale = data.get('guidance_scale', 7.5)
         strength = data.get('strength', 0.75)  # Pre img2img - ako moc zmeniť obrázok
         
+        # Rozmery obrázka (width, height)
+        width = data.get('width', 512)
+        height = data.get('height', 512)
+        
+        # Zaokrúhli na násobok 8 (požiadavka SD)
+        width = int(width // 8 * 8)
+        height = int(height // 8 * 8)
+        
         if not prompt:
             return jsonify({'error': 'Prompt je povinný'}), 400
         
@@ -277,8 +285,8 @@ def generate():
             elif init_image.mode != 'RGB':
                 init_image = init_image.convert('RGB')
 
-            # Zmeniť veľkosť na 512x512 pre model
-            target_size = (512, 512)
+            # Zmeniť veľkosť podľa požadovaných rozmerov
+            target_size = (width, height)
             init_image = init_image.resize(target_size)
             if has_alpha:
                 alpha_channel = alpha_channel.resize(target_size, Image.Resampling.LANCZOS)
@@ -308,7 +316,7 @@ def generate():
         
         # Text-to-Image ak nie je obrázok
         else:
-            print(f"🎨 Text-to-Image ({model_key}): {prompt[:50]}...")
+            print(f"🎨 Text-to-Image ({model_key}): {prompt[:50]}... [{width}x{height}]")
             pipe = model_entry.get('pipe')
             if pipe is None:
                 return jsonify({'error': 'Text-to-Image pipeline nie je dostupná pre požadovaný model'}), 500
@@ -319,8 +327,8 @@ def generate():
                     negative_prompt=negative_prompt,
                     num_inference_steps=num_inference_steps,
                     guidance_scale=guidance_scale,
-                    width=512,
-                    height=512,
+                    width=width,
+                    height=height,
                 ).images[0]
         
         buffer = io.BytesIO()
