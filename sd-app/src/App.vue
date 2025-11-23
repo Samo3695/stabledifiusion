@@ -8,6 +8,7 @@ const images = ref([])
 const lastImageCellsX = ref(1)
 const lastImageCellsY = ref(1)
 const selectedImageId = ref(null)
+const templateSelected = ref(false)
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   images.value.unshift(image)
@@ -28,6 +29,10 @@ const handleDelete = (id) => {
 const handleSelectImage = (id) => {
   selectedImageId.value = id
 }
+
+const handleTemplateSelected = (isSelected) => {
+  templateSelected.value = isSelected
+}
 </script>
 
 <template>
@@ -43,6 +48,7 @@ const handleSelectImage = (id) => {
           :selectedImageId="selectedImageId"
           :lastImageCellsX="lastImageCellsX"
           :lastImageCellsY="lastImageCellsY"
+          :templateSelected="templateSelected"
         />
         <ImageGallery 
           :images="images" 
@@ -54,7 +60,10 @@ const handleSelectImage = (id) => {
       
       <!-- Pravý sidebar s nástrojmi -->
       <aside class="sidebar">
-        <ImageGenerator @image-generated="handleImageGenerated" />
+        <ImageGenerator 
+          @image-generated="handleImageGenerated" 
+          @template-selected="handleTemplateSelected"
+        />
       </aside>
     </main>
   </div>

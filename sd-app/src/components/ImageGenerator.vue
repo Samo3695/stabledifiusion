@@ -2,21 +2,21 @@
 import { ref } from 'vue'
 import TemplateSelector from './TemplateSelector.vue'
 
-const emit = defineEmits(['image-generated'])
+const emit = defineEmits(['image-generated', 'template-selected'])
 
-const prompt = ref('')
+const prompt = ref('house')
 const negativePrompt = ref('')
 const isGenerating = ref(false)
 const error = ref('')
 const inputImage = ref(null)
 const inputImagePreview = ref('')
 const strength = ref(0.75) // Ako moc zmeniť obrázok (0.0 - 1.0)
-const model = ref('lite') // 'lite' or 'full'
+const model = ref('dreamshaper') // 'lite' or 'full'
 const lastGeneratedImage = ref('') // Posledný vygenerovaný obrázok
 const isRemovingBackground = ref(false)
 const hueShift = ref(0) // Posun odtieňa (-180 až +180)
 const isAdjustingHue = ref(false)
-const autoRemoveBackground = ref(false) // Či automaticky odstrániť pozadie po generovaní
+const autoRemoveBackground = ref(true) // Či automaticky odstrániť pozadie po generovaní
 const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
 const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
 
@@ -38,6 +38,9 @@ const handleTemplateSelected = ({ dataUrl, templateName, width, height, cellsX, 
     templateCellsX.value = cellsX
     templateCellsY.value = cellsY
   }
+  
+  // Oznám App.vue že bola vybraná šablóna
+  emit('template-selected', true)
   
   // Automaticky nastav rozmery podľa šablóny
   if (width && height) {
@@ -109,6 +112,9 @@ const removeInputImage = () => {
   inputImagePreview.value = ''
   const fileInput = document.getElementById('image-upload')
   if (fileInput) fileInput.value = ''
+  
+  // Keď odstránime obrázok/šablónu, zrušíme výber šablóny
+  emit('template-selected', false)
 }
 
 const generateImage = async () => {

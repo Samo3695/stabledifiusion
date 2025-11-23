@@ -11,6 +11,10 @@ const props = defineProps({
   lastImageCellsY: {
     type: Number,
     default: 1
+  },
+  templateSelected: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -310,8 +314,8 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
     }
   }
   
-  // FÁZA 4: Hover označenie NAD všetkým (najvyšší z-index)
-  if (highlightRow !== -1 && highlightCol !== -1) {
+  // FÁZA 4: Hover označenie NAD všetkým (najvyšší z-index) - len ak je vybraná šablóna
+  if (props.templateSelected && highlightRow !== -1 && highlightCol !== -1) {
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         // Zistíme či toto políčko patrí do hover bloku
