@@ -153,11 +153,8 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       const cellKey = `${row}-${col}`
       const hasDirectImage = cellImages[cellKey]
       
-      // Najprv nakreslíme políčko (vždy)
-      if (isHighlighted) {
-        // Červená výplň pri kolízii, modrá inak
-        ctx.fillStyle = hasCollision ? 'rgba(255, 0, 0, 0.3)' : '#667eea'
-      } else if (isEven) {
+      // Nakreslíme políčko
+      if (isEven) {
         ctx.fillStyle = '#e8e8e8'
       } else {
         ctx.fillStyle = '#f8f8f8'
@@ -173,13 +170,8 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       ctx.fill()
       
       // Okraj
-      if (isHighlighted) {
-        ctx.strokeStyle = hasCollision ? '#ff0000' : '#667eea'
-        ctx.lineWidth = 3 / scale
-      } else {
-        ctx.strokeStyle = '#999'
-        ctx.lineWidth = 1 / scale
-      }
+      ctx.strokeStyle = '#999'
+      ctx.lineWidth = 1 / scale
       ctx.stroke()
     }
   }
@@ -314,6 +306,57 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
         // Zrušíme tieň
         ctx.shadowColor = 'transparent'
         ctx.shadowBlur = 0
+      }
+    }
+  }
+  
+  // FÁZA 4: Hover označenie NAD všetkým (najvyšší z-index)
+  if (highlightRow !== -1 && highlightCol !== -1) {
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        // Zistíme či toto políčko patrí do hover bloku
+        let isHighlighted = false
+        
+        // Pre 1size (1x1): len jedno políčko
+        if (hoverCellsX === 1 && hoverCellsY === 1) {
+          isHighlighted = row === highlightRow && col === highlightCol
+        }
+        // Pre 2size (1x2): dve políčka nad sebou
+        else if (hoverCellsX === 1 && hoverCellsY === 2) {
+          isHighlighted = (row === highlightRow && col === highlightCol) ||
+                         (row === highlightRow + 1 && col === highlightCol)
+        }
+        // Pre 4size (2x2): štyri políčka v bloku
+        else if (hoverCellsX === 2 && hoverCellsY === 2) {
+          isHighlighted = (row === highlightRow && col === highlightCol) ||
+                         (row === highlightRow && col === highlightCol + 1) ||
+                         (row === highlightRow + 1 && col === highlightCol) ||
+                         (row === highlightRow + 1 && col === highlightCol + 1)
+        }
+        
+        if (isHighlighted) {
+          const isoX = (col - row) * (tileWidth / 2)
+          const isoY = (col + row) * (tileHeight / 2)
+          const x = startX + isoX
+          const y = startY + isoY
+          
+          // Červená výplň pri kolízii, modrá inak
+          ctx.fillStyle = hasCollision ? 'rgba(255, 0, 0, 0.3)' : 'rgba(102, 126, 234, 0.5)'
+          
+          // Kreslenie kosoštvorca (diamantu)
+          ctx.beginPath()
+          ctx.moveTo(x, y)
+          ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+          ctx.lineTo(x, y + tileHeight)
+          ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+          ctx.closePath()
+          ctx.fill()
+          
+          // Zvýraznený okraj
+          ctx.strokeStyle = hasCollision ? '#ff0000' : '#667eea'
+          ctx.lineWidth = 3 / scale
+          ctx.stroke()
+        }
       }
     }
   }
