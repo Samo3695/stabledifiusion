@@ -5,9 +5,13 @@ import ImageGallery from './components/ImageGallery.vue'
 import CheckerboardCanvas from './components/CheckerboardCanvas.vue'
 
 const images = ref([])
+const lastImageCellsX = ref(1)
+const lastImageCellsY = ref(1)
 
-const handleImageGenerated = (image) => {
+const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   images.value.unshift(image)
+  lastImageCellsX.value = cellsX
+  lastImageCellsY.value = cellsY
 }
 
 const handleDelete = (id) => {
@@ -23,7 +27,11 @@ const handleDelete = (id) => {
     <main>
       <!-- Ľavá plocha pre obsah -->
       <div class="content-area">
-        <CheckerboardCanvas :images="images" />
+        <CheckerboardCanvas 
+          :images="images" 
+          :lastImageCellsX="lastImageCellsX"
+          :lastImageCellsY="lastImageCellsY"
+        />
         <ImageGallery :images="images" @delete="handleDelete" />
       </div>
       

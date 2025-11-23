@@ -17,13 +17,35 @@ const isRemovingBackground = ref(false)
 const hueShift = ref(0) // Posun odtieňa (-180 až +180)
 const isAdjustingHue = ref(false)
 const autoRemoveBackground = ref(false) // Či automaticky odstrániť pozadie po generovaní
+const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
+const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
+
+// Funkcia na spracovanie zmeny tabu v šablónach
+const handleTabChanged = ({ cellsX, cellsY }) => {
+  templateCellsX.value = cellsX
+  templateCellsY.value = cellsY
+  console.log(`Tab zmenený, políčka: ${cellsX}x${cellsY}`)
+}
 
 // Funkcia na spracovanie vybranej šablóny
-const handleTemplateSelected = ({ dataUrl, templateName }) => {
+const handleTemplateSelected = ({ dataUrl, templateName, width, height, cellsX, cellsY }) => {
   inputImage.value = dataUrl
   inputImagePreview.value = dataUrl
   error.value = ''
-  console.log('Šablóna vybraná:', templateName)
+  
+  // Ulož informáciu o počte políčok pre canvas
+  if (cellsX && cellsY) {
+    templateCellsX.value = cellsX
+    templateCellsY.value = cellsY
+  }
+  
+  // Automaticky nastav rozmery podľa šablóny
+  if (width && height) {
+    imageDimensions.value = `${width}x${height}`
+    console.log(`Šablóna vybraná: ${templateName}, rozmery: ${width}x${height}, políčka: ${cellsX}x${cellsY}`)
+  } else {
+    console.log('Šablóna vybraná:', templateName)
+  }
 }
 
 // LoRA podpora
@@ -161,7 +183,7 @@ const generateImage = async () => {
       }
     }
 
-    emit('image-generated', generatedImage)
+    emit('image-generated', generatedImage, templateCellsX.value, templateCellsY.value)
     prompt.value = ''
     negativePrompt.value = ''
   // Keep the uploaded input image by default so the user can re-run
@@ -240,7 +262,7 @@ const removeBackground = async () => {
     // Aktualizuj posledný obrázok
     lastGeneratedImage.value = data.image
 
-    emit('image-generated', cleanedImage)
+    emit('image-generated', cleanedImage, templateCellsX.value, templateCellsY.value)
   } catch (err) {
     error.value = err.message || 'Chyba pri odstraňovaní pozadia'
   } finally {
@@ -288,7 +310,7 @@ const adjustHue = async () => {
     // Aktualizuj posledný obrázok
     lastGeneratedImage.value = data.image
 
-    emit('image-generated', adjustedImage)
+    emit('image-generated', adjustedImage, templateCellsX.value, templateCellsY.value)
   } catch (err) {
     error.value = err.message || 'Chyba pri zmene odtieňa'
   } finally {
@@ -305,7 +327,7 @@ const generateDemo = () => {
     negativePrompt: negativePrompt.value,
     timestamp: new Date(),
   }
-  emit('image-generated', demoImage)
+  emit('image-generated', demoImage, templateCellsX.value, templateCellsY.value)
   prompt.value = ''
   negativePrompt.value = ''
 }
@@ -321,7 +343,10 @@ const generateDemo = () => {
         <label>🖼️ Vstupný obrázok (voliteľné - pre Image-to-Image)</label>
         
         <!-- Komponent pre výber šablón -->
-        <TemplateSelector @template-selected="handleTemplateSelected" />
+        <TemplateSelector 
+          @template-selected="handleTemplateSelected" 
+          @tab-changed="handleTabChanged"
+        />
         
         <!-- Alebo upload vlastného -->
         <div class="upload-divider">
@@ -403,6 +428,13 @@ const generateDemo = () => {
           <option value="200x300">200×300 px (portrét, mini)</option>
           <option value="400x400">400×400 px (štvorcový, malý)</option>
           <option value="400x600">400×600 px (portrét, malý)</option>
+          <!-- Dynamická možnosť pre custom rozmery zo šablóny -->
+          <option 
+            v-if="imageDimensions && !['200x200', '200x300', '400x400', '400x600'].includes(imageDimensions)" 
+            :value="imageDimensions"
+          >
+            {{ imageDimensions.replace('x', '×') }} px (zo šablóny)
+          </option>
         </select>
       </div>
 

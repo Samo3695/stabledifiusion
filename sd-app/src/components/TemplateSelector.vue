@@ -1,7 +1,7 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 
-const emit = defineEmits(['template-selected'])
+const emit = defineEmits(['template-selected', 'tab-changed'])
 
 const activeTemplateTab = ref('1size')
 const templateImages = ref({
@@ -11,6 +11,30 @@ const templateImages = ref({
 })
 const selectedTemplate = ref(null)
 
+// Funkcia na emitovanie veľkosti podľa tabu
+const emitTabSize = (tab) => {
+  let cellsX = 1, cellsY = 1
+  if (tab === '2size') {
+    cellsX = 1
+    cellsY = 2  // 2 políčka nad sebou
+  } else if (tab === '4size') {
+    cellsX = 2
+    cellsY = 2
+  }
+  
+  emit('tab-changed', { cellsX, cellsY })
+}
+
+// Sleduj zmeny tabu a pošli info o veľkosti políčok
+watch(activeTemplateTab, (newTab) => {
+  emitTabSize(newTab)
+})
+
+// Pri prvom načítaní pošli aktuálnu veľkosť
+onMounted(() => {
+  emitTabSize(activeTemplateTab.value)
+})
+
 const selectTemplate = (template) => {
   const folder = activeTemplateTab.value === '1size' ? 'cubes1' : 
                  activeTemplateTab.value === '2size' ? 'cubes2' : 'cubes4'
@@ -18,16 +42,39 @@ const selectTemplate = (template) => {
   
   selectedTemplate.value = template
   
-  // Načítaj šablónu ako blob a pošli parent komponentu
+  // Zisti počet políčok podľa tabu
+  let cellsX = 1, cellsY = 1
+  if (activeTemplateTab.value === '2size') {
+    cellsX = 1
+    cellsY = 2  // 2 políčka nad sebou
+  } else if (activeTemplateTab.value === '4size') {
+    cellsX = 2
+    cellsY = 2
+  }
+  
+  // Načítaj šablónu ako blob a zisti jej rozmery
   fetch(templatePath)
     .then(res => res.blob())
     .then(blob => {
       const reader = new FileReader()
       reader.onload = (e) => {
-        emit('template-selected', {
-          dataUrl: e.target.result,
-          templateName: template
-        })
+        // Načítaj obrázok aby sme zistili rozmery
+        const img = new Image()
+        img.onload = () => {
+          // Zaokrúhli rozmery na násobok 8 (požiadavka SD)
+          const width = Math.round(img.width / 8) * 8
+          const height = Math.round(img.height / 8) * 8
+          
+          emit('template-selected', {
+            dataUrl: e.target.result,
+            templateName: template,
+            width: width,
+            height: height,
+            cellsX: cellsX,
+            cellsY: cellsY
+          })
+        }
+        img.src = e.target.result
       }
       reader.readAsDataURL(blob)
     })

@@ -2,7 +2,15 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 
 const props = defineProps({
-  images: Array
+  images: Array,
+  lastImageCellsX: {
+    type: Number,
+    default: 1
+  },
+  lastImageCellsY: {
+    type: Number,
+    default: 1
+  }
 })
 
 const canvas = ref(null)
@@ -13,7 +21,7 @@ let scale = 1
 let isDragging = false
 let lastMouseX = 0
 let lastMouseY = 0
-let cellImages = {} // { 'row-col': imageUrl }
+let cellImages = {} // { 'row-col': { url: imageUrl, cellsX: number, cellsY: number } }
 let loadedImages = {} // cache pre načítané Image objekty
 
 const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = -1) => {
@@ -38,6 +46,50 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
   const viewMinY = (-offsetY / scale) - 100
   const viewMaxY = (-offsetY / scale) + height / scale + 100
   
+  // Určíme koľko políčok má byť zvýraznených na hover (podľa posledného obrázka)
+  const hoverCellsX = props.lastImageCellsX || 1
+  const hoverCellsY = props.lastImageCellsY || 1
+  
+  // Funkcia na kontrolu kolízie - či dané políčko alebo jeho okolie má už obrázok
+  const checkCollision = (row, col, cellsX, cellsY) => {
+    // Získame všetky políčka ktoré by boli ovplyvnené novým obrázkom
+    const affectedCells = []
+    
+    if (cellsX === 1 && cellsY === 1) {
+      // 1size: len jedno políčko
+      affectedCells.push(`${row}-${col}`)
+    } else if (cellsX === 1 && cellsY === 2) {
+      // 2size: dve políčka nad sebou + vedľajšie kvôli šírke 1.5×
+      affectedCells.push(`${row}-${col}`)
+      affectedCells.push(`${row + 1}-${col}`)
+      affectedCells.push(`${row}-${col - 1}`)
+      affectedCells.push(`${row}-${col + 1}`)
+      affectedCells.push(`${row + 1}-${col - 1}`)
+      affectedCells.push(`${row + 1}-${col + 1}`)
+    } else if (cellsX === 2 && cellsY === 2) {
+      // 4size: štyri políčka v bloku
+      affectedCells.push(`${row}-${col}`)
+      affectedCells.push(`${row}-${col + 1}`)
+      affectedCells.push(`${row + 1}-${col}`)
+      affectedCells.push(`${row + 1}-${col + 1}`)
+    }
+    
+    // Skontrolujeme či niektoré z týchto políčok už má obrázok
+    for (const cellKey of affectedCells) {
+      if (cellImages[cellKey]) {
+        return true // Kolízia!
+      }
+    }
+    
+    return false // Žiadna kolízia
+  }
+  
+  // Skontrolujeme kolíziu pre hover pozíciu
+  let hasCollision = false
+  if (highlightRow !== -1 && highlightCol !== -1) {
+    hasCollision = checkCollision(highlightRow, highlightCol, hoverCellsX, hoverCellsY)
+  }
+  
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       // Isometrické súradnice
@@ -55,63 +107,137 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       
       // Farba políčka
       const isEven = (row + col) % 2 === 0
-      const isHighlighted = row === highlightRow && col === highlightCol
       
-      // Skontrolujeme či políčko obsahuje obrázok
+      // Skontroluj či políčko je súčasťou hover bloku
+      let isHighlighted = false
+      if (highlightRow !== -1 && highlightCol !== -1) {
+        // Pre 1size: len jedno políčko
+        if (hoverCellsX === 1 && hoverCellsY === 1) {
+          isHighlighted = row === highlightRow && col === highlightCol
+        }
+        // Pre 2size (1x2): dve políčka nad sebou
+        else if (hoverCellsX === 1 && hoverCellsY === 2) {
+          isHighlighted = (row === highlightRow && col === highlightCol) ||
+                         (row === highlightRow + 1 && col === highlightCol)
+        }
+        // Pre 4size (2x2): štyri políčka v bloku
+        else if (hoverCellsX === 2 && hoverCellsY === 2) {
+          isHighlighted = (row === highlightRow && col === highlightCol) ||
+                         (row === highlightRow && col === highlightCol + 1) ||
+                         (row === highlightRow + 1 && col === highlightCol) ||
+                         (row === highlightRow + 1 && col === highlightCol + 1)
+        }
+      }
+      
+      // Skontrolujeme či políčko obsahuje obrázok alebo je ovplyvnené obrázkom zo susedného políčka
       const cellKey = `${row}-${col}`
-      const hasImage = cellImages[cellKey]
+      let hasImage = cellImages[cellKey]
+      let imageOriginRow = row
+      let imageOriginCol = col
+      
+      // Ak aktuálne políčko nemá obrázok, skontrolujeme susedné políčka
+      if (!hasImage) {
+        // Pre 2size (1x2): kontrola políčka nad aktuálnym a vľavo/vpravo
+        const checkPositions = [
+          { r: row - 1, c: col },     // políčko nad
+          { r: row, c: col - 1 },     // políčko vľavo
+          { r: row, c: col + 1 },     // políčko vpravo
+          { r: row - 1, c: col - 1 }, // diagonálne ľavé horné
+          { r: row - 1, c: col + 1 }, // diagonálne pravé horné
+        ]
+        
+        for (const pos of checkPositions) {
+          const checkKey = `${pos.r}-${pos.c}`
+          const checkImage = cellImages[checkKey]
+          if (checkImage) {
+            const cellsX = checkImage.cellsX || 1
+            const cellsY = checkImage.cellsY || 1
+            
+            // Kontrola či obrázok zasahuje do aktuálneho políčka
+            if (cellsX === 1 && cellsY === 2) {
+              // 2size: zasahuje do políčka pod ním a vedľajších kvôli šírke 1.5×
+              if ((pos.r === row - 1 && pos.c === col) ||     // obrázok nad
+                  (pos.r === row && Math.abs(pos.c - col) === 1) || // obrázok vľavo/vpravo
+                  (pos.r === row - 1 && Math.abs(pos.c - col) === 1)) { // obrázok diagonálne
+                hasImage = checkImage
+                imageOriginRow = pos.r
+                imageOriginCol = pos.c
+                break
+              }
+            }
+          }
+        }
+      }
       
       if (hasImage) {
-        // Nakresliť obrázok do políčka
-        const img = loadedImages[cellKey]
-        if (img && img.complete) {
+        // Nakresliť obrázok do políčka (roztiahnutý cez viacero políčok)
+        const originKey = `${imageOriginRow}-${imageOriginCol}`
+        const img = loadedImages[originKey]
+        
+        // Kreslíme len raz z origin políčka aby sa obrázok neduplikoval
+        if (img && img.complete && row === imageOriginRow && col === imageOriginCol) {
           ctx.save()
+          
+          const cellsX = hasImage.cellsX || 1
+          const cellsY = hasImage.cellsY || 1
           
           // Vypočítame pomer strán obrázka
           const imgAspect = img.width / img.height
           
-          // Šírka obrázka je presne šírka políčka
-          const drawWidth = tileWidth
+          // Šírka obrázka - pre 2size (1x2) použijeme 1.5× šírku políčka
+          let drawWidth
+          if (cellsX === 1 && cellsY === 2) {
+            drawWidth = tileWidth * 1.5  // 2size: 1.5× šírka pre lepšiu viditeľnosť
+          } else {
+            drawWidth = tileWidth * cellsX  // 1size a 4size: normálna šírka
+          }
           const drawHeight = drawWidth / imgAspect
           
-          // Nakresliť obrázok (spodok na spodku políčka, môže presahovať hore)
+          // Vypočítame posun pre viacero políčok
+          let offsetXForCells = 0
+          let offsetYForCells = 0
+          
+          if (cellsX === 1 && cellsY === 2) {
+            // 2 políčka nad sebou (2size)
+            // Posunieme vľavo aby bol viditeľný v oboch políčkach
+            offsetXForCells = -tileWidth / 4
+            offsetYForCells = tileHeight / 2
+          } else if (cellsX === 2 && cellsY === 2) {
+            // 4 políčka v bloku 2x2 (4size) - centrujeme a posunieme dole
+            offsetXForCells = tileWidth / 2
+            offsetYForCells = tileHeight
+          }
+          
+          // Nakresliť obrázok (spodok na spodku bloku políčok, môže presahovať hore)
           ctx.drawImage(
             img, 
-            x - drawWidth / 2, 
-            y + tileHeight - drawHeight,  // Spodok obrázka na spodku políčka
+            x - drawWidth / 2 + offsetXForCells, 
+            y + tileHeight - drawHeight + offsetYForCells,  // Spodok obrázka na spodku políčka
             drawWidth, 
             drawHeight
           )
           
           ctx.restore()
-          
-          // Okraj políčka - len ak je highlighted (hover)
-          if (isHighlighted) {
+        }
+        
+        // Okraj políčka - len ak je highlighted (hover) - kreslíme aj na ovplyvnených políčkach
+        if (isHighlighted) {
             ctx.beginPath()
             ctx.moveTo(x, y)
             ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
             ctx.lineTo(x, y + tileHeight)
             ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
             ctx.closePath()
-            ctx.strokeStyle = '#667eea'
+            // Červený okraj pri kolízii, modrý inak
+            ctx.strokeStyle = hasCollision ? '#ff0000' : '#667eea'
             ctx.lineWidth = 3 / scale
             ctx.stroke()
           }
-        } else {
-          // Fallback kým sa obrázok načítava
-          ctx.fillStyle = '#ddd'
-          ctx.beginPath()
-          ctx.moveTo(x, y)
-          ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
-          ctx.lineTo(x, y + tileHeight)
-          ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
-          ctx.closePath()
-          ctx.fill()
-        }
       } else {
         // Normálne políčko bez obrázka
         if (isHighlighted) {
-          ctx.fillStyle = '#667eea'
+          // Červená výplň pri kolízii, modrá inak
+          ctx.fillStyle = hasCollision ? 'rgba(255, 0, 0, 0.3)' : '#667eea'
         } else if (isEven) {
           ctx.fillStyle = '#e8e8e8'
         } else {
@@ -190,8 +316,50 @@ const handleMouseDown = (event) => {
       const cell = getGridCell(x * scaleX, y * scaleY, canvas.value.width, canvas.value.height)
       
       if (cell.row !== -1 && cell.col !== -1) {
+        // Kontrola kolízie pred umiestnením
+        const cellsX = props.lastImageCellsX || 1
+        const cellsY = props.lastImageCellsY || 1
+        
+        // Získame všetky políčka ktoré by boli ovplyvnené
+        const affectedCells = []
+        if (cellsX === 1 && cellsY === 1) {
+          affectedCells.push(`${cell.row}-${cell.col}`)
+        } else if (cellsX === 1 && cellsY === 2) {
+          affectedCells.push(`${cell.row}-${cell.col}`)
+          affectedCells.push(`${cell.row + 1}-${cell.col}`)
+          affectedCells.push(`${cell.row}-${cell.col - 1}`)
+          affectedCells.push(`${cell.row}-${cell.col + 1}`)
+          affectedCells.push(`${cell.row + 1}-${cell.col - 1}`)
+          affectedCells.push(`${cell.row + 1}-${cell.col + 1}`)
+        } else if (cellsX === 2 && cellsY === 2) {
+          affectedCells.push(`${cell.row}-${cell.col}`)
+          affectedCells.push(`${cell.row}-${cell.col + 1}`)
+          affectedCells.push(`${cell.row + 1}-${cell.col}`)
+          affectedCells.push(`${cell.row + 1}-${cell.col + 1}`)
+        }
+        
+        // Kontrola kolízie
+        let hasCollision = false
+        for (const checkKey of affectedCells) {
+          if (cellImages[checkKey]) {
+            hasCollision = true
+            break
+          }
+        }
+        
+        if (hasCollision) {
+          console.log('❌ Kolízia! Na týchto súradniciach už je obrázok.')
+          return
+        }
+        
         const cellKey = `${cell.row}-${cell.col}`
-        cellImages[cellKey] = imageToPlace.url
+        
+        // Ulož obrázok s informáciou o rozmeroch v políčkach
+        cellImages[cellKey] = {
+          url: imageToPlace.url,
+          cellsX: props.lastImageCellsX || 1,
+          cellsY: props.lastImageCellsY || 1
+        }
         
         // Načítať obrázok
         const img = new Image()
@@ -203,7 +371,7 @@ const handleMouseDown = (event) => {
         }
         img.src = imageToPlace.url
         
-        console.log('Obrázok vložený do políčka:', cell.row, cell.col)
+        console.log(`Obrázok vložený do políčka [${cell.row}, ${cell.col}], rozmery: ${props.lastImageCellsX}x${props.lastImageCellsY} políčok`)
       }
     } else {
       console.log('Žiadne obrázky v galérii')
