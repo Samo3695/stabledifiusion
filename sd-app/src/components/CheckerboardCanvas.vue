@@ -1,5 +1,9 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
+
+const props = defineProps({
+  images: Array
+})
 
 const canvas = ref(null)
 let hoveredCell = { row: -1, col: -1 }
@@ -9,6 +13,8 @@ let scale = 1
 let isDragging = false
 let lastMouseX = 0
 let lastMouseY = 0
+let cellImages = {} // { 'row-col': imageUrl }
+let loadedImages = {} // cache pre načítané Image objekty
 
 const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = -1) => {
   ctx.clearRect(0, 0, width, height)
@@ -51,27 +57,81 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       const isEven = (row + col) % 2 === 0
       const isHighlighted = row === highlightRow && col === highlightCol
       
-      if (isHighlighted) {
-        ctx.fillStyle = '#667eea'
-      } else if (isEven) {
-        ctx.fillStyle = '#e8e8e8'
+      // Skontrolujeme či políčko obsahuje obrázok
+      const cellKey = `${row}-${col}`
+      const hasImage = cellImages[cellKey]
+      
+      if (hasImage) {
+        // Nakresliť obrázok do políčka
+        const img = loadedImages[cellKey]
+        if (img && img.complete) {
+          ctx.save()
+          
+          // Vypočítame pomer strán obrázka
+          const imgAspect = img.width / img.height
+          
+          // Šírka obrázka je presne šírka políčka
+          const drawWidth = tileWidth
+          const drawHeight = drawWidth / imgAspect
+          
+          // Nakresliť obrázok (spodok na spodku políčka, môže presahovať hore)
+          ctx.drawImage(
+            img, 
+            x - drawWidth / 2, 
+            y + tileHeight - drawHeight,  // Spodok obrázka na spodku políčka
+            drawWidth, 
+            drawHeight
+          )
+          
+          ctx.restore()
+          
+          // Okraj políčka - len ak je highlighted (hover)
+          if (isHighlighted) {
+            ctx.beginPath()
+            ctx.moveTo(x, y)
+            ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+            ctx.lineTo(x, y + tileHeight)
+            ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+            ctx.closePath()
+            ctx.strokeStyle = '#667eea'
+            ctx.lineWidth = 3 / scale
+            ctx.stroke()
+          }
+        } else {
+          // Fallback kým sa obrázok načítava
+          ctx.fillStyle = '#ddd'
+          ctx.beginPath()
+          ctx.moveTo(x, y)
+          ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+          ctx.lineTo(x, y + tileHeight)
+          ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+          ctx.closePath()
+          ctx.fill()
+        }
       } else {
-        ctx.fillStyle = '#f8f8f8'
+        // Normálne políčko bez obrázka
+        if (isHighlighted) {
+          ctx.fillStyle = '#667eea'
+        } else if (isEven) {
+          ctx.fillStyle = '#e8e8e8'
+        } else {
+          ctx.fillStyle = '#f8f8f8'
+        }
+        
+        // Kreslenie kosoštvorca (diamantu)
+        ctx.beginPath()
+        ctx.moveTo(x, y)
+        ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+        ctx.lineTo(x, y + tileHeight)
+        ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+        ctx.closePath()
+        ctx.fill()
+        
+        // Okraj
+        ctx.strokeStyle = '#999'
+        ctx.lineWidth = 1 / scale
+        ctx.stroke()
       }
-      
-      // Kreslenie kosoštvorca (diamantu)
-      ctx.beginPath()
-      ctx.moveTo(x, y)
-      ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
-      ctx.lineTo(x, y + tileHeight)
-      ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
-      ctx.closePath()
-      ctx.fill()
-      
-      // Okraj
-      ctx.strokeStyle = '#999'
-      ctx.lineWidth = 1 / scale
-      ctx.stroke()
     }
   }
   
@@ -113,9 +173,50 @@ const getGridCell = (mouseX, mouseY, width, height) => {
 
 const handleMouseDown = (event) => {
   event.preventDefault()
-  isDragging = true
-  lastMouseX = event.clientX
-  lastMouseY = event.clientY
+  
+  // Ľavé tlačidlo (0) = vložiť obrázok
+  if (event.button === 0) {
+    // Použijeme prvý obrázok z galérie
+    const imageToPlace = props.images && props.images.length > 0 ? props.images[0] : null
+    
+    if (imageToPlace) {
+      const rect = canvas.value.getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+      
+      const scaleX = canvas.value.width / rect.width
+      const scaleY = canvas.value.height / rect.height
+      
+      const cell = getGridCell(x * scaleX, y * scaleY, canvas.value.width, canvas.value.height)
+      
+      if (cell.row !== -1 && cell.col !== -1) {
+        const cellKey = `${cell.row}-${cell.col}`
+        cellImages[cellKey] = imageToPlace.url
+        
+        // Načítať obrázok
+        const img = new Image()
+        img.crossOrigin = 'anonymous'
+        img.onload = () => {
+          loadedImages[cellKey] = img
+          const ctx = canvas.value.getContext('2d')
+          drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+        }
+        img.src = imageToPlace.url
+        
+        console.log('Obrázok vložený do políčka:', cell.row, cell.col)
+      }
+    } else {
+      console.log('Žiadne obrázky v galérii')
+    }
+    return
+  }
+  
+  // Pravé tlačidlo (2) = dragovanie
+  if (event.button === 2) {
+    isDragging = true
+    lastMouseX = event.clientX
+    lastMouseY = event.clientY
+  }
 }
 
 const handleContextMenu = (event) => {

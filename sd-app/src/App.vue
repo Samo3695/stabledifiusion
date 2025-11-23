@@ -23,7 +23,7 @@ const handleDelete = (id) => {
     <main>
       <!-- Ľavá plocha pre obsah -->
       <div class="content-area">
-        <CheckerboardCanvas />
+        <CheckerboardCanvas :images="images" />
         <ImageGallery :images="images" @delete="handleDelete" />
       </div>
       

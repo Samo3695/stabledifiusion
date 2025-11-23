@@ -50,6 +50,9 @@ def load_lora_to_pipeline(pipe_entry, lora_name, lora_scale=0.9):
     """
     global current_lora
     
+    # Zisti device z pipeline
+    device = pipe_entry['pipe'].device
+    
     if not lora_name:
         # Ak je lora_name prázdny, unfuse aktuálnu LoRA
         if current_lora['name']:
@@ -70,7 +73,7 @@ def load_lora_to_pipeline(pipe_entry, lora_name, lora_scale=0.9):
         if not os.path.exists(lora_path):
             raise FileNotFoundError(f"LoRA súbor nenájdený: {lora_name}")
     
-    print(f"🎨 Načítavam LoRA: {lora_name} (scale={lora_scale})")
+    print(f"🎨 Načítavam LoRA: {lora_name} (scale={lora_scale}) na device: {device}")
     
     # Unfuse predchádzajúcu LoRA ak existuje
     if current_lora['name']:
@@ -81,12 +84,16 @@ def load_lora_to_pipeline(pipe_entry, lora_name, lora_scale=0.9):
         except:
             pass
     
-    # Načítaj novú LoRA
+    # Načítaj novú LoRA a zabezpeč že je na správnom device
     pipe_entry['pipe'].load_lora_weights(lora_path)
     pipe_entry['pipe'].fuse_lora(lora_scale=lora_scale)
     
     pipe_entry['img2img'].load_lora_weights(lora_path)
     pipe_entry['img2img'].fuse_lora(lora_scale=lora_scale)
+    
+    # Uisti sa že všetko je na správnom device po načítaní LoRA
+    pipe_entry['pipe'] = pipe_entry['pipe'].to(device)
+    pipe_entry['img2img'] = pipe_entry['img2img'].to(device)
     
     current_lora['name'] = lora_name
     current_lora['scale'] = lora_scale
@@ -161,11 +168,12 @@ def load_pipeline(key: str):
         pipe = pipe.to(device)
         if device == 'cuda':
             pipe.enable_attention_slicing()
-            # Pridaj optimalizácie pre 8GB VRAM
-            if key in ['realistic', 'dreamshaper', 'absolutereality', 'epicrealism', 'majicmix']:
-                print(f"⚡ Zapínam optimalizácie pre {key} (8GB VRAM)")
-                pipe.enable_model_cpu_offload()  # Presúva modely medzi CPU/GPU
-                # pipe.enable_vae_slicing()  # Voliteľné, ak stále nestačí RAM
+            # Pridaj optimalizácie pre VRAM
+            try:
+                pipe.enable_vae_slicing()  # VAE slicing šetrí pamäť bez problémov s device
+                pipe.enable_vae_tiling()   # Ešte lepšie šetrí VRAM pri veľkých obrázkoch
+            except:
+                pass  # Staršie verzie môžu nemať tieto metódy
 
         # Create img2img pipeline sharing components
         img2img = StableDiffusionImg2ImgPipeline(

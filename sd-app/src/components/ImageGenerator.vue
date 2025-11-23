@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import TemplateSelector from './TemplateSelector.vue'
 
 const emit = defineEmits(['image-generated'])
 
@@ -15,6 +16,15 @@ const lastGeneratedImage = ref('') // Posledný vygenerovaný obrázok
 const isRemovingBackground = ref(false)
 const hueShift = ref(0) // Posun odtieňa (-180 až +180)
 const isAdjustingHue = ref(false)
+const autoRemoveBackground = ref(false) // Či automaticky odstrániť pozadie po generovaní
+
+// Funkcia na spracovanie vybranej šablóny
+const handleTemplateSelected = ({ dataUrl, templateName }) => {
+  inputImage.value = dataUrl
+  inputImagePreview.value = dataUrl
+  error.value = ''
+  console.log('Šablóna vybraná:', templateName)
+}
 
 // LoRA podpora
 const availableLoras = ref([])
@@ -139,6 +149,18 @@ const generateImage = async () => {
     // Ulož posledný vygenerovaný obrázok
     lastGeneratedImage.value = data.image
 
+    // Ak je zapnuté automatické odstránenie pozadia
+    if (autoRemoveBackground.value) {
+      try {
+        const bgRemovedImage = await removeBackgroundFromImage(data.image)
+        generatedImage.url = bgRemovedImage
+        lastGeneratedImage.value = bgRemovedImage
+      } catch (bgError) {
+        console.error('Chyba pri odstraňovaní pozadia:', bgError)
+        // Ponechaj originálny obrázok
+      }
+    }
+
     emit('image-generated', generatedImage)
     prompt.value = ''
     negativePrompt.value = ''
@@ -156,7 +178,29 @@ const generateImage = async () => {
   }
 }
 
-// Odstráň čierne pozadie
+// Pomocná funkcia na odstránenie pozadia z obrázka
+const removeBackgroundFromImage = async (imageData) => {
+  const response = await fetch(`${API_BASE_URL}/remove-background`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      image: imageData,
+      threshold: 30
+    }),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json()
+    throw new Error(errorData.error || 'Chyba pri odstraňovaní pozadia')
+  }
+
+  const data = await response.json()
+  return data.image
+}
+
+// Odstráň čierne pozadie (manuálne tlačidlo)
 const removeBackground = async () => {
   if (!lastGeneratedImage.value) {
     error.value = 'Najprv vygenerujte obrázok'
@@ -272,9 +316,18 @@ const generateDemo = () => {
     <h2>Generovať nový obrázok</h2>
     
     <div class="form">
-      <!-- Nahranie obrázka -->
+      <!-- Nahranie obrázka alebo výber šablóny -->
       <div class="input-group">
         <label>🖼️ Vstupný obrázok (voliteľné - pre Image-to-Image)</label>
+        
+        <!-- Komponent pre výber šablón -->
+        <TemplateSelector @template-selected="handleTemplateSelected" />
+        
+        <!-- Alebo upload vlastného -->
+        <div class="upload-divider">
+          <span>alebo nahrajte vlastný</span>
+        </div>
+        
         <div class="image-upload-area">
           <input
             id="image-upload"
@@ -389,6 +442,19 @@ const generateDemo = () => {
           rows="2"
           :disabled="isGenerating"
         />
+      </div>
+
+      <!-- Checkbox na automatické odstránenie pozadia -->
+      <div class="input-group checkbox-group">
+        <label class="checkbox-label">
+          <input 
+            type="checkbox" 
+            v-model="autoRemoveBackground"
+            :disabled="isGenerating"
+          />
+          <span>🎭 Automaticky odstrániť pozadie (PNG s priehľadnosťou)</span>
+        </label>
+        <small class="hint">Vygenerovaný obrázok bude mať priehľadné čierne pozadie</small>
       </div>
 
       <div v-if="error" class="error-message">
@@ -921,6 +987,78 @@ button:disabled {
 .size-section label {
   color: #0369a1;
   font-weight: 600;
+}
+
+/* Checkbox group */
+.checkbox-group {
+  padding: 1rem;
+  background: rgba(102, 126, 234, 0.05);
+  border-radius: 8px;
+  border: 2px solid rgba(102, 126, 234, 0.2);
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+  color: #333;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #667eea;
+}
+
+.checkbox-label input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.checkbox-group .hint {
+  display: block;
+  margin-top: 0.5rem;
+  margin-left: 2.25rem;
+  color: #666;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Upload divider */
+.upload-divider {
+  text-align: center;
+  margin: 1rem 0;
+  position: relative;
+}
+
+.upload-divider::before,
+.upload-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: calc(50% - 80px);
+  height: 1px;
+  background: #e0e0e0;
+}
+
+.upload-divider::before {
+  left: 0;
+}
+
+.upload-divider::after {
+  right: 0;
+}
+
+.upload-divider span {
+  background: white;
+  padding: 0 1rem;
+  color: #999;
+  font-size: 0.85rem;
+  font-style: italic;
 }
 
 select {
