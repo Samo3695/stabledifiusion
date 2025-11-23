@@ -181,24 +181,51 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
         ctx.lineWidth = 1 / scale
       }
       ctx.stroke()
-      
-      // Číslovanie políčok (row, col) - len ak je zoom dostatočný
-      if (scale > 0.7) {
-        ctx.fillStyle = '#666'
-        ctx.font = `${10 / scale}px Arial`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(`${row},${col}`, x, y + tileHeight / 2)
-      }
     }
   }
   
-  // FÁZA 2: Renderovanie buildingov
-  // Renderujeme buildingy v poradí ako sú uložené v objekte
+  // FÁZA 2: Renderovanie buildingov v správnom z-index poradí
+  // Pre isometrické zobrazenie: čím vyššie (row + col), tým bližšie ku kamere
+  // Pre multi-cell buildingy použijeme maximálnu sumu zo všetkých obsadených políčok
   const buildingsToRender = Object.entries(cellImages)
     .map(([key, building]) => {
       const [row, col] = key.split('-').map(Number)
-      return { key, row, col, ...building }
+      const cellsX = building.cellsX || 1
+      const cellsY = building.cellsY || 1
+      
+      // Vypočítame maximálnu sumu (row + col) zo všetkých obsadených políčok
+      // a zároveň maximálny col pre sekundárne zoradenie
+      let maxSum = row + col
+      let maxCol = col
+      let maxRow = row
+      
+      if (cellsX === 1 && cellsY === 2) {
+        // 2size: dve políčka nad sebou
+        const sum1 = row + col
+        const sum2 = (row + 1) + col
+        maxSum = Math.max(sum1, sum2)
+        maxRow = row + 1  // spodné políčko
+        maxCol = col
+      } else if (cellsX === 2 && cellsY === 2) {
+        // 4size: štyri políčka v bloku
+        const sum1 = row + col
+        const sum2 = row + (col + 1)
+        const sum3 = (row + 1) + col
+        const sum4 = (row + 1) + (col + 1)
+        maxSum = Math.max(sum1, sum2, sum3, sum4)
+        maxRow = row + 1  // spodný riadok
+        maxCol = col + 1  // pravý stĺpec
+      }
+      
+      return { key, row, col, maxSum, maxCol, maxRow, ...building }
+    })
+    .sort((a, b) => {
+      // Primárne: podľa maximálnej sumy
+      if (a.maxSum !== b.maxSum) return a.maxSum - b.maxSum
+      // Sekundárne: pri rovnakej sume preferujeme vyšší col (pravejšie políčko)
+      if (a.maxCol !== b.maxCol) return a.maxCol - b.maxCol
+      // Terciárne: pri rovnakom col preferujeme vyšší row (spodnejšie políčko)
+      return a.maxRow - b.maxRow
     })
   
   // Renderujeme každý building
@@ -252,6 +279,42 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       )
       
       ctx.restore()
+    }
+  }
+  
+  // FÁZA 3: Číslovanie políčok NAD všetkým (najvyšší z-index)
+  // Kreslíme čísla až po všetkých buildingoch aby boli vždy viditeľné
+  if (scale > 0.7) {
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const isoX = (col - row) * (tileWidth / 2)
+        const isoY = (col + row) * (tileHeight / 2)
+        const x = startX + isoX
+        const y = startY + isoY
+        
+        // Preskočiť políčka mimo viditeľnej oblasti
+        if (x + tileWidth / 2 < viewMinX || x - tileWidth / 2 > viewMaxX ||
+            y + tileHeight < viewMinY || y > viewMaxY) {
+          continue
+        }
+        
+        ctx.fillStyle = '#ff0000'  // Červená farba
+        ctx.font = `bold ${10 / scale}px Arial`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        
+        // Pridáme tieň pre lepšiu čitateľnosť
+        ctx.shadowColor = 'rgba(255, 255, 255, 0.8)'
+        ctx.shadowBlur = 3 / scale
+        ctx.shadowOffsetX = 0
+        ctx.shadowOffsetY = 0
+        
+        ctx.fillText(`${row},${col}`, x, y + tileHeight / 2)
+        
+        // Zrušíme tieň
+        ctx.shadowColor = 'transparent'
+        ctx.shadowBlur = 0
+      }
     }
   }
   
