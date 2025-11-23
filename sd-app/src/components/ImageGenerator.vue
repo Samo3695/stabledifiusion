@@ -361,11 +361,12 @@ const generateDemo = () => {
           <option value="ultrawide">🖥️ Ultra Wide (21:9) - {{ getImageDimensions('ultrawide', imageSize).width }}×{{ getImageDimensions('ultrawide', imageSize).height }}</option>
         </select>
 
-        <label for="image-size" style="margin-top: 1rem;">📏 Základná veľkosť</label>
+        <label for="image-size" style="margin-top: 1rem;">📏 Rozmery obrázka</label>
         <select id="image-size" v-model="imageSize" :disabled="isGenerating">
-          <option value="512">512px (rýchle, menej VRAM)</option>
-          <option value="768">768px (vyvážené)</option>
-          <option value="1024">1024px (HD kvalita, viac VRAM)</option>
+          <option value="200">200×200 / 200×300 (mini, rýchle)</option>
+          <option value="400">400×400 / 400×600 (malé, rýchle)</option>
+          <option value="512">512px (štandard, vyvážené)</option>
+          <option value="768">768px (HD kvalita)</option>
         </select>
       </div>
 
