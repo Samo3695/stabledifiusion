@@ -2,10 +2,11 @@
 import { ref } from 'vue'
 
 const props = defineProps({
-  images: Array
+  images: Array,
+  selectedImageId: String
 })
 
-const emit = defineEmits(['delete'])
+const emit = defineEmits(['delete', 'select'])
 
 const selectedImage = ref(null)
 
@@ -51,13 +52,15 @@ const formatDate = (date) => {
       <div 
         v-for="image in images" 
         :key="image.id" 
-        class="gallery-item"
-        @click="openModal(image)"
+        :class="['gallery-item', { 'selected': image.id === selectedImageId }]"
+        @click="emit('select', image.id)"
+        @dblclick="openModal(image)"
       >
         <img :src="image.url" :alt="image.prompt" />
         <div class="image-overlay">
           <p class="prompt-preview">{{ image.prompt }}</p>
         </div>
+        <div v-if="image.id === selectedImageId" class="selected-badge">✓</div>
       </div>
     </div>
 
@@ -138,13 +141,36 @@ h2 {
   border-radius: 12px;
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.3s;
+  transition: all 0.3s;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border: 3px solid transparent;
 }
 
 .gallery-item:hover {
   transform: translateY(-5px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.gallery-item.selected {
+  border-color: #667eea;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2);
+}
+
+.selected-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  font-weight: bold;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .gallery-item img {

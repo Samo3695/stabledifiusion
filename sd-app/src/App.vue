@@ -7,15 +7,26 @@ import CheckerboardCanvas from './components/CheckerboardCanvas.vue'
 const images = ref([])
 const lastImageCellsX = ref(1)
 const lastImageCellsY = ref(1)
+const selectedImageId = ref(null)
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   images.value.unshift(image)
   lastImageCellsX.value = cellsX
   lastImageCellsY.value = cellsY
+  // Automaticky vyberieme nový obrázok
+  selectedImageId.value = image.id
 }
 
 const handleDelete = (id) => {
   images.value = images.value.filter(img => img.id !== id)
+  // Ak sme vymazali vybraný obrázok, zrušíme výber
+  if (selectedImageId.value === id) {
+    selectedImageId.value = images.value.length > 0 ? images.value[0].id : null
+  }
+}
+
+const handleSelectImage = (id) => {
+  selectedImageId.value = id
 }
 </script>
 
@@ -29,10 +40,16 @@ const handleDelete = (id) => {
       <div class="content-area">
         <CheckerboardCanvas 
           :images="images" 
+          :selectedImageId="selectedImageId"
           :lastImageCellsX="lastImageCellsX"
           :lastImageCellsY="lastImageCellsY"
         />
-        <ImageGallery :images="images" @delete="handleDelete" />
+        <ImageGallery 
+          :images="images" 
+          :selectedImageId="selectedImageId"
+          @delete="handleDelete" 
+          @select="handleSelectImage"
+        />
       </div>
       
       <!-- Pravý sidebar s nástrojmi -->
