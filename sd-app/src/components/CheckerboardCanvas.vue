@@ -256,8 +256,8 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
         offsetXForCells = -tileWidth / 4
         offsetYForCells = tileHeight / 2
       } else if (cellsX === 2 && cellsY === 2) {
-        // 4 políčka v bloku 2x2 (4size) - centrujeme a posunieme dole
-        offsetXForCells = tileWidth / 2
+        // 4 políčka v bloku 2x2 (4size) - posunieme vľavo o pol políčka
+        offsetXForCells = 0  // posun vľavo o pol políčka
         offsetYForCells = tileHeight
       }
       
