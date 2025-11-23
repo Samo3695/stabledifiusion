@@ -21,21 +21,13 @@ const availableLoras = ref([])
 const selectedLora = ref('')
 const loraScale = ref(0.9) // Sila LoRA (0.0 - 1.0)
 
-// Veľkosť a pomer strán obrázka
-const aspectRatio = ref('square') // 'square', 'landscape', 'portrait', 'wide', 'ultrawide'
-const imageSize = ref('512') // '512', '768', '1024'
+// Rozmery obrázka - fixné rozmery
+const imageDimensions = ref('400x400') // '200x200', '200x300', '400x400', '400x600'
 
-// Mapa rozmerov podľa pomeru a veľkosti
-const getImageDimensions = (ratio, size) => {
-  const sizeNum = parseInt(size)
-  const dimensions = {
-    'square': { width: sizeNum, height: sizeNum },
-    'landscape': { width: Math.round(sizeNum * 1.5), height: sizeNum },
-    'portrait': { width: sizeNum, height: Math.round(sizeNum * 1.5) },
-    'wide': { width: Math.round(sizeNum * 16/9), height: sizeNum },
-    'ultrawide': { width: Math.round(sizeNum * 21/9), height: sizeNum }
-  }
-  return dimensions[ratio] || dimensions['square']
+// Funkcia na získanie šírky a výšky z reťazca
+const getImageDimensions = () => {
+  const [width, height] = imageDimensions.value.split('x').map(Number)
+  return { width, height }
 }
 
 // RGB farebné kanály (1.0 = normálne, 0.0 = bez farby, 2.0 = zdvojnásobenie)
@@ -97,7 +89,7 @@ const generateImage = async () => {
   error.value = ''
 
   try {
-    const dimensions = getImageDimensions(aspectRatio.value, imageSize.value)
+    const dimensions = getImageDimensions()
     
     const requestBody = {
       prompt: prompt.value,
@@ -350,23 +342,14 @@ const generateDemo = () => {
         </select>
       </div>
 
-      <!-- Veľkosť a pomer strán -->
+      <!-- Rozmery obrázka -->
       <div class="input-group size-section">
-        <label for="aspect-ratio">📐 Pomer strán</label>
-        <select id="aspect-ratio" v-model="aspectRatio" :disabled="isGenerating">
-          <option value="square">⬛ Štvorcový (1:1) - {{ getImageDimensions('square', imageSize).width }}×{{ getImageDimensions('square', imageSize).height }}</option>
-          <option value="landscape">🖼️ Landscape (3:2) - {{ getImageDimensions('landscape', imageSize).width }}×{{ getImageDimensions('landscape', imageSize).height }}</option>
-          <option value="portrait">📱 Portrait (2:3) - {{ getImageDimensions('portrait', imageSize).width }}×{{ getImageDimensions('portrait', imageSize).height }}</option>
-          <option value="wide">🎬 Wide (16:9) - {{ getImageDimensions('wide', imageSize).width }}×{{ getImageDimensions('wide', imageSize).height }}</option>
-          <option value="ultrawide">🖥️ Ultra Wide (21:9) - {{ getImageDimensions('ultrawide', imageSize).width }}×{{ getImageDimensions('ultrawide', imageSize).height }}</option>
-        </select>
-
-        <label for="image-size" style="margin-top: 1rem;">📏 Rozmery obrázka</label>
-        <select id="image-size" v-model="imageSize" :disabled="isGenerating">
-          <option value="200">200×200 / 200×300 (mini, rýchle)</option>
-          <option value="400">400×400 / 400×600 (malé, rýchle)</option>
-          <option value="512">512px (štandard, vyvážené)</option>
-          <option value="768">768px (HD kvalita)</option>
+        <label for="image-dimensions">📏 Rozmery obrázka</label>
+        <select id="image-dimensions" v-model="imageDimensions" :disabled="isGenerating">
+          <option value="200x200">200×200 px (štvorcový, mini)</option>
+          <option value="200x300">200×300 px (portrét, mini)</option>
+          <option value="400x400">400×400 px (štvorcový, malý)</option>
+          <option value="400x600">400×600 px (portrét, malý)</option>
         </select>
       </div>
 
@@ -496,20 +479,25 @@ const generateDemo = () => {
 .generator-card {
   background: white;
   color: #333;
-  border-radius: 16px;
-  padding: 2rem;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  border-radius: 0;
+  padding: 1.5rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 h2 {
   margin-top: 0;
+  margin-bottom: 1.5rem;
   color: #667eea;
+  font-size: 1.5rem;
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1rem;
+  flex: 1;
 }
 
 .input-group {
@@ -520,6 +508,7 @@ h2 {
 
 label {
   font-weight: 600;
+  font-size: 0.9rem;
   color: #555;
 }
 

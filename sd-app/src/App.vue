@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import ImageGenerator from './components/ImageGenerator.vue'
 import ImageGallery from './components/ImageGallery.vue'
+import CheckerboardCanvas from './components/CheckerboardCanvas.vue'
 
 const images = ref([])
 
@@ -20,8 +21,16 @@ const handleDelete = (id) => {
       <h1>🎨 Stable Diffusion Generator</h1>
     </header>
     <main>
-      <ImageGenerator @image-generated="handleImageGenerated" />
-      <ImageGallery :images="images" @delete="handleDelete" />
+      <!-- Ľavá plocha pre obsah -->
+      <div class="content-area">
+        <CheckerboardCanvas />
+        <ImageGallery :images="images" @delete="handleDelete" />
+      </div>
+      
+      <!-- Pravý sidebar s nástrojmi -->
+      <aside class="sidebar">
+        <ImageGenerator @image-generated="handleImageGenerated" />
+      </aside>
     </main>
   </div>
 </template>
@@ -41,10 +50,13 @@ body {
   min-height: 100vh;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
 }
 
 header {
-  padding: 2rem;
+  padding: 1.5rem 2rem;
   text-align: center;
   background: rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(10px);
@@ -52,16 +64,29 @@ header {
 
 header h1 {
   margin: 0;
-  font-size: 2.5rem;
+  font-size: 2rem;
   font-weight: bold;
 }
 
 main {
-  padding: 2rem;
-  max-width: 1400px;
-  margin: 0 auto;
+  flex: 1;
   display: flex;
-  flex-direction: column;
-  gap: 3rem;
+  gap: 0;
+  height: calc(100vh - 80px);
+  overflow: hidden;
+}
+
+.content-area {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar {
+  width: 350px;
+  background: white;
+  overflow-y: auto;
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.2);
 }
 </style>
