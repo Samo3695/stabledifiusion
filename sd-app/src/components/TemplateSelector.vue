@@ -60,12 +60,25 @@ const selectTemplate = (template) => {
         // Načítaj obrázok aby sme zistili rozmery
         const img = new Image()
         img.onload = () => {
+          // Zachováme pomer strán, ale max šírka bude 400px
+          const maxWidth = 400
+          let width = img.width
+          let height = img.height
+          
+          // Ak je šírka väčšia ako 400px, zmenšíme so zachovaním pomeru
+          if (width > maxWidth) {
+            const aspectRatio = height / width
+            width = maxWidth
+            height = width * aspectRatio
+          }
+          
           // Zaokrúhli rozmery na násobok 8 (požiadavka SD)
-          const width = Math.round(img.width / 8) * 8
-          const height = Math.round(img.height / 8) * 8
+          width = Math.round(width / 8) * 8
+          height = Math.round(height / 8) * 8
           
           console.log(`📤 TemplateSelector: Emitujem template-selected`)
-          console.log(`   Rozmery: ${width}x${height}`)
+          console.log(`   Originálne rozmery: ${img.width}x${img.height}`)
+          console.log(`   Finálne rozmery (max 400px šírka): ${width}x${height}`)
           console.log(`   Políčka: ${currentCellsX}x${currentCellsY}`)
           
           emit('template-selected', {
