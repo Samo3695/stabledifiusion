@@ -18,8 +18,11 @@ const props = defineProps({
   }
 })
 
+const emit = defineEmits(['cell-selected', 'image-placed'])
+
 const canvas = ref(null)
 let hoveredCell = { row: -1, col: -1 }
+let selectedCell = { row: -1, col: -1 } // Vybrané políčko pre generovanie
 let offsetX = 0
 let offsetY = 0
 let scale = 1
@@ -365,6 +368,59 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
     }
   }
   
+  // FÁZA 5: Vybrané políčko (zelené) NAD všetkým
+  if (selectedCell.row !== -1 && selectedCell.col !== -1) {
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        let isSelected = false
+        
+        const selCellsX = props.lastImageCellsX || 1
+        const selCellsY = props.lastImageCellsY || 1
+        
+        // Pre 1size (1x1): len jedno políčko
+        if (selCellsX === 1 && selCellsY === 1) {
+          isSelected = row === selectedCell.row && col === selectedCell.col
+        }
+        // Pre 2size (1x2): dve políčka nad sebou
+        else if (selCellsX === 1 && selCellsY === 2) {
+          isSelected = (row === selectedCell.row && col === selectedCell.col) ||
+                      (row === selectedCell.row + 1 && col === selectedCell.col)
+        }
+        // Pre 4size (2x2): štyri políčka v bloku
+        else if (selCellsX === 2 && selCellsY === 2) {
+          isSelected = (row === selectedCell.row && col === selectedCell.col) ||
+                      (row === selectedCell.row && col === selectedCell.col + 1) ||
+                      (row === selectedCell.row + 1 && col === selectedCell.col) ||
+                      (row === selectedCell.row + 1 && col === selectedCell.col + 1)
+        }
+        
+        if (isSelected) {
+          const isoX = (col - row) * (tileWidth / 2)
+          const isoY = (col + row) * (tileHeight / 2)
+          const x = startX + isoX
+          const y = startY + isoY
+          
+          // Zelená výplň pre vybrané políčko
+          ctx.fillStyle = 'rgba(34, 197, 94, 0.6)'
+          
+          // Kreslenie kosoštvorca (diamantu)
+          ctx.beginPath()
+          ctx.moveTo(x, y)
+          ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+          ctx.lineTo(x, y + tileHeight)
+          ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+          ctx.closePath()
+          ctx.fill()
+          
+          // Zelený okraj
+          ctx.strokeStyle = '#22c55e'
+          ctx.lineWidth = 4 / scale
+          ctx.stroke()
+        }
+      }
+    }
+  }
+  
   ctx.restore()
 }
 
@@ -405,79 +461,42 @@ const getGridCell = (mouseX, mouseY, width, height) => {
 const handleMouseDown = (event) => {
   event.preventDefault()
   
-  // Ľavé tlačidlo (0) = vložiť obrázok
-  if (event.button === 0) {
-    // Použijeme vybraný obrázok, ak nie je vybraný tak prvý z galérie
-    let imageToPlace = null
-    if (props.selectedImageId) {
-      imageToPlace = props.images?.find(img => img.id === props.selectedImageId)
-    }
-    if (!imageToPlace && props.images && props.images.length > 0) {
-      imageToPlace = props.images[0]
-    }
+  // Ľavé tlačidlo (0) = vybrať políčko
+  if (event.button === 0 && props.templateSelected) {
+    const rect = canvas.value.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
     
-    if (imageToPlace) {
-      const rect = canvas.value.getBoundingClientRect()
-      const x = event.clientX - rect.left
-      const y = event.clientY - rect.top
+    const scaleX = canvas.value.width / rect.width
+    const scaleY = canvas.value.height / rect.height
+    
+    const cell = getGridCell(x * scaleX, y * scaleY, canvas.value.width, canvas.value.height)
+    
+    if (cell.row !== -1 && cell.col !== -1) {
+      // Kontrola kolízie pred výberom pomocou checkCollision funkcie
+      const cellsX = props.lastImageCellsX || 1
+      const cellsY = props.lastImageCellsY || 1
       
-      const scaleX = canvas.value.width / rect.width
-      const scaleY = canvas.value.height / rect.height
-      
-      const cell = getGridCell(x * scaleX, y * scaleY, canvas.value.width, canvas.value.height)
-      
-      if (cell.row !== -1 && cell.col !== -1) {
-        // Kontrola kolízie pred umiestnením pomocou checkCollision funkcie
-        const cellsX = props.lastImageCellsX || 1
-        const cellsY = props.lastImageCellsY || 1
-        
-        if (checkCollision(cell.row, cell.col, cellsX, cellsY)) {
-          console.log('❌ Kolízia! Obrázok by sa prekrýval s existujúcim obrázkom.')
-          console.log(`   Pokus o umiestnenie na: [${cell.row}, ${cell.col}]`)
-          console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
-          return
-        }
-        
-        const cellKey = `${cell.row}-${cell.col}`
-        
-        // Ulož obrázok s informáciou o rozmeroch v políčkach
-        cellImages[cellKey] = {
-          url: imageToPlace.url,
-          cellsX: props.lastImageCellsX || 1,
-          cellsY: props.lastImageCellsY || 1
-        }
-        
-        // Získame všetky políčka ktoré sú ovplyvnené pre console.log
-        const affectedCells = []
-        if (cellsX === 1 && cellsY === 1) {
-          affectedCells.push(`${cell.row}-${cell.col}`)
-        } else if (cellsX === 1 && cellsY === 2) {
-          affectedCells.push(`${cell.row}-${cell.col}`)
-          affectedCells.push(`${cell.row + 1}-${cell.col}`)
-        } else if (cellsX === 2 && cellsY === 2) {
-          affectedCells.push(`${cell.row}-${cell.col}`)
-          affectedCells.push(`${cell.row}-${cell.col + 1}`)
-          affectedCells.push(`${cell.row + 1}-${cell.col}`)
-          affectedCells.push(`${cell.row + 1}-${cell.col + 1}`)
-        }
-        
-        // Načítať obrázok
-        const img = new Image()
-        img.crossOrigin = 'anonymous'
-        img.onload = () => {
-          loadedImages[cellKey] = img
-          const ctx = canvas.value.getContext('2d')
-          drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
-        }
-        img.src = imageToPlace.url
-        
-        console.log(`✅ Obrázok vložený!`)
-        console.log(`   Hlavné políčko: [${cell.row}, ${cell.col}]`)
+      if (checkCollision(cell.row, cell.col, cellsX, cellsY)) {
+        console.log('❌ Kolízia! Nemôžete vybrať toto políčko.')
+        console.log(`   Pokus o výber: [${cell.row}, ${cell.col}]`)
         console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
-        console.log(`   Všetky ovplyvnené políčka:`, affectedCells)
+        return
       }
-    } else {
-      console.log('Žiadne obrázky v galérii')
+      
+      // Označ políčko
+      selectedCell.row = cell.row
+      selectedCell.col = cell.col
+      
+      // Emituj event do App.vue
+      emit('cell-selected', { row: cell.row, col: cell.col })
+      
+      console.log(`✅ Políčko vybrané: [${cell.row}, ${cell.col}]`)
+      console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
+      
+      // Prekreslí canvas
+      const ctx = canvas.value.getContext('2d')
+      drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
     }
     return
   }
@@ -571,6 +590,69 @@ const handleMouseLeave = () => {
     drawCheckerboard(ctx, canvas.value.width, canvas.value.height)
   }
 }
+
+// Funkcia na vloženie obrázka na vybratú pozíciu
+const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY) => {
+  console.log('🖼️ CheckerboardCanvas.placeImageAtSelectedCell() volaná')
+  console.log('   selectedCell:', selectedCell)
+  console.log('   cellsX x cellsY:', cellsX, 'x', cellsY)
+  console.log('   imageUrl length:', imageUrl.length)
+  
+  if (selectedCell.row === -1 || selectedCell.col === -1) {
+    console.log('❌ Žiadne políčko nie je vybrané')
+    return false
+  }
+  
+  // Kontrola kolízie
+  if (checkCollision(selectedCell.row, selectedCell.col, cellsX, cellsY)) {
+    console.log('❌ Kolízia! Obrázok by sa prekrýval s existujúcim obrázkom.')
+    return false
+  }
+  
+  const cellKey = `${selectedCell.row}-${selectedCell.col}`
+  
+  // Ulož obrázok s informáciou o rozmeroch v políčkach
+  cellImages[cellKey] = {
+    url: imageUrl,
+    cellsX: cellsX,
+    cellsY: cellsY
+  }
+  
+  // Načítať obrázok
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  img.onload = () => {
+    console.log('🖼️ CheckerboardCanvas: Obrázok načítaný, renderujem...')
+    loadedImages[cellKey] = img
+    const ctx = canvas.value.getContext('2d')
+    drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+    console.log('🎨 CheckerboardCanvas: Canvas prekreslený')
+    
+    // Emituj event že obrázok bol vložený
+    emit('image-placed', { row: selectedCell.row, col: selectedCell.col })
+    console.log('📤 CheckerboardCanvas: Event image-placed emitovaný')
+  }
+  img.onerror = (err) => {
+    console.error('❌ CheckerboardCanvas: Chyba pri načítaní obrázka:', err)
+  }
+  console.log('🔄 CheckerboardCanvas: Spúšťam načítanie obrázka...')
+  img.src = imageUrl
+  
+  console.log(`✅ Obrázok vložený!`)
+  console.log(`   Hlavné políčko: [${selectedCell.row}, ${selectedCell.col}]`)
+  console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
+  
+  // Zruš výber políčka
+  selectedCell.row = -1
+  selectedCell.col = -1
+  
+  return true
+}
+
+// Expose funkciu aby ju mohol App.vue volať
+defineExpose({
+  placeImageAtSelectedCell
+})
 
 onMounted(() => {
   if (canvas.value) {

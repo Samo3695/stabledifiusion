@@ -1,9 +1,10 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import TemplateSelector from './TemplateSelector.vue'
 
-const emit = defineEmits(['image-generated', 'template-selected'])
+const emit = defineEmits(['image-generated', 'template-selected', 'tab-changed'])
 
+const mainKeyword = ref('house') // Hlavné kľúčové slovo
 const prompt = ref('house')
 const negativePrompt = ref('')
 const isGenerating = ref(false)
@@ -20,10 +21,18 @@ const autoRemoveBackground = ref(true) // Či automaticky odstrániť pozadie po
 const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
 const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
 
+// Sleduj zmeny mainKeyword a aktualizuj prompt
+watch(mainKeyword, (newKeyword) => {
+  prompt.value = newKeyword
+  console.log('🏷️ Hlavné kľúčové slovo zmenené na:', newKeyword)
+})
+
 // Funkcia na spracovanie zmeny tabu v šablónach
 const handleTabChanged = ({ cellsX, cellsY }) => {
   templateCellsX.value = cellsX
   templateCellsY.value = cellsY
+  // Oznám App.vue o zmene tabu
+  emit('tab-changed', { cellsX, cellsY })
   console.log(`Tab zmenený, políčka: ${cellsX}x${cellsY}`)
 }
 
@@ -118,13 +127,22 @@ const removeInputImage = () => {
 }
 
 const generateImage = async () => {
-  if (!prompt.value.trim()) {
-    error.value = 'Zadajte prosím popis obrázka'
+  console.log('🎨 ImageGenerator: Začínam generovať obrázok...')
+  console.log('   Prompt:', prompt.value)
+  console.log('   MainKeyword:', mainKeyword.value)
+  console.log('   Model:', model.value)
+  console.log('   TemplateSelected:', inputImage.value ? 'Áno' : 'Nie')
+  console.log('   CellsX x CellsY:', templateCellsX.value, 'x', templateCellsY.value)
+  
+  // Kontroluj mainKeyword namiesto prompt (prompt je volitelný)
+  if (!mainKeyword.value.trim()) {
+    error.value = 'Vyberte prosím hlavné kľúčové slovo'
     return
   }
 
   isGenerating.value = true
   error.value = ''
+  console.log('🔄 ImageGenerator: Odosielam request na backend...')
 
   try {
     const dimensions = getImageDimensions()
@@ -165,6 +183,7 @@ const generateImage = async () => {
     }
 
     const data = await response.json()
+    console.log('✅ ImageGenerator: Obrázok úspešne vygenerovaný!')
 
     const generatedImage = {
       id: Date.now().toString(),
@@ -176,6 +195,7 @@ const generateImage = async () => {
 
     // Ulož posledný vygenerovaný obrázok
     lastGeneratedImage.value = data.image
+    console.log('📦 ImageGenerator: Vytvorený objekt obrázka, ID:', generatedImage.id)
 
     // Ak je zapnuté automatické odstránenie pozadia
     if (autoRemoveBackground.value) {
@@ -189,9 +209,16 @@ const generateImage = async () => {
       }
     }
 
+    console.log('📤 ImageGenerator: Emitujem image-generated event')
+    console.log('   Image ID:', generatedImage.id)
+    console.log('   CellsX x CellsY:', templateCellsX.value, 'x', templateCellsY.value)
     emit('image-generated', generatedImage, templateCellsX.value, templateCellsY.value)
-    prompt.value = ''
+    console.log('✨ ImageGenerator: Event image-generated emitovaný!')
+    // Vrátime prompt na mainKeyword (nie na prázdny string)
+    prompt.value = mainKeyword.value
     negativePrompt.value = ''
+    console.log('📸 ImageGenerator: Šablóna zostáva vybraná, inputImage:', inputImage.value ? 'ÁNO' : 'NIE')
+    console.log('   inputImagePreview:', inputImagePreview.value ? 'ÁNO' : 'NIE')
   // Keep the uploaded input image by default so the user can re-run
   // image-to-image generations. The user can remove it manually
   // using the ❌ Odstrániť button in the UI.
@@ -337,6 +364,17 @@ const generateDemo = () => {
   prompt.value = ''
   negativePrompt.value = ''
 }
+
+// Funkcia pre automatické spustenie generovania (volaná z App.vue)
+const startGeneration = () => {
+  console.log('🚀 ImageGenerator.startGeneration() volaná z App.vue')
+  generateImage()
+}
+
+// Expose funkciu aby ju mohol App.vue volať
+defineExpose({
+  startGeneration
+})
 </script>
 
 <template>
@@ -402,13 +440,25 @@ const generateDemo = () => {
         </div>
       </div>
 
+      <div class="input-group keyword-section">
+        <label for="main-keyword">🏷️ Hlavné kľúčové slovo</label>
+        <select id="main-keyword" v-model="mainKeyword" :disabled="isGenerating">
+          <option value="house">🏠 House (dom)</option>
+          <option value="building">🏛️ Building (budova)</option>
+          <option value="villa">🏖️ Villa (vila)</option>
+          <option value="castle">🏯 Castle (hrad)</option>
+          <option value="tower">🗼 Tower (veža)</option>
+          <option value="church">⛪ Church (kostol)</option>
+        </select>
+      </div>
+
       <div class="input-group">
-        <label for="prompt">Popis obrázka (Prompt)</label>
+        <label for="prompt">✏️ Doplňujúci popis (voliteľné)</label>
         <textarea
           id="prompt"
           v-model="prompt"
-          placeholder="Napríklad: Beautiful sunset over mountains, highly detailed, 8k"
-          rows="3"
+          placeholder="Môžete pridať ďalšie detaily, napr: modern, colorful, detailed..."
+          rows="2"
           :disabled="isGenerating"
         />
       </div>
@@ -501,8 +551,8 @@ const generateDemo = () => {
 
       <div class="button-group">
         <button 
-          @click="generateImage" 
-          :disabled="isGenerating || !prompt.trim()"
+          @click="() => { console.log('🖱️ BUTTON CLICKED! mainKeyword:', mainKeyword, 'isGenerating:', isGenerating); generateImage(); }" 
+          :disabled="isGenerating || !mainKeyword.trim()"
           class="btn-primary"
         >
           <span v-if="isGenerating">⏳ Generujem...</span>
@@ -1024,6 +1074,19 @@ button:disabled {
 
 .size-section label {
   color: #0369a1;
+  font-weight: 600;
+}
+
+/* Keyword section */
+.keyword-section {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  padding: 1.5rem;
+  border-radius: 12px;
+  border: 2px solid #f59e0b;
+}
+
+.keyword-section label {
+  color: #92400e;
   font-weight: 600;
 }
 

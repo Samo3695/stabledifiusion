@@ -9,13 +9,32 @@ const lastImageCellsX = ref(1)
 const lastImageCellsY = ref(1)
 const selectedImageId = ref(null)
 const templateSelected = ref(false)
+const selectedCell = ref({ row: -1, col: -1 })
+const canvasRef = ref(null)
+const imageGeneratorRef = ref(null)
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
+  console.log('📥 App.vue: Prijatý image-generated event')
+  console.log('   Image ID:', image.id)
+  console.log('   CellsX x CellsY:', cellsX, 'x', cellsY)
+  console.log('   Vybrané políčko:', selectedCell.value)
+  console.log('   Canvas ref existuje?', canvasRef.value ? 'ÁNO' : 'NIE')
+  
   images.value.unshift(image)
   lastImageCellsX.value = cellsX
   lastImageCellsY.value = cellsY
   // Automaticky vyberieme nový obrázok
   selectedImageId.value = image.id
+  
+  // Ak je vybrané políčko, vlož obrázok tam
+  if (selectedCell.value.row !== -1 && selectedCell.value.col !== -1 && canvasRef.value) {
+    console.log('🎯 App.vue: Volám placeImageAtSelectedCell()')
+    console.log('   URL:', image.url.substring(0, 50) + '...')
+    const result = canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY)
+    console.log('   Výsledok vloženia:', result ? 'ÚSPECH' : 'ZLYHALO')
+  } else {
+    console.log('⚠️ App.vue: Nevkladám obrázok - políčko nie je vybrané alebo canvas neexistuje')
+  }
 }
 
 const handleDelete = (id) => {
@@ -33,6 +52,26 @@ const handleSelectImage = (id) => {
 const handleTemplateSelected = (isSelected) => {
   templateSelected.value = isSelected
 }
+
+const handleTabChanged = ({ cellsX, cellsY }) => {
+  lastImageCellsX.value = cellsX
+  lastImageCellsY.value = cellsY
+}
+
+const handleCellSelected = ({ row, col }) => {
+  selectedCell.value = { row, col }
+  console.log(`App.vue: Políčko vybrané [${row}, ${col}]`)
+  console.log(`🚀 App.vue: Spúšťam automatické generovanie...`)
+  // Spusti generovanie automaticky
+  if (imageGeneratorRef.value) {
+    imageGeneratorRef.value.startGeneration()
+  }
+}
+
+const handleImagePlaced = ({ row, col }) => {
+  selectedCell.value = { row: -1, col: -1 }
+  console.log(`App.vue: Obrázok vložený na [${row}, ${col}]`)
+}
 </script>
 
 <template>
@@ -43,12 +82,15 @@ const handleTemplateSelected = (isSelected) => {
     <main>
       <!-- Ľavá plocha pre obsah -->
       <div class="content-area">
-        <CheckerboardCanvas 
+        <CheckerboardCanvas
+          ref="canvasRef"
           :images="images" 
           :selectedImageId="selectedImageId"
           :lastImageCellsX="lastImageCellsX"
           :lastImageCellsY="lastImageCellsY"
           :templateSelected="templateSelected"
+          @cell-selected="handleCellSelected"
+          @image-placed="handleImagePlaced"
         />
         <ImageGallery 
           :images="images" 
@@ -60,9 +102,11 @@ const handleTemplateSelected = (isSelected) => {
       
       <!-- Pravý sidebar s nástrojmi -->
       <aside class="sidebar">
-        <ImageGenerator 
+        <ImageGenerator
+          ref="imageGeneratorRef"
           @image-generated="handleImageGenerated" 
           @template-selected="handleTemplateSelected"
+          @tab-changed="handleTabChanged"
         />
       </aside>
     </main>

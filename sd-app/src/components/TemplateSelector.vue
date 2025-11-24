@@ -42,15 +42,14 @@ const selectTemplate = (template) => {
   
   selectedTemplate.value = template
   
-  // Zisti počet políčok podľa tabu
-  let cellsX = 1, cellsY = 1
-  if (activeTemplateTab.value === '2size') {
-    cellsX = 1
-    cellsY = 2  // 2 políčka nad sebou
-  } else if (activeTemplateTab.value === '4size') {
-    cellsX = 2
-    cellsY = 2
-  }
+  // Zisti počet políčok podľa tabu (ULOŽÍME DO KONŠTANTY aby sa nezmenili)
+  const currentCellsX = activeTemplateTab.value === '1size' ? 1 : 
+                        activeTemplateTab.value === '2size' ? 1 : 2
+  const currentCellsY = activeTemplateTab.value === '1size' ? 1 : 
+                        activeTemplateTab.value === '2size' ? 2 : 2
+  
+  console.log(`📐 TemplateSelector: Vybraná šablóna "${template}" v tabe "${activeTemplateTab.value}"`)
+  console.log(`   Políčka: ${currentCellsX}x${currentCellsY}`)
   
   // Načítaj šablónu ako blob a zisti jej rozmery
   fetch(templatePath)
@@ -65,13 +64,17 @@ const selectTemplate = (template) => {
           const width = Math.round(img.width / 8) * 8
           const height = Math.round(img.height / 8) * 8
           
+          console.log(`📤 TemplateSelector: Emitujem template-selected`)
+          console.log(`   Rozmery: ${width}x${height}`)
+          console.log(`   Políčka: ${currentCellsX}x${currentCellsY}`)
+          
           emit('template-selected', {
             dataUrl: e.target.result,
             templateName: template,
             width: width,
             height: height,
-            cellsX: cellsX,
-            cellsY: cellsY
+            cellsX: currentCellsX,
+            cellsY: currentCellsY
           })
         }
         img.src = e.target.result
