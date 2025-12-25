@@ -18,6 +18,7 @@ const isRemovingBackground = ref(false)
 const hueShift = ref(0) // Posun odtieňa (-180 až +180)
 const isAdjustingHue = ref(false)
 const autoRemoveBackground = ref(true) // Či automaticky odstrániť pozadie po generovaní
+const useAiRemoval = ref(true) // Či použiť AI (rembg) na odstránenie pozadia
 const showNumbering = ref(true) // Či zobrazovať číslovanie šachovnice
 const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
 const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
@@ -249,7 +250,8 @@ const removeBackgroundFromImage = async (imageData) => {
     },
     body: JSON.stringify({
       image: imageData,
-      threshold: 30
+      threshold: 30,
+      use_ai: useAiRemoval.value  // Použiť rembg AI odstránenie pozadia
     }),
   })
 
@@ -280,7 +282,8 @@ const removeBackground = async () => {
       },
       body: JSON.stringify({
         image: lastGeneratedImage.value,
-        threshold: 30
+        threshold: 30,
+        use_ai: useAiRemoval.value  // Použiť rembg AI odstránenie pozadia
       }),
     })
 
@@ -547,7 +550,20 @@ defineExpose({
           />
           <span>🎭 Automaticky odstrániť pozadie (PNG s priehľadnosťou)</span>
         </label>
-        <small class="hint">Vygenerovaný obrázok bude mať priehľadné čierne pozadie</small>
+        <small class="hint">Vygenerovaný obrázok bude mať priehľadné pozadie</small>
+        
+        <!-- Sub-option pre AI odstránenie -->
+        <div v-if="autoRemoveBackground" class="sub-checkbox">
+          <label class="checkbox-label">
+            <input 
+              type="checkbox" 
+              v-model="useAiRemoval"
+              :disabled="isGenerating"
+            />
+            <span>🤖 Použiť AI (rembg) - lepšie výsledky pre komplexné pozadia</span>
+          </label>
+          <small class="hint">AI dokáže odstrániť akékoľvek pozadie, nielen čierne</small>
+        </div>
       </div>
 
       <!-- Checkbox na zobrazenie číslovania šachovnice -->
@@ -1144,6 +1160,24 @@ button:disabled {
   color: #666;
   font-size: 0.85rem;
   font-style: italic;
+}
+
+.sub-checkbox {
+  margin-top: 0.75rem;
+  margin-left: 2rem;
+  padding: 0.75rem;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 6px;
+  border-left: 3px solid #667eea;
+}
+
+.sub-checkbox .checkbox-label {
+  font-size: 0.9rem;
+}
+
+.sub-checkbox .hint {
+  margin-left: 1.75rem;
+  font-size: 0.8rem;
 }
 
 /* Upload divider */
