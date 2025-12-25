@@ -99,8 +99,29 @@ const handleToggleGrid = (value) => {
 }
 
 const handleEnvironmentGenerated = (envData) => {
-  console.log('🌍 App.vue: Prijaté environment-generated event', envData)
-  // TODO: Implement environment application
+  console.log('🌍 App.vue: Prijaté environment-generated event')
+  console.log('   Počet obrázkov:', envData.images.length)
+  console.log('   Počet prvkov na rozmiestniť:', envData.count)
+  console.log('   Canvas ref existuje?', canvasRef.value ? 'ÁNO' : 'NIE')
+  
+  // Náhodne rozmiestni prvky na šachovnici
+  if (canvasRef.value && canvasRef.value.placeEnvironmentElements) {
+    canvasRef.value.placeEnvironmentElements(envData.images, envData.count)
+    console.log('✅ Prvky prostredia rozmiestnené')
+  }
+}
+
+const handleTilesGenerated = (tilesData) => {
+  console.log('🎨 App.vue: Prijaté tiles-generated event')
+  console.log('   Počet tile-ov:', tilesData.tiles.length)
+  console.log('   Tiles per image:', tilesData.tilesPerImage)
+  console.log('   Canvas ref existuje?', canvasRef.value ? 'ÁNO' : 'NIE')
+  
+  // Pošli tile-y do CheckerboardCanvas
+  if (canvasRef.value && canvasRef.value.setBackgroundTiles) {
+    canvasRef.value.setBackgroundTiles(tilesData.tiles, tilesData.tilesPerImage || 1)
+    console.log('✅ Tile-y aplikované na šachovnicu')
+  }
 }
 </script>
 
@@ -159,6 +180,7 @@ const handleEnvironmentGenerated = (envData) => {
       <EnvironmentGenerator
         v-if="activeGenerator === 'environment'"
         @environment-generated="handleEnvironmentGenerated"
+        @tiles-generated="handleTilesGenerated"
       />
     </aside>
     

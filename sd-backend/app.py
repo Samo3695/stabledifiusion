@@ -11,6 +11,15 @@ from pathlib import Path
 from remove_background import remove_black_background
 from color_transform import shift_hue, adjust_saturation
 
+# Skús importovať rembg (pre AI odstránenie pozadia)
+try:
+    from rembg import remove as rembg_remove
+    REMBG_AVAILABLE = True
+    print("✅ rembg knižnica načítaná")
+except ImportError:
+    REMBG_AVAILABLE = False
+    print("⚠️ rembg knižnica nie je dostupná, použije sa fallback")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -252,9 +261,19 @@ def generate():
         width = data.get('width', 512)
         height = data.get('height', 512)
         
+        # Seed pre reprodukovateľnosť
+        seed = data.get('seed', None)
+        
         # Zaokrúhli na násobok 8 (požiadavka SD)
         width = int(width // 8 * 8)
         height = int(height // 8 * 8)
+        
+        # Nastav generator ak máme seed
+        generator = None
+        if seed is not None:
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            generator = torch.Generator(device=device).manual_seed(int(seed))
+            print(f"🎲 Seed: {seed}")
         
         if not prompt:
             return jsonify({'error': 'Prompt je povinný'}), 400
@@ -305,6 +324,7 @@ def generate():
                     strength=strength,
                     num_inference_steps=num_inference_steps,
                     guidance_scale=guidance_scale,
+                    generator=generator,
                 ).images[0]
             
             # Automaticky odstráň čierne pozadie a vytvor priehľadnosť
@@ -330,6 +350,7 @@ def generate():
                     guidance_scale=guidance_scale,
                     width=width,
                     height=height,
+                    generator=generator,
                 ).images[0]
         
         buffer = io.BytesIO()
@@ -349,11 +370,12 @@ def generate():
 
 @app.route('/remove-background', methods=['POST'])
 def remove_background_endpoint():
-    """Odstráni čierne pozadie z obrázka"""
+    """Odstráni pozadie z obrázka pomocou AI (rembg) alebo fallback metódou"""
     try:
         data = request.json
         image_data = data.get('image')
-        threshold = data.get('threshold', 30)  # Nastaviteľný prah
+        use_ai = data.get('use_ai', True)  # Použiť AI (rembg) alebo starú metódu
+        threshold = data.get('threshold', 30)  # Pre fallback metódu
         
         if not image_data:
             return jsonify({'error': 'Chýba obrázok'}), 400
@@ -367,17 +389,19 @@ def remove_background_endpoint():
         
         # Konvertuj na RGB ak je potrebné
         if image.mode == 'RGBA':
-            # Ak už má alpha, konvertuj na RGB s bielym pozadím
             rgb_image = Image.new('RGB', image.size, (255, 255, 255))
             rgb_image.paste(image, mask=image.split()[3])
             image = rgb_image
         elif image.mode != 'RGB':
             image = image.convert('RGB')
         
-        print(f"🔄 Odstraňujem čierne pozadie (prah: {threshold})...")
-        
-        # Odstráň čierne pozadie
-        result_image = remove_black_background(image, threshold=threshold)
+        if use_ai and REMBG_AVAILABLE:
+            print("🤖 Odstraňujem pozadie pomocou AI (rembg)...")
+            # Použij rembg pre AI odstránenie pozadia
+            result_image = rembg_remove(image)
+        else:
+            print(f"🔄 Odstraňujem čierne pozadie (prah: {threshold})...")
+            result_image = remove_black_background(image, threshold=threshold)
         
         # Konvertuj späť na base64
         buffer = io.BytesIO()

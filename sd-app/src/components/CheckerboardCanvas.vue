@@ -43,6 +43,9 @@ let lastMouseX = 0
 let lastMouseY = 0
 let cellImages = {} // { 'row-col': { url: imageUrl, cellsX: number, cellsY: number } }
 let loadedImages = {} // cache pre načítané Image objekty
+let backgroundTiles = [] // Array base64 tile obrázkov pre pozadie šachovnice
+let loadedTiles = [] // Načítané Image objekty pre tile-y
+let tilesPerImage = 1 // Cez koľko políčok pôjde jeden obrázok
 
 // Funkcia na kontrolu kolízie - či dané políčko alebo jeho okolie má už obrázok
 const checkCollision = (row, col, cellsX, cellsY) => {
@@ -174,26 +177,85 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       
       // Nakreslíme políčko len ak je mriežka zapnutá
       if (props.showGrid) {
-        // Farba políčka
-        if (isEven) {
-          ctx.fillStyle = '#e8e8e8'
+        // Skontrolujeme či máme tile obrázky pre pozadie
+        const hasTiles = loadedTiles.length > 0
+        
+        if (hasTiles) {
+          // Vypočítame ktorý tile obrázok použiť podľa tilesPerImage
+          // Ak tilesPerImage = 4, tak každých 4 políčok (2x2 blok) používa jeden obrázok
+          const blockSize = Math.sqrt(tilesPerImage) // 1->1, 4->2, 16->4
+          const blockRow = Math.floor(row / blockSize)
+          const blockCol = Math.floor(col / blockSize)
+          const tileIndex = (blockRow + blockCol) % loadedTiles.length
+          const tileImg = loadedTiles[tileIndex]
+          
+          if (tileImg) {
+            // Uložíme context state
+            ctx.save()
+            
+            // Vytvoríme clip path v tvare kosoštvorca - trochu väčší pre prekrytie medzier
+            const overlap = 2 // pixely prekrytia
+            ctx.beginPath()
+            ctx.moveTo(x, y - overlap)
+            ctx.lineTo(x + tileWidth / 2 + overlap, y + tileHeight / 2)
+            ctx.lineTo(x, y + tileHeight + overlap)
+            ctx.lineTo(x - tileWidth / 2 - overlap, y + tileHeight / 2)
+            ctx.closePath()
+            ctx.clip()
+            
+            // Pre viac políčok na obrázok - vypočítame offset v rámci bloku
+            const inBlockRow = row % blockSize
+            const inBlockCol = col % blockSize
+            
+            // Veľkosť jedného políčka v rámci obrázka
+            const srcTileW = tileImg.width / blockSize
+            const srcTileH = tileImg.height / blockSize
+            
+            // Súradnice v zdrojovom obrázku
+            const srcX = inBlockCol * srcTileW
+            const srcY = inBlockRow * srcTileH
+            
+            // Nakreslíme časť tile obrázka - rozšírený o overlap
+            const bboxX = x - tileWidth / 2 - overlap
+            const bboxY = y - overlap
+            const bboxW = tileWidth + overlap * 2
+            const bboxH = tileHeight + overlap * 2
+            
+            ctx.drawImage(tileImg, srcX, srcY, srcTileW, srcTileH, bboxX, bboxY, bboxW, bboxH)
+            
+            // Obnovíme context
+            ctx.restore()
+          }
         } else {
-          ctx.fillStyle = '#f8f8f8'
+          // Fallback na farebné políčka
+          if (isEven) {
+            ctx.fillStyle = '#e8e8e8'
+          } else {
+            ctx.fillStyle = '#f8f8f8'
+          }
+          
+          // Kreslenie kosoštvorca (diamantu)
+          ctx.beginPath()
+          ctx.moveTo(x, y)
+          ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+          ctx.lineTo(x, y + tileHeight)
+          ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+          ctx.closePath()
+          ctx.fill()
         }
         
-        // Kreslenie kosoštvorca (diamantu)
-        ctx.beginPath()
-        ctx.moveTo(x, y)
-        ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
-        ctx.lineTo(x, y + tileHeight)
-        ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
-        ctx.closePath()
-        ctx.fill()
-        
-        // Orámovanie
-        ctx.strokeStyle = '#999'
-        ctx.lineWidth = 1 / scale
-        ctx.stroke()
+        // Orámovanie - len ak nemáme tile obrázky (inak by rušilo)
+        if (!hasTiles) {
+          ctx.strokeStyle = '#999'
+          ctx.lineWidth = 1 / scale
+          ctx.beginPath()
+          ctx.moveTo(x, y)
+          ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+          ctx.lineTo(x, y + tileHeight)
+          ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+          ctx.closePath()
+          ctx.stroke()
+        }
       } // Koniec if (props.showGrid)
     }
   }
@@ -671,9 +733,121 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY) => {
   return true
 }
 
-// Expose funkciu aby ju mohol App.vue volať
+// Funkcia na nastavenie tile obrázkov pre pozadie šachovnice
+const setBackgroundTiles = (tiles, tileSize = 1) => {
+  console.log('🎨 CheckerboardCanvas.setBackgroundTiles() volaná')
+  console.log('   Počet tile-ov:', tiles.length)
+  console.log('   Tiles per image:', tileSize)
+  
+  backgroundTiles = tiles
+  tilesPerImage = tileSize
+  loadedTiles = []
+  
+  // Načítaj všetky tile obrázky
+  let loadedCount = 0
+  tiles.forEach((tileUrl, index) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      loadedTiles[index] = img
+      loadedCount++
+      console.log(`   Tile ${index + 1}/${tiles.length} načítaný`)
+      
+      // Keď sú všetky načítané, prekresli canvas
+      if (loadedCount === tiles.length) {
+        console.log('✅ Všetky tile-y načítané, prekresľujem canvas...')
+        if (canvas.value) {
+          const ctx = canvas.value.getContext('2d')
+          drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+        }
+      }
+    }
+    img.onerror = (err) => {
+      console.error(`❌ Chyba pri načítaní tile ${index + 1}:`, err)
+    }
+    img.src = tileUrl
+  })
+}
+
+// Funkcia na náhodné rozmiestnenie prvkov prostredia
+const placeEnvironmentElements = (images, count = 10, gridSize = 50) => {
+  console.log('🌲 CheckerboardCanvas.placeEnvironmentElements() volaná')
+  console.log('   Počet obrázkov:', images.length)
+  console.log('   Počet prvkov na umiestniť:', count)
+  
+  // Vymaž existujúce prvky prostredia (ale nie budovy)
+  // Budovy majú väčšie rozmery, prvky prostredia sú 1x1
+  for (const key in cellImages) {
+    const img = cellImages[key]
+    if (img.isEnvironment) {
+      delete cellImages[key]
+      delete loadedImages[key]
+    }
+  }
+  
+  // Náhodne umiestni prvky
+  const placedPositions = new Set()
+  let placed = 0
+  let attempts = 0
+  const maxAttempts = count * 10
+  
+  while (placed < count && attempts < maxAttempts) {
+    attempts++
+    
+    // Náhodná pozícia
+    const row = Math.floor(Math.random() * gridSize)
+    const col = Math.floor(Math.random() * gridSize)
+    const cellKey = `${row}-${col}`
+    
+    // Kontrola či už nie je obsadené
+    if (placedPositions.has(cellKey) || cellImages[cellKey]) {
+      continue
+    }
+    
+    // Náhodný obrázok z pole
+    const randomImage = images[Math.floor(Math.random() * images.length)]
+    
+    // Ulož prvok
+    cellImages[cellKey] = {
+      url: randomImage,
+      cellsX: 1,
+      cellsY: 1,
+      isEnvironment: true // Označí že je to prvok prostredia
+    }
+    
+    placedPositions.add(cellKey)
+    placed++
+    
+    // Načítaj obrázok
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      loadedImages[cellKey] = img
+      // Prekresli canvas keď je všetko načítané
+      if (Object.keys(loadedImages).length >= placed) {
+        if (canvas.value) {
+          const ctx = canvas.value.getContext('2d')
+          drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+        }
+      }
+    }
+    img.src = randomImage
+  }
+  
+  console.log(`✅ Umiestnených ${placed} prvkov prostredia`)
+  
+  // Prekresli canvas
+  if (canvas.value) {
+    const ctx = canvas.value.getContext('2d')
+    drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+  }
+}
+
+// Expose funkcie aby ich mohol App.vue volať
 defineExpose({
-  placeImageAtSelectedCell
+  placeImageAtSelectedCell,
+  setBackgroundTiles,
+  placeEnvironmentElements
 })
 
 onMounted(() => {
