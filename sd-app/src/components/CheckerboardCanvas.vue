@@ -23,10 +23,14 @@ const props = defineProps({
   showGallery: {
     type: Boolean,
     default: true
+  },
+  showGrid: {
+    type: Boolean,
+    default: true
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid'])
 
 const canvas = ref(null)
 let hoveredCell = { row: -1, col: -1 }
@@ -168,26 +172,29 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       const cellKey = `${row}-${col}`
       const hasDirectImage = cellImages[cellKey]
       
-      // Nakreslíme políčko
-      if (isEven) {
-        ctx.fillStyle = '#e8e8e8'
-      } else {
-        ctx.fillStyle = '#f8f8f8'
-      }
-      
-      // Kreslenie kosoštvorca (diamantu)
-      ctx.beginPath()
-      ctx.moveTo(x, y)
-      ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
-      ctx.lineTo(x, y + tileHeight)
-      ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
-      ctx.closePath()
-      ctx.fill()
-      
-      // Okraj
-      ctx.strokeStyle = '#999'
-      ctx.lineWidth = 1 / scale
-      ctx.stroke()
+      // Nakreslíme políčko len ak je mriežka zapnutá
+      if (props.showGrid) {
+        // Farba políčka
+        if (isEven) {
+          ctx.fillStyle = '#e8e8e8'
+        } else {
+          ctx.fillStyle = '#f8f8f8'
+        }
+        
+        // Kreslenie kosoštvorca (diamantu)
+        ctx.beginPath()
+        ctx.moveTo(x, y)
+        ctx.lineTo(x + tileWidth / 2, y + tileHeight / 2)
+        ctx.lineTo(x, y + tileHeight)
+        ctx.lineTo(x - tileWidth / 2, y + tileHeight / 2)
+        ctx.closePath()
+        ctx.fill()
+        
+        // Orámovanie
+        ctx.strokeStyle = '#999'
+        ctx.lineWidth = 1 / scale
+        ctx.stroke()
+      } // Koniec if (props.showGrid)
     }
   }
   
@@ -694,7 +701,16 @@ watch(() => props.showNumbering, () => {
     })
   }
 })
-</script>
+
+// Watch na zmenu showGrid - okamžite prekreslí pomocou requestAnimationFrame
+watch(() => props.showGrid, () => {
+  if (canvas.value) {
+    requestAnimationFrame(() => {
+      const ctx = canvas.value.getContext('2d')
+      drawCheckerboard(ctx, canvas.value.width, canvas.value.height)
+    })
+  }
+})</script>
 
 <template>
   <div class="canvas-container">
@@ -724,6 +740,14 @@ watch(() => props.showNumbering, () => {
           @change="$emit('toggle-gallery', $event.target.checked)"
         />
         <span>🖼️ Galéria</span>
+      </label>
+      <label class="checkbox-label">
+        <input 
+          type="checkbox" 
+          :checked="props.showGrid"
+          @change="$emit('toggle-grid', $event.target.checked)"
+        />
+        <span>☰ Mriežka</span>
       </label>
     </div>
   </div>

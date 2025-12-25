@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
-import ImageGenerator from './components/ImageGenerator.vue'
+import BuildingGenerator from './components/BuildingGenerator.vue'
+import EnvironmentGenerator from './components/EnvironmentGenerator.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import CheckerboardCanvas from './components/CheckerboardCanvas.vue'
 
@@ -14,6 +15,8 @@ const canvasRef = ref(null)
 const imageGeneratorRef = ref(null)
 const showNumbering = ref(false)
 const showGallery = ref(false)
+const showGrid = ref(true)
+const activeGenerator = ref('building') // 'building' alebo 'environment'
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -89,6 +92,16 @@ const handleToggleGallery = (value) => {
   showGallery.value = value
   console.log(`App.vue: Galéria prepnutá z canvas: ${value ? 'zobrazená' : 'skrytá'}`)
 }
+
+const handleToggleGrid = (value) => {
+  showGrid.value = value
+  console.log(`App.vue: Mriežka prepnutá z canvas: ${value ? 'zobrazená' : 'skrytá'}`)
+}
+
+const handleEnvironmentGenerated = (envData) => {
+  console.log('🌍 App.vue: Prijaté environment-generated event', envData)
+  // TODO: Implement environment application
+}
 </script>
 
 <template>
@@ -103,10 +116,12 @@ const handleToggleGallery = (value) => {
       :templateSelected="templateSelected"
       :showNumbering="showNumbering"
       :showGallery="showGallery"
+      :showGrid="showGrid"
       @cell-selected="handleCellSelected"
       @image-placed="handleImagePlaced"
       @toggle-numbering="handleToggleNumbering"
       @toggle-gallery="handleToggleGallery"
+      @toggle-grid="handleToggleGrid"
     />
     
     <!-- Header (absolútne pozicionovaný) -->
@@ -114,12 +129,36 @@ const handleToggleGallery = (value) => {
     
     <!-- Pravý sidebar s nástrojmi (absolútne pozicionovaný) -->
     <aside class="sidebar">
-      <ImageGenerator
+      <!-- Switcher -->
+      <div class="generator-switcher">
+        <button 
+          :class="{ active: activeGenerator === 'building' }"
+          @click="activeGenerator = 'building'"
+        >
+          🏗️ Building
+        </button>
+        <button 
+          :class="{ active: activeGenerator === 'environment' }"
+          @click="activeGenerator = 'environment'"
+        >
+          🌍 Environment
+        </button>
+      </div>
+      
+      <!-- Building Generator -->
+      <BuildingGenerator
+        v-if="activeGenerator === 'building'"
         ref="imageGeneratorRef"
         @image-generated="handleImageGenerated" 
         @template-selected="handleTemplateSelected"
         @tab-changed="handleTabChanged"
         @numbering-changed="handleNumberingChanged"
+      />
+      
+      <!-- Environment Generator -->
+      <EnvironmentGenerator
+        v-if="activeGenerator === 'environment'"
+        @environment-generated="handleEnvironmentGenerated"
       />
     </aside>
     
@@ -198,5 +237,37 @@ header h1 {
   z-index: 10;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+.generator-switcher {
+  display: flex;
+  gap: 0;
+  background: #f0f0f0;
+  padding: 0.5rem;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.generator-switcher button {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: none;
+  background: transparent;
+  color: #666;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 6px;
+}
+
+.generator-switcher button:hover {
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+}
+
+.generator-switcher button.active {
+  background: #667eea;
+  color: white;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 </style>
