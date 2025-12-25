@@ -12,6 +12,8 @@ const templateSelected = ref(false)
 const selectedCell = ref({ row: -1, col: -1 })
 const canvasRef = ref(null)
 const imageGeneratorRef = ref(null)
+const showNumbering = ref(false)
+const showGallery = ref(false)
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -72,44 +74,64 @@ const handleImagePlaced = ({ row, col }) => {
   selectedCell.value = { row: -1, col: -1 }
   console.log(`App.vue: Obrázok vložený na [${row}, ${col}]`)
 }
+
+const handleNumberingChanged = (value) => {
+  showNumbering.value = value
+  console.log(`App.vue: Číslovanie šachovnice ${value ? 'zapnuté' : 'vypnuté'}`)
+}
+
+const handleToggleNumbering = (value) => {
+  showNumbering.value = value
+  console.log(`App.vue: Číslovanie prepnuté z canvas: ${value ? 'zapnuté' : 'vypnuté'}`)
+}
+
+const handleToggleGallery = (value) => {
+  showGallery.value = value
+  console.log(`App.vue: Galéria prepnutá z canvas: ${value ? 'zobrazená' : 'skrytá'}`)
+}
 </script>
 
 <template>
   <div id="app">
-    <header>
-      <h1>🎨 Stable Diffusion Generator</h1>
-    </header>
-    <main>
-      <!-- Ľavá plocha pre obsah -->
-      <div class="content-area">
-        <CheckerboardCanvas
-          ref="canvasRef"
-          :images="images" 
-          :selectedImageId="selectedImageId"
-          :lastImageCellsX="lastImageCellsX"
-          :lastImageCellsY="lastImageCellsY"
-          :templateSelected="templateSelected"
-          @cell-selected="handleCellSelected"
-          @image-placed="handleImagePlaced"
-        />
-        <ImageGallery 
-          :images="images" 
-          :selectedImageId="selectedImageId"
-          @delete="handleDelete" 
-          @select="handleSelectImage"
-        />
-      </div>
-      
-      <!-- Pravý sidebar s nástrojmi -->
-      <aside class="sidebar">
-        <ImageGenerator
-          ref="imageGeneratorRef"
-          @image-generated="handleImageGenerated" 
-          @template-selected="handleTemplateSelected"
-          @tab-changed="handleTabChanged"
-        />
-      </aside>
-    </main>
+    <!-- Canvas na pozadí (celá obrazovka) -->
+    <CheckerboardCanvas
+      ref="canvasRef"
+      :images="images" 
+      :selectedImageId="selectedImageId"
+      :lastImageCellsX="lastImageCellsX"
+      :lastImageCellsY="lastImageCellsY"
+      :templateSelected="templateSelected"
+      :showNumbering="showNumbering"
+      :showGallery="showGallery"
+      @cell-selected="handleCellSelected"
+      @image-placed="handleImagePlaced"
+      @toggle-numbering="handleToggleNumbering"
+      @toggle-gallery="handleToggleGallery"
+    />
+    
+    <!-- Header (absolútne pozicionovaný) -->
+
+    
+    <!-- Pravý sidebar s nástrojmi (absolútne pozicionovaný) -->
+    <aside class="sidebar">
+      <ImageGenerator
+        ref="imageGeneratorRef"
+        @image-generated="handleImageGenerated" 
+        @template-selected="handleTemplateSelected"
+        @tab-changed="handleTabChanged"
+        @numbering-changed="handleNumberingChanged"
+      />
+    </aside>
+    
+    <!-- Galéria dole (absolútne pozicionovaná) -->
+    <div v-if="showGallery" class="gallery-container">
+      <ImageGallery 
+        :images="images" 
+        :selectedImageId="selectedImageId"
+        @delete="handleDelete" 
+        @select="handleSelectImage"
+      />
+    </div>
   </div>
 </template>
 
@@ -122,49 +144,59 @@ body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell,
     'Helvetica Neue', sans-serif;
+  overflow: hidden;
 }
 
 #app {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+  padding: 0;
 }
 
 header {
-  padding: 1.5rem 2rem;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 380px;
+  padding: 1rem 2rem;
   text-align: center;
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(10px);
+  z-index: 10;
+  pointer-events: none;
 }
 
 header h1 {
   margin: 0;
-  font-size: 2rem;
+  font-size: 1.8rem;
   font-weight: bold;
-}
-
-main {
-  flex: 1;
-  display: flex;
-  gap: 0;
-  height: calc(100vh - 80px);
-  overflow: hidden;
-}
-
-.content-area {
-  flex: 1;
-  padding: 2rem;
-  overflow-y: auto;
-  background: rgba(255, 255, 255, 0.05);
+  color: white;
 }
 
 .sidebar {
-  width: 350px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 230px;
+  height: 100vh;
   background: white;
   overflow-y: auto;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.2);
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+}
+
+.gallery-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 380px;
+  height: 180px;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(10px);
+  z-index: 10;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 </style>

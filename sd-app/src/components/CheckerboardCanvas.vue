@@ -15,10 +15,18 @@ const props = defineProps({
   templateSelected: {
     type: Boolean,
     default: false
+  },
+  showNumbering: {
+    type: Boolean,
+    default: true
+  },
+  showGallery: {
+    type: Boolean,
+    default: true
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery'])
 
 const canvas = ref(null)
 let hoveredCell = { row: -1, col: -1 }
@@ -297,22 +305,29 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
           continue
         }
         
-        ctx.fillStyle = '#ff0000'  // Červená farba
-        ctx.font = `bold ${10 / scale}px Arial`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
+        // Číslovanie sa vykreslí vždy, len s rôznou opacity
+        const numberOpacity = props.showNumbering ? 1.0 : 0.0
         
-        // Pridáme tieň pre lepšiu čitateľnosť
-        ctx.shadowColor = 'rgba(255, 255, 255, 0.8)'
-        ctx.shadowBlur = 3 / scale
-        ctx.shadowOffsetX = 0
-        ctx.shadowOffsetY = 0
-        
-        ctx.fillText(`${row},${col}`, x, y + tileHeight / 2)
-        
-        // Zrušíme tieň
-        ctx.shadowColor = 'transparent'
-        ctx.shadowBlur = 0
+        if (numberOpacity > 0) {
+          ctx.globalAlpha = numberOpacity
+          ctx.fillStyle = '#ff0000'  // Červená farba
+          ctx.font = `bold ${10 / scale}px Arial`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          
+          // Pridáme tieň pre lepšiu čitateľnosť
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.8)'
+          ctx.shadowBlur = 3 / scale
+          ctx.shadowOffsetX = 0
+          ctx.shadowOffsetY = 0
+          
+          ctx.fillText(`${row},${col}`, x, y + tileHeight / 2)
+          
+          // Zrušíme tieň a vrátime opacity
+          ctx.shadowColor = 'transparent'
+          ctx.shadowBlur = 0
+          ctx.globalAlpha = 1.0
+        }
       }
     }
   }
@@ -669,6 +684,16 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('mouseup', handleMouseUp)
 })
+
+// Watch na zmenu showNumbering - okamžite prekreslí pomocou requestAnimationFrame
+watch(() => props.showNumbering, () => {
+  if (canvas.value) {
+    requestAnimationFrame(() => {
+      const ctx = canvas.value.getContext('2d')
+      drawCheckerboard(ctx, canvas.value.width, canvas.value.height)
+    })
+  }
+})
 </script>
 
 <template>
@@ -681,31 +706,88 @@ onUnmounted(() => {
       @wheel="handleWheel"
       @contextmenu="handleContextMenu"
     ></canvas>
+    
+    <!-- Checkbox overlay pre číslovanie a galériu -->
+    <div class="controls-toggle">
+      <label class="checkbox-label">
+        <input 
+          type="checkbox" 
+          :checked="props.showNumbering"
+          @change="$emit('toggle-numbering', $event.target.checked)"
+        />
+        <span>🔢 Číslovanie</span>
+      </label>
+      <label class="checkbox-label">
+        <input 
+          type="checkbox" 
+          :checked="props.showGallery"
+          @change="$emit('toggle-gallery', $event.target.checked)"
+        />
+        <span>🖼️ Galéria</span>
+      </label>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .canvas-container {
-  width: 100%;
-  max-width: 800px;
-  background: white;
-  border-radius: 8px;
-  margin-bottom: 2rem;
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
-  perspective: 1000px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   overflow: hidden;
-  position: relative;
+  z-index: 1;
 }
 
 canvas {
   display: block;
   width: 100%;
+  height: 100%;
   cursor: grab;
-  border-radius: 8px;
   user-select: none;
 }
 
 canvas:active {
   cursor: grabbing;
+}
+
+/* Overlay checkboxy pre ovládanie */
+.controls-toggle {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+  backdrop-filter: blur(10px);
+  display: flex;
+  gap: 1.5rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+  color: #333;
+  user-select: none;
+  margin: 0;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #667eea;
+}
+
+.checkbox-label span {
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 </style>

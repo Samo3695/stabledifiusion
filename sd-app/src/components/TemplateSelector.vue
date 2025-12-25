@@ -101,9 +101,7 @@ const selectTemplate = (template) => {
 </script>
 
 <template>
-  <div class="template-selector">
-    <label>🎨 Šablóny</label>
-    
+  <div class="template-selector">  
     <!-- Tab navigácia -->
     <div class="template-tabs">
       <button 

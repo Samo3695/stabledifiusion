@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import TemplateSelector from './TemplateSelector.vue'
 
-const emit = defineEmits(['image-generated', 'template-selected', 'tab-changed'])
+const emit = defineEmits(['image-generated', 'template-selected', 'tab-changed', 'numbering-changed'])
 
 const mainKeyword = ref('house') // Hlavné kľúčové slovo
 const prompt = ref('house')
@@ -18,6 +18,7 @@ const isRemovingBackground = ref(false)
 const hueShift = ref(0) // Posun odtieňa (-180 až +180)
 const isAdjustingHue = ref(false)
 const autoRemoveBackground = ref(true) // Či automaticky odstrániť pozadie po generovaní
+const showNumbering = ref(true) // Či zobrazovať číslovanie šachovnice
 const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
 const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
 
@@ -25,6 +26,12 @@ const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
 watch(mainKeyword, (newKeyword) => {
   prompt.value = newKeyword
   console.log('🏷️ Hlavné kľúčové slovo zmenené na:', newKeyword)
+})
+
+// Sleduj zmeny showNumbering a oznám App.vue
+watch(showNumbering, (newValue) => {
+  emit('numbering-changed', newValue)
+  console.log('🔢 Číslovanie šachovnice:', newValue ? 'ZAPNUTÉ' : 'VYPNUTÉ')
 })
 
 // Funkcia na spracovanie zmeny tabu v šablónach
@@ -379,12 +386,10 @@ defineExpose({
 
 <template>
   <div class="generator-card">
-    <h2>Generovať nový obrázok</h2>
     
     <div class="form">
       <!-- Nahranie obrázka alebo výber šablóny -->
       <div class="input-group">
-        <label>🖼️ Vstupný obrázok (voliteľné - pre Image-to-Image)</label>
         
         <!-- Komponent pre výber šablón -->
         <TemplateSelector 
@@ -545,6 +550,18 @@ defineExpose({
         <small class="hint">Vygenerovaný obrázok bude mať priehľadné čierne pozadie</small>
       </div>
 
+      <!-- Checkbox na zobrazenie číslovania šachovnice -->
+      <div class="input-group checkbox-group">
+        <label class="checkbox-label">
+          <input 
+            type="checkbox" 
+            v-model="showNumbering"
+          />
+          <span>🔢 Zobraziť číslovanie políčok na šachovnici</span>
+        </label>
+        <small class="hint">Zobrazí súradnice políčok pre lepšiu orientáciu</small>
+      </div>
+
       <div v-if="error" class="error-message">
         ⚠️ {{ error }}
       </div>
@@ -634,7 +651,7 @@ defineExpose({
   background: white;
   color: #333;
   border-radius: 0;
-  padding: 1.5rem;
+  padding: 15px;
   height: 100%;
   display: flex;
   flex-direction: column;
