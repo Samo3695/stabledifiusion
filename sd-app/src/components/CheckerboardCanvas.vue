@@ -27,6 +27,10 @@ const props = defineProps({
   showGrid: {
     type: Boolean,
     default: true
+  },
+  deleteMode: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -65,6 +69,27 @@ const checkCollision = (row, col, cellsX, cellsY) => {
     affectedCells.push(`${row}-${col + 1}`)
     affectedCells.push(`${row + 1}-${col}`)
     affectedCells.push(`${row + 1}-${col + 1}`)
+  } else if (cellsX === 3 && cellsY === 3) {
+    // 9 políčok: 3x3 blok
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        affectedCells.push(`${row + r}-${col + c}`)
+      }
+    }
+  } else if (cellsX === 4 && cellsY === 4) {
+    // 16 políčok: 4x4 blok
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        affectedCells.push(`${row + r}-${col + c}`)
+      }
+    }
+  } else if (cellsX === 5 && cellsY === 5) {
+    // 25 políčok: 5x5 blok
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 5; c++) {
+        affectedCells.push(`${row + r}-${col + c}`)
+      }
+    }
   }
   
   // Skontrolujeme kolíziu s každým existujúcim obrázkom
@@ -87,6 +112,24 @@ const checkCollision = (row, col, cellsX, cellsY) => {
       existingCells.push(`${existingRow}-${existingCol + 1}`)
       existingCells.push(`${existingRow + 1}-${existingCol}`)
       existingCells.push(`${existingRow + 1}-${existingCol + 1}`)
+    } else if (exCellsX === 3 && exCellsY === 3) {
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          existingCells.push(`${existingRow + r}-${existingCol + c}`)
+        }
+      }
+    } else if (exCellsX === 4 && exCellsY === 4) {
+      for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+          existingCells.push(`${existingRow + r}-${existingCol + c}`)
+        }
+      }
+    } else if (exCellsX === 5 && exCellsY === 5) {
+      for (let r = 0; r < 5; r++) {
+        for (let c = 0; c < 5; c++) {
+          existingCells.push(`${existingRow + r}-${existingCol + c}`)
+        }
+      }
     }
     
     // Kontrola prekrytia
@@ -343,6 +386,18 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
         // 4 políčka v bloku 2x2 (4size) - posunieme vľavo o pol políčka
         offsetXForCells = 0  // posun vľavo o pol políčka
         offsetYForCells = tileHeight
+      } else if (cellsX === 3 && cellsY === 3) {
+        // 9 políčok v bloku 3x3 - posun 2 políčka nižšie
+        offsetXForCells = 0
+        offsetYForCells = tileHeight * 2
+      } else if (cellsX === 4 && cellsY === 4) {
+        // 16 políčok v bloku 4x4 - posun 3 políčka nižšie
+        offsetXForCells = 0
+        offsetYForCells = tileHeight * 3
+      } else if (cellsX === 5 && cellsY === 5) {
+        // 25 políčok v bloku 5x5 - posun 4 políčka nižšie
+        offsetXForCells = 0
+        offsetYForCells = tileHeight * 4
       }
       
       // Nakresliť obrázok (spodok na spodku bloku políčok, môže presahovať hore)
@@ -401,8 +456,8 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
     }
   }
   
-  // FÁZA 4: Hover označenie NAD všetkým (najvyšší z-index) - len ak je vybraná šablóna
-  if (props.templateSelected && highlightRow !== -1 && highlightCol !== -1) {
+  // FÁZA 4: Hover označenie NAD všetkým (najvyšší z-index) - len ak je vybraná šablóna alebo delete mode
+  if ((props.templateSelected || props.deleteMode) && highlightRow !== -1 && highlightCol !== -1) {
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         // Zistíme či toto políčko patrí do hover bloku
@@ -424,6 +479,21 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
                          (row === highlightRow + 1 && col === highlightCol) ||
                          (row === highlightRow + 1 && col === highlightCol + 1)
         }
+        // Pre 9 políčok (3x3): 3x3 blok
+        else if (hoverCellsX === 3 && hoverCellsY === 3) {
+          isHighlighted = row >= highlightRow && row < highlightRow + 3 &&
+                         col >= highlightCol && col < highlightCol + 3
+        }
+        // Pre 16 políčok (4x4): 4x4 blok
+        else if (hoverCellsX === 4 && hoverCellsY === 4) {
+          isHighlighted = row >= highlightRow && row < highlightRow + 4 &&
+                         col >= highlightCol && col < highlightCol + 4
+        }
+        // Pre 25 políčok (5x5): 5x5 blok
+        else if (hoverCellsX === 5 && hoverCellsY === 5) {
+          isHighlighted = row >= highlightRow && row < highlightRow + 5 &&
+                         col >= highlightCol && col < highlightCol + 5
+        }
         
         if (isHighlighted) {
           const isoX = (col - row) * (tileWidth / 2)
@@ -431,8 +501,12 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
           const x = startX + isoX
           const y = startY + isoY
           
-          // Červená výplň pri kolízii, modrá inak
-          ctx.fillStyle = hasCollision ? 'rgba(255, 0, 0, 0.3)' : 'rgba(102, 126, 234, 0.5)'
+          // Červená výplň pri kolízii alebo delete mode, modrá inak
+          if (props.deleteMode) {
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.5)' // Červená pre delete mode
+          } else {
+            ctx.fillStyle = hasCollision ? 'rgba(255, 0, 0, 0.3)' : 'rgba(102, 126, 234, 0.5)'
+          }
           
           // Kreslenie kosoštvorca (diamantu)
           ctx.beginPath()
@@ -476,6 +550,21 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
                       (row === selectedCell.row && col === selectedCell.col + 1) ||
                       (row === selectedCell.row + 1 && col === selectedCell.col) ||
                       (row === selectedCell.row + 1 && col === selectedCell.col + 1)
+        }
+        // Pre 9 políčok (3x3): 3x3 blok
+        else if (selCellsX === 3 && selCellsY === 3) {
+          isSelected = row >= selectedCell.row && row < selectedCell.row + 3 &&
+                      col >= selectedCell.col && col < selectedCell.col + 3
+        }
+        // Pre 16 políčok (4x4): 4x4 blok
+        else if (selCellsX === 4 && selCellsY === 4) {
+          isSelected = row >= selectedCell.row && row < selectedCell.row + 4 &&
+                      col >= selectedCell.col && col < selectedCell.col + 4
+        }
+        // Pre 25 políčok (5x5): 5x5 blok
+        else if (selCellsX === 5 && selCellsY === 5) {
+          isSelected = row >= selectedCell.row && row < selectedCell.row + 5 &&
+                      col >= selectedCell.col && col < selectedCell.col + 5
         }
         
         if (isSelected) {
@@ -546,7 +635,8 @@ const handleMouseDown = (event) => {
   event.preventDefault()
   
   // Ľavé tlačidlo (0) = vybrať políčko
-  if (event.button === 0 && props.templateSelected) {
+  // Funguje ak je vybraná šablóna ALEBO ak je aktualívny delete mode
+  if (event.button === 0 && (props.templateSelected || props.deleteMode)) {
     const rect = canvas.value.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
@@ -557,15 +647,18 @@ const handleMouseDown = (event) => {
     const cell = getGridCell(x * scaleX, y * scaleY, canvas.value.width, canvas.value.height)
     
     if (cell.row !== -1 && cell.col !== -1) {
-      // Kontrola kolízie pred výberom pomocou checkCollision funkcie
-      const cellsX = props.lastImageCellsX || 1
-      const cellsY = props.lastImageCellsY || 1
-      
-      if (checkCollision(cell.row, cell.col, cellsX, cellsY)) {
-        console.log('❌ Kolízia! Nemôžete vybrať toto políčko.')
-        console.log(`   Pokus o výber: [${cell.row}, ${cell.col}]`)
-        console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
-        return
+      // V delete mode nekoníčkujeme kolíziu - používateľ kliká na building aby ho zmazal
+      if (!props.deleteMode) {
+        // Kontrola kolízie pred výberom pomocou checkCollision funkcie
+        const cellsX = props.lastImageCellsX || 1
+        const cellsY = props.lastImageCellsY || 1
+        
+        if (checkCollision(cell.row, cell.col, cellsX, cellsY)) {
+          console.log('❌ Kolízia! Nemôžete vybrať toto políčko.')
+          console.log(`   Pokus o výber: [${cell.row}, ${cell.col}]`)
+          console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
+          return
+        }
       }
       
       // Označ políčko
@@ -576,7 +669,11 @@ const handleMouseDown = (event) => {
       emit('cell-selected', { row: cell.row, col: cell.col })
       
       console.log(`✅ Políčko vybrané: [${cell.row}, ${cell.col}]`)
-      console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
+      if (!props.deleteMode) {
+        const cellsX = props.lastImageCellsX || 1
+        const cellsY = props.lastImageCellsY || 1
+        console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
+      }
       
       // Prekreslí canvas
       const ctx = canvas.value.getContext('2d')
@@ -843,11 +940,80 @@ const placeEnvironmentElements = (images, count = 10, gridSize = 50) => {
   }
 }
 
+// Funkcia na vymazanie obrázka na danom políčku alebo políčkach ktoré obsadzuje
+const deleteImageAtCell = (row, col) => {
+  console.log(`🗑️ CheckerboardCanvas: Vymazanie obrázka na políčku [${row}, ${col}]`)
+  
+  // Nájdeme všetky obrázky ktoré obsadzujú toto políčko
+  const toDelete = []
+  
+  for (const [key, image] of Object.entries(cellImages)) {
+    const [imgRow, imgCol] = key.split('-').map(Number)
+    const cellsX = image.cellsX || 1
+    const cellsY = image.cellsY || 1
+    
+    // Zistíme všetky políčka ktoré tento obrázok obsadzuje
+    const occupiedCells = []
+    
+    if (cellsX === 1 && cellsY === 1) {
+      occupiedCells.push(`${imgRow}-${imgCol}`)
+    } else if (cellsX === 1 && cellsY === 2) {
+      occupiedCells.push(`${imgRow}-${imgCol}`)
+      occupiedCells.push(`${imgRow + 1}-${imgCol}`)
+    } else if (cellsX === 2 && cellsY === 2) {
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          occupiedCells.push(`${imgRow + r}-${imgCol + c}`)
+        }
+      }
+    } else if (cellsX === 3 && cellsY === 3) {
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          occupiedCells.push(`${imgRow + r}-${imgCol + c}`)
+        }
+      }
+    } else if (cellsX === 4 && cellsY === 4) {
+      for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+          occupiedCells.push(`${imgRow + r}-${imgCol + c}`)
+        }
+      }
+    } else if (cellsX === 5 && cellsY === 5) {
+      for (let r = 0; r < 5; r++) {
+        for (let c = 0; c < 5; c++) {
+          occupiedCells.push(`${imgRow + r}-${imgCol + c}`)
+        }
+      }
+    }
+    
+    // Ak kliknuté políčko je v tomto zozname, označíme tento obrázok na vymazanie
+    if (occupiedCells.includes(`${row}-${col}`)) {
+      toDelete.push(key)
+    }
+  }
+  
+  // Vymažeme nájdené obrázky
+  for (const key of toDelete) {
+    console.log(`  ✓ Vymazaný obrázok na ${key}`)
+    delete cellImages[key]
+    delete loadedImages[key]
+  }
+  
+  // Prekreslíme canvas
+  if (canvas.value) {
+    const ctx = canvas.value.getContext('2d')
+    drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+  }
+  
+  return toDelete.length > 0
+}
+
 // Expose funkcie aby ich mohol App.vue volať
 defineExpose({
   placeImageAtSelectedCell,
   setBackgroundTiles,
-  placeEnvironmentElements
+  placeEnvironmentElements,
+  deleteImageAtCell
 })
 
 onMounted(() => {

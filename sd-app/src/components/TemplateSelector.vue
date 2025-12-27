@@ -5,9 +5,8 @@ const emit = defineEmits(['template-selected', 'tab-changed'])
 
 const activeTemplateTab = ref('1size')
 const templateImages = ref({
-  '1size': ['0.png', '1.png', '1x2.png', '1x3.png'],
-  '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png'],
-  '4size': ['4x1.png', '4x2-1.png', '4x2-2.png', '4x2-3.png', '4x2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', '4x3.png']
+  '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'ihlan1.png', 'kuzel.png', 'valec.png'],
+  '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png']
 })
 const selectedTemplate = ref(null)
 
@@ -17,9 +16,6 @@ const emitTabSize = (tab) => {
   if (tab === '2size') {
     cellsX = 1
     cellsY = 2  // 2 políčka nad sebou
-  } else if (tab === '4size') {
-    cellsX = 2
-    cellsY = 2
   }
   
   emit('tab-changed', { cellsX, cellsY })
@@ -36,17 +32,14 @@ onMounted(() => {
 })
 
 const selectTemplate = (template) => {
-  const folder = activeTemplateTab.value === '1size' ? 'cubes1' : 
-                 activeTemplateTab.value === '2size' ? 'cubes2' : 'cubes4'
+  const folder = activeTemplateTab.value === '1size' ? 'all' : 'cubes2'
   const templatePath = `/templates/${folder}/${template}`
   
   selectedTemplate.value = template
   
   // Zisti počet políčok podľa tabu (ULOŽÍME DO KONŠTANTY aby sa nezmenili)
-  const currentCellsX = activeTemplateTab.value === '1size' ? 1 : 
-                        activeTemplateTab.value === '2size' ? 1 : 2
-  const currentCellsY = activeTemplateTab.value === '1size' ? 1 : 
-                        activeTemplateTab.value === '2size' ? 2 : 2
+  const currentCellsX = 1
+  const currentCellsY = activeTemplateTab.value === '2size' ? 2 : 1
   
   console.log(`📐 TemplateSelector: Vybraná šablóna "${template}" v tabe "${activeTemplateTab.value}"`)
   console.log(`   Políčka: ${currentCellsX}x${currentCellsY}`)
@@ -120,14 +113,6 @@ const selectTemplate = (template) => {
       >
         2size
       </button>
-      <button 
-        @click="activeTemplateTab = '4size'" 
-        :class="{ active: activeTemplateTab === '4size' }"
-        class="tab-btn"
-        type="button"
-      >
-        4size
-      </button>
     </div>
     
     <!-- Galéria šablón -->
@@ -140,7 +125,7 @@ const selectTemplate = (template) => {
         class="template-item"
       >
         <img 
-          :src="`/templates/${activeTemplateTab === '1size' ? 'cubes1' : activeTemplateTab === '2size' ? 'cubes2' : 'cubes4'}/${template}`" 
+          :src="`/templates/${activeTemplateTab === '1size' ? 'all' : 'cubes2'}/${template}`" 
           :alt="template"
         />
       </div>
@@ -164,7 +149,6 @@ const selectTemplate = (template) => {
 /* Template tabs */
 .template-tabs {
   display: flex;
-  flex-direction: column;
   gap: 0.5rem;
   margin-bottom: 1rem;
 }
@@ -196,7 +180,7 @@ const selectTemplate = (template) => {
 /* Templates gallery */
 .templates-gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 0.75rem;
   max-height: 250px;
   overflow-y: auto;
@@ -206,13 +190,17 @@ const selectTemplate = (template) => {
 }
 
 .template-item {
-  aspect-ratio: 1;
   border: 3px solid #e0e0e0;
   border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
   transition: all 0.3s;
   background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  max-height: 120px;
 }
 
 .template-item:hover {
@@ -230,6 +218,6 @@ const selectTemplate = (template) => {
 .template-item img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 </style>

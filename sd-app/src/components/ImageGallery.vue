@@ -1,14 +1,28 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 const props = defineProps({
   images: Array,
   selectedImageId: String
 })
 
-const emit = defineEmits(['delete', 'select'])
+const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-changed', 'delete-mode-changed'])
 
 const selectedImage = ref(null)
+const selectedGridSize = ref(1) // 1, 4, 9, 16, 25, alebo -1 pre režim mazania
+
+// Watch grid size changes and emit to parent
+watch(selectedGridSize, (newSize) => {
+  if (newSize === -1) {
+    // Delete mode: 1x1 hover, but in delete mode
+    emit('grid-size-changed', { cellsX: 1, cellsY: 1 })
+    emit('delete-mode-changed', true)
+  } else {
+    const cellsPerSide = Math.sqrt(newSize)
+    emit('grid-size-changed', { cellsX: cellsPerSide, cellsY: cellsPerSide })
+    emit('delete-mode-changed', false)
+  }
+})
 
 const openModal = (image) => {
   selectedImage.value = image
@@ -34,14 +48,78 @@ const deleteImage = (id) => {
   }
 }
 
+const placeOnBoard = () => {
+  const selected = images.find(img => img.id === props.selectedImageId)
+  if (selected) {
+    // Vypočítaj cellsX a cellsY podľa selectedGridSize
+    const cellsPerSide = Math.sqrt(selectedGridSize.value)
+    emit('place-on-board', {
+      ...selected,
+      cellsX: cellsPerSide,
+      cellsY: cellsPerSide
+    })
+  }
+}
+
 const formatDate = (date) => {
   return new Date(date).toLocaleString('sk-SK')
 }
 </script>
 
 <template>
+  <!-- Grid size tabs -->
+  <div class="grid-size-tabs">
+    <button 
+      @click="selectedGridSize = 1" 
+      :class="{ active: selectedGridSize === 1 }"
+      class="size-btn"
+      title="1 políčko (1x1)"
+    >
+      1
+    </button>
+    <button 
+      @click="selectedGridSize = 4" 
+      :class="{ active: selectedGridSize === 4 }"
+      class="size-btn"
+      title="4 políčka (2x2)"
+    >
+      4
+    </button>
+    <button 
+      @click="selectedGridSize = 9" 
+      :class="{ active: selectedGridSize === 9 }"
+      class="size-btn"
+      title="9 políčok (3x3)"
+    >
+      9
+    </button>
+    <button 
+      @click="selectedGridSize = 16" 
+      :class="{ active: selectedGridSize === 16 }"
+      class="size-btn"
+      title="16 políčok (4x4)"
+    >
+      16
+    </button>
+    <button 
+      @click="selectedGridSize = 25" 
+      :class="{ active: selectedGridSize === 25 }"
+      class="size-btn"
+      title="25 políčok (5x5)"
+    >
+      25
+    </button>
+    <button 
+      @click="selectedGridSize = -1" 
+      :class="{ active: selectedGridSize === -1, 'delete-btn': true }"
+      class="size-btn"
+      title="Režim mazania - kliknite na políčko na šachovnici pre vymazanie"
+    >
+      🗑️
+    </button>
+  </div>
+  
   <div class="gallery">
-    <h2>Galéria obrázkov ({{ images.length }})</h2>
     
     <div v-if="images.length === 0" class="empty-state">
       <p>📷 Zatiaľ nemáte žiadne vygenerované obrázky</p>
@@ -107,14 +185,100 @@ const formatDate = (date) => {
 .gallery {
   background: white;
   color: #333;
-  border-radius: 16px;
-  padding: 2rem;
+  border-radius: 0 0 16px 16px;
+  padding: 0.5rem;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  border: 1px solid #a2a9b1;
+  border-top: none;
+}
+
+/* Grid size tabs */
+.grid-size-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 0;
+  padding: 0;
+  border-bottom: 1px solid #a2a9b1;
+  max-width: 300px;
+}
+
+.size-btn {
+  flex: 1;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: #f8f9fa;
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #202122;
+  position: relative;
+  margin-bottom: -1px;
+}
+
+.size-btn:hover {
+  background: #fff;
+  color: #202122;
+}
+
+.size-btn.active {
+  background: #fff;
+  color: #202122;
+  border-color: #a2a9b1;
+  border-bottom-color: #fff;
+  font-weight: 600;
+}
+
+.size-btn.delete-btn {
+  color: #d32f2f;
+}
+
+.size-btn.delete-btn:hover {
+  background: #ffebee;
+}
+
+.size-btn.delete-btn.active {
+  background: #fff;
+  color: #d32f2f;
+  border-color: #a2a9b1;
+  border-bottom-color: #fff;
+}
+
+.gallery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
 h2 {
-  margin-top: 0;
+  margin: 0;
   color: #667eea;
+}
+
+.btn-place-on-board {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.btn-place-on-board:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+}
+
+.btn-place-on-board:active {
+  transform: translateY(0);
 }
 
 .empty-state {
@@ -129,10 +293,8 @@ h2 {
 }
 
 .gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 1.5rem;
-  margin-top: 1.5rem;
+  display: flex;
+  gap: 5px;
 }
 
 .gallery-item {
@@ -144,6 +306,7 @@ h2 {
   transition: all 0.3s;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   border: 3px solid transparent;
+  width: 70px;
 }
 
 .gallery-item:hover {
@@ -152,8 +315,8 @@ h2 {
 }
 
 .gallery-item.selected {
-  border-color: #667eea;
-  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2);
+  border-color: #10b981;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2);
 }
 
 .selected-badge {
@@ -163,7 +326,7 @@ h2 {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   color: white;
   display: flex;
   align-items: center;
@@ -176,7 +339,7 @@ h2 {
 .gallery-item img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .image-overlay {
@@ -278,10 +441,6 @@ h2 {
   padding: 2rem;
 }
 
-.info-section {
-  margin-bottom: 1.5rem;
-}
-
 .info-section h3 {
   margin: 0 0 0.5rem 0;
   color: #667eea;
@@ -297,7 +456,6 @@ h2 {
 .modal-actions {
   display: flex;
   gap: 1rem;
-  margin-top: 2rem;
 }
 
 .modal-actions button {

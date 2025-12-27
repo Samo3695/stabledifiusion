@@ -17,6 +17,7 @@ const showNumbering = ref(false)
 const showGallery = ref(false)
 const showGrid = ref(true)
 const activeGenerator = ref('building') // 'building' alebo 'environment'
+const deleteMode = ref(false) // Režim mazania buildingov
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -54,8 +55,50 @@ const handleSelectImage = (id) => {
   selectedImageId.value = id
 }
 
+const handleGridSizeChanged = ({ cellsX, cellsY }) => {
+  lastImageCellsX.value = cellsX
+  lastImageCellsY.value = cellsY
+  console.log(`🔳 App.vue: Grid size zmenéný na ${cellsX}x${cellsY} políčok`)
+}
+
+const handleDeleteModeChanged = (isDeleteMode) => {
+  deleteMode.value = isDeleteMode
+  console.log(`🗑️ App.vue: Delete mode ${isDeleteMode ? 'zapnutý' : 'vypnutý'}`)
+  // Zruš výber obrázku z galérie v delete mode
+  if (isDeleteMode) {
+    selectedImageId.value = null
+  }
+}
+
+const handlePlaceOnBoard = (image) => {
+  console.log('📌 App.vue: Prijatý place-on-board event pre obrázok:', image.id)
+  
+  if (canvasRef.value && selectedCell.value.row !== -1 && selectedCell.value.col !== -1) {
+    // Ak je vybraté políčko, vlož obrázok tam
+    const cellsX = image.cellsX || lastImageCellsX.value
+    const cellsY = image.cellsY || lastImageCellsY.value
+    console.log('🎯 Vkladám obrázok na políčko:', selectedCell.value, `s veľkosťou ${cellsX}x${cellsY}`)
+    canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY)
+  } else if (canvasRef.value) {
+    // Inak vlož obrázok na prvé voľné políčko
+    console.log('🎯 Vkladám obrázok na prvé voľné políčko')
+    const cellsX = image.cellsX || lastImageCellsX.value
+    const cellsY = image.cellsY || lastImageCellsY.value
+    // Vyber prvé políčko ako fallback
+    selectedCell.value = { row: 0, col: 0 }
+    canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY)
+  } else {
+    console.warn('⚠️ Canvas ref neexistuje - nemôžem vložiť obrázok')
+  }
+}
+
 const handleTemplateSelected = (isSelected) => {
   templateSelected.value = isSelected
+  // Zruš výber obrázku z galérie keď sa vyberie template
+  if (isSelected) {
+    selectedImageId.value = null
+    console.log('🎨 App.vue: Template vybraný, zrušený výber obrázku z galérie')
+  }
 }
 
 const handleTabChanged = ({ cellsX, cellsY }) => {
@@ -66,8 +109,28 @@ const handleTabChanged = ({ cellsX, cellsY }) => {
 const handleCellSelected = ({ row, col }) => {
   selectedCell.value = { row, col }
   console.log(`App.vue: Políčko vybrané [${row}, ${col}]`)
+  
+  // Ak je aktualívny režim mazania, vymaž building na políčku
+  if (deleteMode.value && canvasRef.value) {
+    console.log(`🗑️ App.vue: Režim mazania - vymazanie buildingu na [${row}, ${col}]`)
+    canvasRef.value.deleteImageAtCell(row, col)
+    return // Nevykonaj generovanie ani umiestnovanie
+  }
+  
+  // Ak je vybraný obrázok z galérie, vlož ho na toto políčko
+  if (selectedImageId.value && canvasRef.value) {
+    const selectedImage = images.value.find(img => img.id === selectedImageId.value)
+    if (selectedImage) {
+      console.log(`🖼️ App.vue: Vkladám vybraný obrázok z galérie (${selectedImageId.value})`)
+      const cellsX = selectedImage.cellsX || lastImageCellsX.value
+      const cellsY = selectedImage.cellsY || lastImageCellsY.value
+      canvasRef.value.placeImageAtSelectedCell(selectedImage.url, cellsX, cellsY)
+      return // Nevykonaj generovanie
+    }
+  }
+  
+  // Inak spusti automatické generovanie
   console.log(`🚀 App.vue: Spúšťam automatické generovanie...`)
-  // Spusti generovanie automaticky
   if (imageGeneratorRef.value) {
     imageGeneratorRef.value.startGeneration()
   }
@@ -138,6 +201,7 @@ const handleTilesGenerated = (tilesData) => {
       :showNumbering="showNumbering"
       :showGallery="showGallery"
       :showGrid="showGrid"
+      :deleteMode="deleteMode"
       @cell-selected="handleCellSelected"
       @image-placed="handleImagePlaced"
       @toggle-numbering="handleToggleNumbering"
@@ -191,6 +255,9 @@ const handleTilesGenerated = (tilesData) => {
         :selectedImageId="selectedImageId"
         @delete="handleDelete" 
         @select="handleSelectImage"
+        @place-on-board="handlePlaceOnBoard"
+        @grid-size-changed="handleGridSizeChanged"
+        @delete-mode-changed="handleDeleteModeChanged"
       />
     </div>
   </div>
@@ -253,9 +320,7 @@ header h1 {
   bottom: 0;
   left: 0;
   right: 380px;
-  height: 180px;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(10px);
+  height: 125px;
   z-index: 10;
   overflow-x: auto;
   overflow-y: hidden;
