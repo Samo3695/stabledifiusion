@@ -393,28 +393,35 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       }
       
       // Vypočítame pozíciu obrázka
-      const imgX = originX - drawWidth / 2 + offsetXForCells
+      const imgX = originX - drawWidth / 3 + offsetXForCells
       const imgY = originY + tileHeight - drawHeight + offsetYForCells
       
       // Nakresliť čierny štvorec (tieň) vedľa obrázka s jemným skew
       ctx.save()
       
-      const shadowWidth = drawHeight / 1.3  // šírka podľa výšky obrázka
-      const shadowHeight = drawWidth / 2  // polovičná výška
+      const shadowWidth = drawHeight / 3  // šírka podľa výšky obrázka
+      const shadowHeight = drawWidth / 4  // polovičná výška
       const shadowRightEdge = imgX + drawWidth / 2  // stred obrázka
       const shadowX = shadowRightEdge - shadowWidth  // ľavý okraj štvorca
       const shadowY = imgY + drawHeight - shadowHeight  // spodná hrana zarovnaná
       
-      // Aplikujeme skew transformáciu
-      // Presunieme sa na pravý dolný roh tieňa (bod otáčania)
-      ctx.translate(shadowRightEdge, imgY + drawHeight)
-      // Skew transformácia - jemné skosenie
-      ctx.transform(1, -0.1, 0, 1, 0, 0)  // skewY = 0.1
-      // Presunieme späť
-      ctx.translate(-shadowRightEdge, -(imgY + drawHeight))
+      // Deformácia - posun ľavého horného rohu doľava o polovicu šírky
+      const deformX = -shadowWidth / 0.7  // posundoľava o polovicu šírky štvorca
+      const deformY = 0.5  // žiadny vertikálny posun
       
+      // Nakreslíme deformovaný štvoruholník namiesto rect
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
-      ctx.fillRect(shadowX, shadowY, shadowWidth, shadowHeight)
+      ctx.beginPath()
+      // Ľavý horný roh - DEFORMOVANÝ (posunutý doľava o polovicu šírky)
+      ctx.moveTo(shadowX + deformX, shadowY + deformY)
+      // Pravý horný roh
+      ctx.lineTo(shadowX + shadowWidth, shadowY)
+      // Pravý dolný roh
+      ctx.lineTo(shadowX + shadowWidth, shadowY + shadowHeight)
+      // Ľavý dolný roh
+      ctx.lineTo(shadowX, shadowY + shadowHeight)
+      ctx.closePath()
+      ctx.fill()
       
       ctx.restore()
 
