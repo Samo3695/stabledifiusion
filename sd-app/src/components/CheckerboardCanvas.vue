@@ -311,89 +311,6 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       } // Koniec if (props.showGrid)
     }
   }
-  
-  // FÁZA 1.5: Tieň budov - kosoštvorec z ľavého dolného rohu budovy smerom dole-doľava
-  ctx.save()
-  ctx.globalAlpha = 0.3
-  ctx.fillStyle = 'black'
-  
-  for (const [key, building] of Object.entries(cellImages)) {
-    if (building.isBackground) continue
-    const [bRow, bCol] = key.split('-').map(Number)
-    const cellsX = building.cellsX || 1
-    const cellsY = building.cellsY || 1
-
-    // Vypočítaj displayHeight z načítaného obrázka (rovnako ako pri renderovaní)
-    const img = loadedImages[building.url]
-    if (!img || !img.complete) continue
-    
-    const imgAspect = img.width / img.height
-    let drawWidth
-    if (cellsX === 1 && cellsY === 2) {
-      drawWidth = tileWidth * 1.5
-    } else {
-      drawWidth = tileWidth * cellsX
-    }
-    const displayHeight = drawWidth / imgAspect
-
-    // Vypočítaj dĺžku tieňa na základe výšky budovy
-    let shadowLength = 0.5
-    if (displayHeight > 50) {
-      shadowLength = ((Math.floor((displayHeight - 50) / 50) + 1) * 0.5)
-    }
-    
-    // Šírka tieňa = počet políčok na ľavej strane budovy
-    const shadowWidth = 0.5 * cellsX
-
-    // Ľavý dolný roh budovy - políčko (bRow + cellsY - 1, bCol)
-    const bottomLeftRow = bRow + cellsY - 1
-    const bottomLeftCol = bCol
-
-    // Isometrické súradnice pre ľavý dolný roh
-    const isoX = (bottomLeftCol - bottomLeftRow) * (tileWidth / 2)
-    const isoY = (bottomLeftCol + bottomLeftRow) * (tileHeight / 2)
-    const centerX = startX + isoX
-    const centerY = startY + isoY
-
-    // p1 = ľavý roh spodného políčka budovy
-    const p1x = centerX - tileWidth / 2
-    const p1y = centerY + tileHeight / 2
-    
-    // p4 = spodný roh spodného políčka budovy
-    const p4x = centerX
-    const p4y = centerY + tileHeight
-
-    // Smer tieňa (shadowLength): row+ = doľava-dole v iso
-    const shadowOffsetX = shadowLength * tileWidth / 2
-    const shadowOffsetY = shadowLength * tileHeight / 2
-    
-    // Smer šírky tieňa (shadowWidth): col+ = doprava-dole v iso
-    const widthOffsetX = shadowWidth * tileWidth / 2
-    const widthOffsetY = shadowWidth * tileHeight / 2
-
-    // p2 = p1 posunutý v smere tieňa (row+)
-    const p2x = p1x - shadowOffsetX
-    const p2y = p1y + shadowOffsetY
-
-    // p3 = p2 posunutý v smere šírky (col+)
-    const p3x = p2x + widthOffsetX
-    const p3y = p2y + widthOffsetY
-    
-    // p5 = p4 posunutý v smere tieňa (row+)
-    const p5x = p4x - shadowOffsetX
-    const p5y = p4y + shadowOffsetY
-
-    // Nakresli tieň ako 5-uholník: p1 -> p2 -> p3 -> p5 -> p4
-    ctx.beginPath()
-    ctx.moveTo(p1x, p1y)
-    ctx.lineTo(p2x, p2y)
-    ctx.lineTo(p3x, p3y)
-    ctx.lineTo(p5x, p5y)
-    ctx.lineTo(p4x, p4y)
-    ctx.closePath()
-    ctx.fill()
-  }
-  ctx.restore()
 
   // FÁZA 2: Renderovanie buildingov v správnom z-index poradí
   // Pre isometrické zobrazenie: čím vyššie (row + col), tým bližšie ku kamere
@@ -425,7 +342,7 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
   // Renderujeme každý building
   for (const building of buildingsToRender) {
     const { key, row, col, url, cellsX, cellsY } = building
-    const img = loadedImages[url]  // Používame URL ako kľúč, nie key!
+    const img = loadedImages[url]
     
     if (img && img.complete) {
       ctx.save()
@@ -475,18 +392,34 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
         offsetYForCells = tileHeight * 4
       }
       
-      // Nakresliť obrázok (spodok na spodku bloku políčok, môže presahovať hore)
+      // Vypočítame pozíciu obrázka
+      const imgX = originX - drawWidth / 2 + offsetXForCells
+      const imgY = originY + tileHeight - drawHeight + offsetYForCells
+      
+      // Nakresliť čierny štvorec vedľa obrázka
+      // Šírka = drawHeight (výška obrázka), Výška = drawWidth (šírka obrázka)
+      // Pravý okraj štvorca je v strede obrázka (imgX + drawWidth/2)
+      const shadowWidth = drawHeight
+      const shadowHeight = drawWidth
+      const shadowRightEdge = imgX + drawWidth / 2  // stred obrázka
+      const shadowX = shadowRightEdge - shadowWidth  // ľavý okraj štvorca
+      const shadowY = imgY + drawHeight - shadowHeight  // spodná hrana zarovnaná
+      
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
+      ctx.fillRect(shadowX, shadowY, shadowWidth, shadowHeight)
+
+      // Nakresliť obrázok
       ctx.drawImage(
         img, 
-        originX - drawWidth / 2 + offsetXForCells, 
-        originY + tileHeight - drawHeight + offsetYForCells,  // Spodok obrázka na spodku políčka
+        imgX, 
+        imgY,
         drawWidth, 
         drawHeight
       )
       // Ulož rect pre hover detekciu (v rovnakých koordinátoch ako kreslenie)
       buildingRects.push({
-        x: originX - drawWidth / 2 + offsetXForCells,
-        y: originY + tileHeight - drawHeight + offsetYForCells,
+        x: imgX,
+        y: imgY,
         w: drawWidth,
         h: drawHeight,
         displayHeight: Math.round(drawHeight),
