@@ -50,6 +50,8 @@ let loadedImages = {} // cache pre načítané Image objekty
 let backgroundTiles = [] // Array base64 tile obrázkov pre pozadie šachovnice
 let loadedTiles = [] // Načítané Image objekty pre tile-y
 let tilesPerImage = 1 // Cez koľko políčok pôjde jeden obrázok
+let buildingRects = [] // Pre hover detekciu: recty budov v canvas koordinátach
+let hoverBuildingInfo = null // Info o budove pod kurzorom (pixelová výška, rect)
 
 // Funkcia na kontrolu kolízie - či dané políčko alebo jeho okolie má už obrázok
 const checkCollision = (row, col, cellsX, cellsY) => {
@@ -95,6 +97,12 @@ const checkCollision = (row, col, cellsX, cellsY) => {
   // Skontrolujeme kolíziu s každým existujúcim obrázkom
   for (const existingKey in cellImages) {
     const existing = cellImages[existingKey]
+    
+    // Ignoruj pozadiové obrázky (zo šablóny 0.png) - na nich sa dá stavať
+    if (existing.isBackground) {
+      continue
+    }
+    
     const [existingRow, existingCol] = existingKey.split('-').map(Number)
     
     // Získame políčka obsadené existujúcim obrázkom
@@ -149,6 +157,7 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
   ctx.save()
   ctx.translate(offsetX, offsetY)
   ctx.scale(scale, scale)
+  buildingRects = []
   
   const rows = 50
   const cols = 50
@@ -303,54 +312,120 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
     }
   }
   
+  // FÁZA 1.5: Tieň budov - kosoštvorec z ľavého dolného rohu budovy smerom dole-doľava
+  ctx.save()
+  ctx.globalAlpha = 0.3
+  ctx.fillStyle = 'black'
+  
+  for (const [key, building] of Object.entries(cellImages)) {
+    if (building.isBackground) continue
+    const [bRow, bCol] = key.split('-').map(Number)
+    const cellsX = building.cellsX || 1
+    const cellsY = building.cellsY || 1
+
+    // Vypočítaj displayHeight z načítaného obrázka (rovnako ako pri renderovaní)
+    const img = loadedImages[building.url]
+    if (!img || !img.complete) continue
+    
+    const imgAspect = img.width / img.height
+    let drawWidth
+    if (cellsX === 1 && cellsY === 2) {
+      drawWidth = tileWidth * 1.5
+    } else {
+      drawWidth = tileWidth * cellsX
+    }
+    const displayHeight = drawWidth / imgAspect
+
+    // Vypočítaj dĺžku tieňa na základe výšky budovy
+    let shadowLength = 0.5
+    if (displayHeight > 50) {
+      shadowLength = ((Math.floor((displayHeight - 50) / 50) + 1) * 0.5)
+    }
+    
+    // Šírka tieňa = počet políčok na ľavej strane budovy
+    const shadowWidth = 0.5 * cellsX
+
+    // Ľavý dolný roh budovy - políčko (bRow + cellsY - 1, bCol)
+    const bottomLeftRow = bRow + cellsY - 1
+    const bottomLeftCol = bCol
+
+    // Isometrické súradnice pre ľavý dolný roh
+    const isoX = (bottomLeftCol - bottomLeftRow) * (tileWidth / 2)
+    const isoY = (bottomLeftCol + bottomLeftRow) * (tileHeight / 2)
+    const centerX = startX + isoX
+    const centerY = startY + isoY
+
+    // p1 = ľavý roh spodného políčka budovy
+    const p1x = centerX - tileWidth / 2
+    const p1y = centerY + tileHeight / 2
+    
+    // p4 = spodný roh spodného políčka budovy
+    const p4x = centerX
+    const p4y = centerY + tileHeight
+
+    // Smer tieňa (shadowLength): row+ = doľava-dole v iso
+    const shadowOffsetX = shadowLength * tileWidth / 2
+    const shadowOffsetY = shadowLength * tileHeight / 2
+    
+    // Smer šírky tieňa (shadowWidth): col+ = doprava-dole v iso
+    const widthOffsetX = shadowWidth * tileWidth / 2
+    const widthOffsetY = shadowWidth * tileHeight / 2
+
+    // p2 = p1 posunutý v smere tieňa (row+)
+    const p2x = p1x - shadowOffsetX
+    const p2y = p1y + shadowOffsetY
+
+    // p3 = p2 posunutý v smere šírky (col+)
+    const p3x = p2x + widthOffsetX
+    const p3y = p2y + widthOffsetY
+    
+    // p5 = p4 posunutý v smere tieňa (row+)
+    const p5x = p4x - shadowOffsetX
+    const p5y = p4y + shadowOffsetY
+
+    // Nakresli tieň ako 5-uholník: p1 -> p2 -> p3 -> p5 -> p4
+    ctx.beginPath()
+    ctx.moveTo(p1x, p1y)
+    ctx.lineTo(p2x, p2y)
+    ctx.lineTo(p3x, p3y)
+    ctx.lineTo(p5x, p5y)
+    ctx.lineTo(p4x, p4y)
+    ctx.closePath()
+    ctx.fill()
+  }
+  ctx.restore()
+
   // FÁZA 2: Renderovanie buildingov v správnom z-index poradí
   // Pre isometrické zobrazenie: čím vyššie (row + col), tým bližšie ku kamere
-  // Pre multi-cell buildingy použijeme maximálnu sumu zo všetkých obsadených políčok
+  // Pre multi-cell objekty používame STREDOVÝ bod pre správne zoraďovanie
   const buildingsToRender = Object.entries(cellImages)
     .map(([key, building]) => {
       const [row, col] = key.split('-').map(Number)
       const cellsX = building.cellsX || 1
       const cellsY = building.cellsY || 1
       
-      // Vypočítame maximálnu sumu (row + col) zo všetkých obsadených políčok
-      // a zároveň maximálny col pre sekundárne zoradenie
-      let maxSum = row + col
-      let maxCol = col
-      let maxRow = row
+      // Vypočítame stredový bod objektu pre zoraďovanie
+      // Pre 1x1: stred = origin
+      // Pre väčšie: stred = origin + (size-1)/2
+      const centerRow = row + (cellsY - 1) / 2
+      const centerCol = col + (cellsX - 1) / 2
+      const centerSum = centerRow + centerCol
       
-      if (cellsX === 1 && cellsY === 2) {
-        // 2size: dve políčka nad sebou
-        const sum1 = row + col
-        const sum2 = (row + 1) + col
-        maxSum = Math.max(sum1, sum2)
-        maxRow = row + 1  // spodné políčko
-        maxCol = col
-      } else if (cellsX === 2 && cellsY === 2) {
-        // 4size: štyri políčka v bloku
-        const sum1 = row + col
-        const sum2 = row + (col + 1)
-        const sum3 = (row + 1) + col
-        const sum4 = (row + 1) + (col + 1)
-        maxSum = Math.max(sum1, sum2, sum3, sum4)
-        maxRow = row + 1  // spodný riadok
-        maxCol = col + 1  // pravý stĺpec
-      }
-      
-      return { key, row, col, maxSum, maxCol, maxRow, ...building }
+      return { key, row, col, centerRow, centerCol, centerSum, cellsX, cellsY, ...building }
     })
     .sort((a, b) => {
-      // Primárne: podľa maximálnej sumy
-      if (a.maxSum !== b.maxSum) return a.maxSum - b.maxSum
-      // Sekundárne: pri rovnakej sume preferujeme vyšší col (pravejšie políčko)
-      if (a.maxCol !== b.maxCol) return a.maxCol - b.maxCol
-      // Terciárne: pri rovnakom col preferujeme vyšší row (spodnejšie políčko)
-      return a.maxRow - b.maxRow
+      // Primárne: podľa stredovej sumy
+      if (a.centerSum !== b.centerSum) return a.centerSum - b.centerSum
+      // Sekundárne: pri rovnakej sume preferujeme vyšší centerRow (viac dole-vľavo)
+      if (a.centerRow !== b.centerRow) return a.centerRow - b.centerRow
+      // Terciárne: pri rovnakom row preferujeme vyšší col
+      return a.centerCol - b.centerCol
     })
   
   // Renderujeme každý building
   for (const building of buildingsToRender) {
     const { key, row, col, url, cellsX, cellsY } = building
-    const img = loadedImages[key]
+    const img = loadedImages[url]  // Používame URL ako kľúč, nie key!
     
     if (img && img.complete) {
       ctx.save()
@@ -408,6 +483,15 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
         drawWidth, 
         drawHeight
       )
+      // Ulož rect pre hover detekciu (v rovnakých koordinátoch ako kreslenie)
+      buildingRects.push({
+        x: originX - drawWidth / 2 + offsetXForCells,
+        y: originY + tileHeight - drawHeight + offsetYForCells,
+        w: drawWidth,
+        h: drawHeight,
+        displayHeight: Math.round(drawHeight),
+        z: building.centerSum
+      })
       
       ctx.restore()
     }
@@ -456,8 +540,9 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
     }
   }
   
-  // FÁZA 4: Hover označenie NAD všetkým (najvyšší z-index) - len ak je vybraná šablóna alebo delete mode
-  if ((props.templateSelected || props.deleteMode) && highlightRow !== -1 && highlightCol !== -1) {
+  // FÁZA 4: Hover označenie NAD všetkým (najvyšší z-index) - len ak je vybraná šablóna, obrázok z galérie alebo delete mode
+  const canInteract = props.templateSelected || props.deleteMode || props.selectedImageId
+  if (canInteract && highlightRow !== -1 && highlightCol !== -1) {
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         // Zistíme či toto políčko patrí do hover bloku
@@ -594,6 +679,33 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
     }
   }
   
+  // FÁZA 6: Tooltip nad budovou s pixelovou výškou
+  if (hoverBuildingInfo) {
+    ctx.save()
+    // Už kontext je transformovaný; používame rovnaké koordináty
+    const text = `${hoverBuildingInfo.displayHeight} px`
+    ctx.font = '12px sans-serif'
+    ctx.textBaseline = 'top'
+    const pad = 4
+    const textW = ctx.measureText(text).width
+    const boxW = textW + pad * 2
+    const boxH = 16
+    // Umiestni nad ľavý horný roh budovy
+    const boxX = hoverBuildingInfo.x
+    const boxY = hoverBuildingInfo.y - boxH - 2
+    // Pozadie
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'
+    ctx.fillRect(boxX, boxY, boxW, boxH)
+    // Rámček
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(boxX, boxY, boxW, boxH)
+    // Text
+    ctx.fillStyle = '#fff'
+    ctx.fillText(text, boxX + pad, boxY + 2)
+    ctx.restore()
+  }
+
   ctx.restore()
 }
 
@@ -635,8 +747,9 @@ const handleMouseDown = (event) => {
   event.preventDefault()
   
   // Ľavé tlačidlo (0) = vybrať políčko
-  // Funguje ak je vybraná šablóna ALEBO ak je aktualívny delete mode
-  if (event.button === 0 && (props.templateSelected || props.deleteMode)) {
+  // Funguje ak je vybraná šablóna, vybraný obrázok z galérie, ALEBO ak je aktualívny delete mode
+  const canSelect = props.templateSelected || props.deleteMode || props.selectedImageId
+  if (event.button === 0 && canSelect) {
     const rect = canvas.value.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
@@ -717,13 +830,26 @@ const handleMouseMove = (event) => {
     const scaleX = canvas.value.width / rect.width
     const scaleY = canvas.value.height / rect.height
     
-    const cell = getGridCell(x * scaleX, y * scaleY, canvas.value.width, canvas.value.height)
+    const canvasX = x * scaleX
+    const canvasY = y * scaleY
+    const cell = getGridCell(canvasX, canvasY, canvas.value.width, canvas.value.height)
     
     if (hoveredCell.row !== cell.row || hoveredCell.col !== cell.col) {
       hoveredCell.row = cell.row
       hoveredCell.col = cell.col
       
       const ctx = canvas.value.getContext('2d')
+      // Detekcia hover nad budovou (transformuj kurzor na kresliace koordináty)
+      const tX = (canvasX - offsetX) / scale
+      const tY = (canvasY - offsetY) / scale
+      hoverBuildingInfo = null
+      for (const rectInfo of buildingRects) {
+        if (tX >= rectInfo.x && tX <= rectInfo.x + rectInfo.w && tY >= rectInfo.y && tY <= rectInfo.y + rectInfo.h) {
+          if (!hoverBuildingInfo || rectInfo.z >= hoverBuildingInfo.z) {
+            hoverBuildingInfo = rectInfo
+          }
+        }
+      }
       drawCheckerboard(ctx, canvas.value.width, canvas.value.height, cell.row, cell.col)
     }
   }
@@ -773,30 +899,36 @@ const handleMouseLeave = () => {
 }
 
 // Funkcia na vloženie obrázka na vybratú pozíciu
-const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY) => {
+const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false) => {
   console.log('🖼️ CheckerboardCanvas.placeImageAtSelectedCell() volaná')
   console.log('   selectedCell:', selectedCell)
   console.log('   cellsX x cellsY:', cellsX, 'x', cellsY)
   console.log('   imageUrl length:', imageUrl.length)
+  console.log('   isBackground:', isBackground)
   
   if (selectedCell.row === -1 || selectedCell.col === -1) {
     console.log('❌ Žiadne políčko nie je vybrané')
     return false
   }
   
-  // Kontrola kolízie
-  if (checkCollision(selectedCell.row, selectedCell.col, cellsX, cellsY)) {
+  // Kontrola kolízie - preskakujeme pre pozadiové obrázky
+  if (!isBackground && checkCollision(selectedCell.row, selectedCell.col, cellsX, cellsY)) {
     console.log('❌ Kolízia! Obrázok by sa prekrýval s existujúcim obrázkom.')
     return false
   }
   
   const cellKey = `${selectedCell.row}-${selectedCell.col}`
   
+  // Ulož hodnoty políčka PRED vynulovaním (potrebné pre asynchrónny callback)
+  const placedRow = selectedCell.row
+  const placedCol = selectedCell.col
+  
   // Ulož obrázok s informáciou o rozmeroch v políčkach
   cellImages[cellKey] = {
     url: imageUrl,
     cellsX: cellsX,
-    cellsY: cellsY
+    cellsY: cellsY,
+    isBackground: isBackground // Flag pre ignorovanie kolízie
   }
   
   // Načítať obrázok
@@ -804,13 +936,13 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY) => {
   img.crossOrigin = 'anonymous'
   img.onload = () => {
     console.log('🖼️ CheckerboardCanvas: Obrázok načítaný, renderujem...')
-    loadedImages[cellKey] = img
+    loadedImages[imageUrl] = img  // Použiť URL ako kľúč (konzistentne s drawCheckerboard)
     const ctx = canvas.value.getContext('2d')
     drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
     console.log('🎨 CheckerboardCanvas: Canvas prekreslený')
     
-    // Emituj event že obrázok bol vložený
-    emit('image-placed', { row: selectedCell.row, col: selectedCell.col })
+    // Emituj event že obrázok bol vložený (použiť uložené hodnoty!)
+    emit('image-placed', { row: placedRow, col: placedCol })
     console.log('📤 CheckerboardCanvas: Event image-placed emitovaný')
   }
   img.onerror = (err) => {
@@ -820,7 +952,7 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY) => {
   img.src = imageUrl
   
   console.log(`✅ Obrázok vložený!`)
-  console.log(`   Hlavné políčko: [${selectedCell.row}, ${selectedCell.col}]`)
+  console.log(`   Hlavné políčko: [${placedRow}, ${placedCol}]`)
   console.log(`   Rozmery: ${cellsX}x${cellsY} políčok`)
   
   // Zruš výber políčka
@@ -1013,7 +1145,50 @@ defineExpose({
   placeImageAtSelectedCell,
   setBackgroundTiles,
   placeEnvironmentElements,
-  deleteImageAtCell
+  deleteImageAtCell,
+  cellImages: () => cellImages, // Getter pre prístup k cellImages
+  clearAll: () => {
+    cellImages = {}
+    if (canvas.value) {
+      const ctx = canvas.value.getContext('2d')
+      drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+    }
+  },
+  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false) => {
+    console.log(`🔧 placeImageAtCell volaná: [${row}, ${col}], veľkosť ${cellsX}x${cellsY}, isBackground: ${isBackground}`)
+    console.log(`   URL začiatok: ${url.substring(0, 50)}...`)
+    
+    const key = `${row}-${col}`
+    cellImages[key] = { url, cellsX, cellsY, isBackground }
+    console.log(`   ✅ Obrázok pridaný do cellImages pod kľúčom: ${key}`)
+    
+    // Načítaj obrázok ak ešte nie je v cache
+    if (!loadedImages[url]) {
+      console.log(`   📥 Načítavam obrázok (nie je v cache)...`)
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        console.log(`   ✅ Obrázok načítaný, pridávam do cache a renderujem`)
+        loadedImages[url] = img
+        if (canvas.value) {
+          const ctx = canvas.value.getContext('2d')
+          drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+          console.log(`   🎨 Canvas prekreslený`)
+        }
+      }
+      img.onerror = (err) => {
+        console.error(`   ❌ Chyba pri načítaní obrázka:`, err)
+      }
+      img.src = url
+    } else {
+      console.log(`   ♻️ Obrázok už je v cache, len renderujem`)
+      if (canvas.value) {
+        const ctx = canvas.value.getContext('2d')
+        drawCheckerboard(ctx, canvas.value.width, canvas.value.height, hoveredCell.row, hoveredCell.col)
+        console.log(`   🎨 Canvas prekreslený`)
+      }
+    }
+  }
 })
 
 onMounted(() => {

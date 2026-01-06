@@ -4,8 +4,7 @@ import TemplateSelector from './TemplateSelector.vue'
 
 const emit = defineEmits(['image-generated', 'template-selected', 'tab-changed', 'numbering-changed'])
 
-const mainKeyword = ref('house') // Hlavné kľúčové slovo
-const prompt = ref('house')
+const prompt = ref('')
 const negativePrompt = ref('')
 const isGenerating = ref(false)
 const error = ref('')
@@ -22,12 +21,7 @@ const useAiRemoval = ref(true) // Či použiť AI (rembg) na odstránenie pozadi
 const showNumbering = ref(true) // Či zobrazovať číslovanie šachovnice
 const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
 const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
-
-// Sleduj zmeny mainKeyword a aktualizuj prompt
-watch(mainKeyword, (newKeyword) => {
-  prompt.value = newKeyword
-  console.log('🏷️ Hlavné kľúčové slovo zmenené na:', newKeyword)
-})
+const currentTemplateName = ref('') // Názov aktuálnej šablóny
 
 // Sleduj zmeny showNumbering a oznám App.vue
 watch(showNumbering, (newValue) => {
@@ -49,6 +43,7 @@ const handleTemplateSelected = ({ dataUrl, templateName, width, height, cellsX, 
   inputImage.value = dataUrl
   inputImagePreview.value = dataUrl
   error.value = ''
+  currentTemplateName.value = templateName // Ulož názov šablóny
   
   // Ulož informáciu o počte políčok pre canvas
   if (cellsX && cellsY) {
@@ -127,6 +122,7 @@ const handleImageUpload = (event) => {
 const removeInputImage = () => {
   inputImage.value = null
   inputImagePreview.value = ''
+  currentTemplateName.value = '' // Vymaž názov šablóny
   const fileInput = document.getElementById('image-upload')
   if (fileInput) fileInput.value = ''
   
@@ -137,14 +133,13 @@ const removeInputImage = () => {
 const generateImage = async () => {
   console.log('🎨 ImageGenerator: Začínam generovať obrázok...')
   console.log('   Prompt:', prompt.value)
-  console.log('   MainKeyword:', mainKeyword.value)
   console.log('   Model:', model.value)
   console.log('   TemplateSelected:', inputImage.value ? 'Áno' : 'Nie')
   console.log('   CellsX x CellsY:', templateCellsX.value, 'x', templateCellsY.value)
   
-  // Kontroluj mainKeyword namiesto prompt (prompt je volitelný)
-  if (!mainKeyword.value.trim()) {
-    error.value = 'Vyberte prosím hlavné kľúčové slovo'
+  // Kontroluj prompt
+  if (!prompt.value.trim()) {
+    error.value = 'Zadajte prosím popis (prompt)'
     return
   }
 
@@ -164,6 +159,8 @@ const generateImage = async () => {
       width: dimensions.width,
       height: dimensions.height,
     }
+
+    // Seed sa už neposiela – necháme backend použiť implicitné správanie
     
     // Pridaj LoRA ak je vybraná
     if (selectedLora.value) {
@@ -192,13 +189,18 @@ const generateImage = async () => {
 
     const data = await response.json()
     console.log('✅ ImageGenerator: Obrázok úspešne vygenerovaný!')
+    // Seed sa už nepoužíva ani nezobrazuje
 
+    // Zistíme či je to pozadie (šablóna 0.png) - ignoruje kolíziu
+    const isBackgroundTemplate = currentTemplateName.value === '0.png'
+    
     const generatedImage = {
       id: Date.now().toString(),
       url: data.image,
       prompt: prompt.value,
       negativePrompt: negativePrompt.value,
       timestamp: new Date(),
+      isBackground: isBackgroundTemplate, // Flag pre ignorovanie kolízie
     }
 
     // Ulož posledný vygenerovaný obrázok
@@ -222,8 +224,7 @@ const generateImage = async () => {
     console.log('   CellsX x CellsY:', templateCellsX.value, 'x', templateCellsY.value)
     emit('image-generated', generatedImage, templateCellsX.value, templateCellsY.value)
     console.log('✨ ImageGenerator: Event image-generated emitovaný!')
-    // Vrátime prompt na mainKeyword (nie na prázdny string)
-    prompt.value = mainKeyword.value
+    // Ponecháme prompt tak ako je (používateľ môže upraviť a znova generovať)
     negativePrompt.value = ''
     console.log('📸 ImageGenerator: Šablóna zostáva vybraná, inputImage:', inputImage.value ? 'ÁNO' : 'NIE')
     console.log('   inputImagePreview:', inputImagePreview.value ? 'ÁNO' : 'NIE')
@@ -391,16 +392,14 @@ defineExpose({
   <div class="generator-card">
     
     <div class="form">
-      <!-- Nahranie obrázka alebo výber šablóny -->
-      <div class="input-group">
-        
-        <!-- Komponent pre výber šablón -->
-        <TemplateSelector 
-          @template-selected="handleTemplateSelected" 
-          @tab-changed="handleTabChanged"
-        />
-        
-        <!-- Alebo upload vlastného -->
+      <!-- 1. Komponent pre výber šablón (tabs 1size/2size + grid šablón) -->
+      <TemplateSelector 
+        @template-selected="handleTemplateSelected" 
+        @tab-changed="handleTabChanged"
+      />
+      
+      <!-- 2. Upload vlastného obrázka -->
+      <div class="upload-section">
         <div class="upload-divider">
           <span>alebo nahrajte vlastný</span>
         </div>
@@ -417,247 +416,206 @@ defineExpose({
           
           <div v-if="!inputImagePreview" class="upload-placeholder">
             <label for="image-upload" class="upload-label">
-              📁 Kliknite alebo presuňte obrázok sem
-              <br>
-              <small>Ak chcete len text-to-image, nechajte prázdne</small>
+              📁 Kliknite sem
             </label>
           </div>
           
           <div v-else class="image-preview">
             <img :src="inputImagePreview" alt="Nahraný obrázok" />
             <button @click="removeInputImage" class="remove-btn" :disabled="isGenerating">
-              ❌ Odstrániť
+              ✕
             </button>
           </div>
         </div>
-        
-        <div v-if="inputImagePreview" class="slider-group">
-          <label for="strength">
-            Sila zmeny ({{ (strength * 100).toFixed(0) }}%)
-            <small>- nižšia hodnota = bližšie k originálu</small>
-          </label>
-          <input
-            id="strength"
-            type="range"
-            v-model.number="strength"
-            min="0.3"
-            max="1.0"
-            step="0.05"
-            :disabled="isGenerating"
-          />
-        </div>
       </div>
 
-      <div class="input-group keyword-section">
-        <label for="main-keyword">🏷️ Hlavné kľúčové slovo</label>
-        <select id="main-keyword" v-model="mainKeyword" :disabled="isGenerating">
-          <option value="house">🏠 House (dom)</option>
-          <option value="building">🏛️ Building (budova)</option>
-          <option value="villa">🏖️ Villa (vila)</option>
-          <option value="castle">🏯 Castle (hrad)</option>
-          <option value="tower">🗼 Tower (veža)</option>
-          <option value="church">⛪ Church (kostol)</option>
-        </select>
+      <!-- 3. Sila zmeny (len ak je vybraný obrázok) -->
+      <div v-if="inputImagePreview" class="slider-group strength-section">
+        <label for="strength">Sila zmeny ({{ (strength * 100).toFixed(0) }}%)</label>
+        <input
+          id="strength"
+          type="range"
+          v-model.number="strength"
+          min="0.3"
+          max="1.0"
+          step="0.05"
+          :disabled="isGenerating"
+        />
       </div>
 
-      <div class="input-group">
-        <label for="prompt">✏️ Doplňujúci popis (voliteľné)</label>
+      <!-- 4. Text prompt -->
+      <div class="input-group prompt-section">
+        <label for="prompt">✏️ Prompt</label>
         <textarea
           id="prompt"
           v-model="prompt"
-          placeholder="Môžete pridať ďalšie detaily, napr: modern, colorful, detailed..."
-          rows="2"
+          placeholder="house, building, castle..."
+          rows="1"
           :disabled="isGenerating"
         />
-      </div>
 
-      <div class="input-group">
-        <label for="model-select">Model</label>
-        <select id="model-select" v-model="model" :disabled="isGenerating">
-          <option value="lite">Lite (rýchlejší, menej VRAM)</option>
-          <option value="dreamshaper">🏆 DreamShaper 8 (univerzálny, najlepší mix)</option>
-          <option value="absolutereality">⭐ Absolute Reality (podobný DreamShaper)</option>
-          <option value="epicrealism">🎨 Epic Realism (reality + concept art)</option>
-          <option value="majicmix">✨ MajicMix Realistic (reality & fantasy blend)</option>
-          <option value="realistic">📷 Realistic Vision V5.1 (čistý fotorealizmus)</option>
-          <option value="full">Full SD v1.5 (základný kvalitnejší)</option>
-        </select>
-      </div>
-
-      <!-- Rozmery obrázka -->
-      <div class="input-group size-section">
-        <label for="image-dimensions">📏 Rozmery obrázka</label>
-        <select id="image-dimensions" v-model="imageDimensions" :disabled="isGenerating">
-          <option value="200x200">200×200 px (štvorcový, mini)</option>
-          <option value="200x300">200×300 px (portrét, mini)</option>
-          <option value="400x400">400×400 px (štvorcový, malý)</option>
-          <option value="400x600">400×600 px (portrét, malý)</option>
-          <!-- Dynamická možnosť pre custom rozmery zo šablóny -->
-          <option 
-            v-if="imageDimensions && !['200x200', '200x300', '400x400', '400x600'].includes(imageDimensions)" 
-            :value="imageDimensions"
-          >
-            {{ imageDimensions.replace('x', '×') }} px (zo šablóny)
-          </option>
-        </select>
-      </div>
-
-      <!-- LoRA výber -->
-      <div v-if="availableLoras.length > 0" class="input-group lora-section">
-        <label for="lora-select">🎨 LoRA Model (vlastný štýl)</label>
-        <select id="lora-select" v-model="selectedLora" :disabled="isGenerating">
-          <option value="">Žiadny (base model)</option>
-          <option v-for="lora in availableLoras" :key="lora" :value="lora">
-            {{ lora }}
-          </option>
-        </select>
         
-        <div v-if="selectedLora" class="slider-group">
-          <label for="lora-scale">
-            Sila LoRA ({{ (loraScale * 100).toFixed(0) }}%)
-            <small>- vyššia hodnota = výraznejší štýl</small>
-          </label>
-          <input
-            id="lora-scale"
-            type="range"
-            v-model.number="loraScale"
-            min="0.0"
-            max="1.0"
-            step="0.1"
-            :disabled="isGenerating"
-          />
-        </div>
       </div>
 
-      <div class="input-group">
-        <label for="negative-prompt">Negatívny prompt (voliteľné)</label>
-        <textarea
-          id="negative-prompt"
-          v-model="negativePrompt"
-          placeholder="Napríklad: blurry, low quality, distorted"
-          rows="2"
-          :disabled="isGenerating"
-        />
-      </div>
-
-      <!-- Checkbox na automatické odstránenie pozadia -->
-      <div class="input-group checkbox-group">
-        <label class="checkbox-label">
-          <input 
-            type="checkbox" 
-            v-model="autoRemoveBackground"
-            :disabled="isGenerating"
-          />
-          <span>🎭 Automaticky odstrániť pozadie (PNG s priehľadnosťou)</span>
-        </label>
-        <small class="hint">Vygenerovaný obrázok bude mať priehľadné pozadie</small>
-        
-        <!-- Sub-option pre AI odstránenie -->
-        <div v-if="autoRemoveBackground" class="sub-checkbox">
-          <label class="checkbox-label">
-            <input 
-              type="checkbox" 
-              v-model="useAiRemoval"
-              :disabled="isGenerating"
-            />
-            <span>🤖 Použiť AI (rembg) - lepšie výsledky pre komplexné pozadia</span>
-          </label>
-          <small class="hint">AI dokáže odstrániť akékoľvek pozadie, nielen čierne</small>
-        </div>
-      </div>
-
-      <!-- Checkbox na zobrazenie číslovania šachovnice -->
-      <div class="input-group checkbox-group">
-        <label class="checkbox-label">
-          <input 
-            type="checkbox" 
-            v-model="showNumbering"
-          />
-          <span>🔢 Zobraziť číslovanie políčok na šachovnici</span>
-        </label>
-        <small class="hint">Zobrazí súradnice políčok pre lepšiu orientáciu</small>
-      </div>
+      <!-- 5. Hlavné tlačidlo GENEROVAŤ -->
+      <button 
+        @click="() => { console.log('🖱️ BUTTON CLICKED! prompt:', prompt, 'isGenerating:', isGenerating); generateImage(); }" 
+        :disabled="isGenerating || !prompt.trim()"
+        class="btn-primary btn-generate-main"
+      >
+        <span v-if="isGenerating">⏳ Generujem...</span>
+        <span v-else-if="inputImagePreview">🎨 Upraviť obrázok</span>
+        <span v-else>🎨 Generovať obrázok</span>
+      </button>
 
       <div v-if="error" class="error-message">
         ⚠️ {{ error }}
       </div>
 
-      <div class="button-group">
-        <button 
-          @click="() => { console.log('🖱️ BUTTON CLICKED! mainKeyword:', mainKeyword, 'isGenerating:', isGenerating); generateImage(); }" 
-          :disabled="isGenerating || !mainKeyword.trim()"
-          class="btn-primary"
-        >
-          <span v-if="isGenerating">⏳ Generujem...</span>
-          <span v-else-if="inputImagePreview">🎨 Upraviť obrázok</span>
-          <span v-else>🎨 Generovať obrázok</span>
-        </button>
-
-        <button 
-          @click="removeBackground" 
-          :disabled="isRemovingBackground || !lastGeneratedImage"
-          class="btn-remove-bg"
-          title="Odstráni čierne pozadie z posledného vygenerovaného obrázka"
-        >
-          <span v-if="isRemovingBackground">⏳ Odstraňujem pozadie...</span>
-          <span v-else>🧹 Odstrániť čierne pozadie</span>
-        </button>
-
-        <button 
-          @click="generateDemo" 
-          :disabled="isGenerating"
-          class="btn-secondary"
-        >
-          🎲 Demo (náhodný obrázok)
-        </button>
-      </div>
-
-      <!-- Farebné úpravy -->
-      <div v-if="lastGeneratedImage" class="color-adjust-section">
-        <h3>🎨 Úprava farebného odtieňa</h3>
-        <div class="slider-group">
-          <label>
-            Posun odtieňa: <strong>{{ hueShift }}°</strong>
-            <span class="hint">(-180° až +180°)</span>
-          </label>
-          <input
-            type="range"
-            v-model.number="hueShift"
-            min="-180"
-            max="180"
-            step="5"
-            :disabled="isAdjustingHue"
-            class="slider"
-          />
-          <div class="hue-preview">
-            <span v-if="hueShift < -120">🔵 Modrá/Fialová</span>
-            <span v-else-if="hueShift < -60">💜 Fialová/Ružová</span>
-            <span v-else-if="hueShift < 0">🌸 Ružová/Červená</span>
-            <span v-else-if="hueShift === 0">⚪ Pôvodná</span>
-            <span v-else-if="hueShift < 60">🟡 Žltá/Oranžová</span>
-            <span v-else-if="hueShift < 120">🟢 Zelená/Žltá</span>
-            <span v-else>🔵 Tyrkysová/Modrá</span>
+      <!-- Rozšírené nastavenia - skryté v collapse -->
+      <details class="advanced-settings">
+        <summary>⚙️ Rozšírené nastavenia</summary>
+        
+        <div class="settings-content">
+          <!-- Model -->
+          <div class="input-group">
+            <label for="model-select">Model</label>
+            <select id="model-select" v-model="model" :disabled="isGenerating">
+              <option value="lite">Lite (rýchlejší)</option>
+              <option value="dreamshaper">🏆 DreamShaper 8</option>
+              <option value="absolutereality">⭐ Absolute Reality</option>
+              <option value="epicrealism">🎨 Epic Realism</option>
+              <option value="majicmix">✨ MajicMix Realistic</option>
+              <option value="realistic">📷 Realistic Vision V5.1</option>
+              <option value="full">Full SD v1.5</option>
+            </select>
           </div>
-          <button 
-            @click="adjustHue" 
-            :disabled="isAdjustingHue || hueShift === 0"
-            class="btn-hue"
-          >
-            <span v-if="isAdjustingHue">⏳ Mením odtieň...</span>
-            <span v-else>🎨 Zmeniť odtieň</span>
-          </button>
-        </div>
-      </div>
 
-      <div class="info-box">
-        <p><strong>💡 Tri režimy generovania:</strong></p>
-        <ul>
-          <li><strong>Text-to-Image:</strong> Nechajte pole pre obrázok prázdne</li>
-          <li><strong>Image-to-Image:</strong> Nahrajte obrázok a AI ho upraví podľa promptu</li>
-          <li><strong>Odstrániť pozadie:</strong> Po vygenerovaní použite tlačidlo 🧹 na odstránenie čierneho pozadia</li>
-        </ul>
-        <p><strong>⚡ GPU generovanie trvá 10-30 sekúnd</strong></p>
-      </div>
+          <!-- Rozmery obrázka -->
+          <div class="input-group">
+            <label for="image-dimensions">📏 Rozmery obrázka</label>
+            <select id="image-dimensions" v-model="imageDimensions" :disabled="isGenerating">
+              <option value="200x200">200×200 px</option>
+              <option value="200x300">200×300 px</option>
+              <option value="400x400">400×400 px</option>
+              <option value="400x600">400×600 px</option>
+              <option 
+                v-if="imageDimensions && !['200x200', '200x300', '400x400', '400x600'].includes(imageDimensions)" 
+                :value="imageDimensions"
+              >
+                {{ imageDimensions.replace('x', '×') }} px (zo šablóny)
+              </option>
+            </select>
+          </div>
+
+          <!-- LoRA výber -->
+          <div v-if="availableLoras.length > 0" class="input-group">
+            <label for="lora-select">🎨 LoRA Model</label>
+            <select id="lora-select" v-model="selectedLora" :disabled="isGenerating">
+              <option value="">Žiadny</option>
+              <option v-for="lora in availableLoras" :key="lora" :value="lora">
+                {{ lora }}
+              </option>
+            </select>
+            
+            <div v-if="selectedLora" class="slider-group">
+              <label for="lora-scale">
+                Sila LoRA ({{ (loraScale * 100).toFixed(0) }}%)
+              </label>
+              <input
+                id="lora-scale"
+                type="range"
+                v-model.number="loraScale"
+                min="0.0"
+                max="1.0"
+                step="0.1"
+                :disabled="isGenerating"
+              />
+            </div>
+          </div>
+
+          <!-- Negatívny prompt -->
+          <div class="input-group">
+            <label for="negative-prompt">Negatívny prompt</label>
+            <textarea
+              id="negative-prompt"
+              v-model="negativePrompt"
+              placeholder="blurry, low quality..."
+              rows="2"
+              :disabled="isGenerating"
+            />
+          </div>
+
+          <!-- Checkbox automatické odstránenie pozadia -->
+          <div class="input-group checkbox-group">
+            <label class="checkbox-label">
+              <input 
+                type="checkbox" 
+                v-model="autoRemoveBackground"
+                :disabled="isGenerating"
+              />
+              <span>🎭 Automaticky odstrániť pozadie</span>
+            </label>
+            
+            <div v-if="autoRemoveBackground" class="sub-checkbox">
+              <label class="checkbox-label">
+                <input 
+                  type="checkbox" 
+                  v-model="useAiRemoval"
+                  :disabled="isGenerating"
+                />
+                <span>🤖 Použiť AI (rembg)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Tlačidlá -->
+          <div class="button-group">
+            <button 
+              @click="removeBackground" 
+              :disabled="isRemovingBackground || !lastGeneratedImage"
+              class="btn-remove-bg"
+            >
+              <span v-if="isRemovingBackground">⏳ ...</span>
+              <span v-else>🧹 Odstrániť pozadie</span>
+            </button>
+
+            <button 
+              @click="generateDemo" 
+              :disabled="isGenerating"
+              class="btn-secondary"
+            >
+              🎲 Demo
+            </button>
+          </div>
+
+          <!-- Farebné úpravy -->
+          <div v-if="lastGeneratedImage" class="color-adjust-section">
+            <h4>🎨 Úprava odtieňa</h4>
+            <div class="slider-group">
+              <label>
+                Posun: <strong>{{ hueShift }}°</strong>
+              </label>
+              <input
+                type="range"
+                v-model.number="hueShift"
+                min="-180"
+                max="180"
+                step="5"
+                :disabled="isAdjustingHue"
+              />
+              <button 
+                @click="adjustHue" 
+                :disabled="isAdjustingHue || hueShift === 0"
+                class="btn-hue"
+              >
+                <span v-if="isAdjustingHue">⏳</span>
+                <span v-else>🎨 Zmeniť</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 </template>
@@ -667,7 +625,7 @@ defineExpose({
   background: white;
   color: #333;
   border-radius: 0;
-  padding: 15px;
+  padding: 8px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -675,27 +633,27 @@ defineExpose({
 
 h2 {
   margin-top: 0;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.5rem;
   color: #667eea;
-  font-size: 1.5rem;
+  font-size: 1.2rem;
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.5rem;
   flex: 1;
 }
 
 .input-group {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.25rem;
 }
 
 label {
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   color: #555;
 }
 
@@ -706,12 +664,12 @@ label small {
 }
 
 textarea {
-  padding: 0.75rem;
+  padding: 0.4rem;
   border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
   font-family: inherit;
-  resize: vertical;
+  resize: none;
   transition: border-color 0.3s;
 }
 
@@ -738,7 +696,7 @@ textarea:disabled {
 }
 
 .upload-placeholder {
-  padding: 3rem 2rem;
+  padding: 0.75rem;
   text-align: center;
   background: #f9f9f9;
 }
@@ -973,6 +931,24 @@ button:disabled {
   transform: none !important;
 }
 
+.btn-generate-main {
+  width: 100%;
+  padding: 1.25rem 2rem;
+  font-size: 1.1rem;
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.btn-generate-main:hover:not(:disabled) {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.6);
+}
+
+.secondary-buttons {
+  margin-top: 1.5rem;
+}
+
 .error-message {
   padding: 1rem;
   background: #fee;
@@ -1110,18 +1086,25 @@ button:disabled {
   font-weight: 600;
 }
 
-/* Keyword section */
-.keyword-section {
-  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-  padding: 1.5rem;
-  border-radius: 12px;
-  border: 2px solid #f59e0b;
+/* Prompt section */
+.prompt-section {
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 2px solid #0ea5e9;
 }
 
-.keyword-section label {
-  color: #92400e;
+.prompt-section label {
+  color: #0369a1;
   font-weight: 600;
+  font-size: 0.8rem;
 }
+
+.prompt-section textarea {
+  margin-top: 0.25rem;
+}
+
+
 
 /* Checkbox group */
 .checkbox-group {
@@ -1183,7 +1166,6 @@ button:disabled {
 /* Upload divider */
 .upload-divider {
   text-align: center;
-  margin: 1rem 0;
   position: relative;
 }
 
@@ -1207,18 +1189,18 @@ button:disabled {
 
 .upload-divider span {
   background: white;
-  padding: 0 1rem;
+  padding: 0 0.5rem;
   color: #999;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   font-style: italic;
 }
 
 select {
   width: 100%;
-  padding: 0.75rem;
+  padding: 0.4rem;
   border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
   font-family: inherit;
   background: white;
   cursor: pointer;
@@ -1233,5 +1215,128 @@ select:focus {
 select:disabled {
   background: #f5f5f5;
   cursor: not-allowed;
+}
+
+/* Upload section */
+.upload-section {
+  margin-top: 0.25rem;
+}
+
+.upload-placeholder {
+  padding: 0.5rem;
+  text-align: center;
+  background: #f9f9f9;
+}
+
+/* Image preview compact */
+.image-preview {
+  position: relative;
+  padding: 0.25rem;
+  background: #f0f0f0;
+}
+
+.image-preview img {
+  width: 100%;
+  max-height: 80px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.remove-btn {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: rgba(255, 0, 0, 0.8);
+  color: white;
+  border: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Strength section */
+.strength-section {
+  background: #f8f9fa;
+  padding: 0.4rem;
+  border-radius: 6px;
+  margin-top: 0;
+}
+
+.strength-section label {
+  font-size: 0.75rem;
+}
+
+.strength-section label strong {
+  color: #667eea;
+}
+
+/* Advanced settings collapse */
+.advanced-settings {
+  margin-top: 0.25rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.advanced-settings summary {
+  padding: 0.4rem 0.5rem;
+  background: #f8f9fa;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #555;
+  user-select: none;
+}
+
+.advanced-settings summary:hover {
+  background: #f0f0f0;
+}
+
+.settings-content {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Compact button group */
+.button-group {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.button-group button {
+  flex: 1;
+  min-width: auto;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+}
+
+/* Compact color adjust */
+.color-adjust-section {
+  padding: 0.75rem;
+  background: #fef3c7;
+  border-radius: 8px;
+}
+
+.color-adjust-section h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+/* Generate button */
+.btn-generate-main {
+  width: 100%;
+  padding: 0.6rem;
+  font-size: 0.9rem;
+  margin-top: 0.25rem;
 }
 </style>

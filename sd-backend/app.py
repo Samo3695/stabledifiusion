@@ -460,6 +460,151 @@ def adjust_hue_endpoint():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/generate-character', methods=['POST'])
+def generate_character():
+    """
+    Generuje sériu obrázkov postavy z rôznych uhlov pohľadu.
+    Vráti 4 obrázky: front, side, back, 3/4 view
+    """
+    try:
+        data = request.json
+        base_prompt = data.get('prompt', '')
+        negative_prompt = data.get('negative_prompt', 'blurry, low quality, distorted, ugly, deformed, disfigured, realistic photo, photorealistic, 3d render, modern, futuristic')
+        reference_image = data.get('reference_image', '')  # Base64 obrázok (voliteľný)
+        model_key = data.get('model', 'dreamshaper')  # Default: dreamshaper pre characters
+        
+        if not base_prompt:
+            return jsonify({'error': 'Prompt je povinný'}), 400
+        
+        # Načítaj model
+        try:
+            model_entry = load_pipeline(model_key)
+        except Exception as e:
+            return jsonify({'error': f'Nepodarilo sa načítať model: {e}'}), 500
+        
+        # Seed pre konzistentnosť naprieč všetkými views
+        seed = data.get('seed', None)
+        if seed is None:
+            seed = torch.randint(0, 2**32, (1,)).item()
+        
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        # Rozmery
+        width = data.get('width', 512)
+        height = data.get('height', 512)
+        width = int(width // 8 * 8)
+        height = int(height // 8 * 8)
+        
+        # Definuj views s izometrickými promptmi pre game sprites
+        views = [
+            {
+                'name': 'south',
+                'prompt': f"isometric pixel art game sprite, {base_prompt}, facing down, south view, top-down isometric angle, low poly style, clean flat colors, game asset, transparent background, simple shading, 45 degree angle",
+                'seed_offset': 0
+            },
+            {
+                'name': 'east',
+                'prompt': f"isometric pixel art game sprite, {base_prompt}, facing right, east view, top-down isometric angle, low poly style, clean flat colors, game asset, transparent background, simple shading, 45 degree angle",
+                'seed_offset': 1
+            },
+            {
+                'name': 'north',
+                'prompt': f"isometric pixel art game sprite, {base_prompt}, facing up, north view, top-down isometric angle, low poly style, clean flat colors, game asset, transparent background, simple shading, 45 degree angle",
+                'seed_offset': 2
+            },
+            {
+                'name': 'west',
+                'prompt': f"isometric pixel art game sprite, {base_prompt}, facing left, west view, top-down isometric angle, low poly style, clean flat colors, game asset, transparent background, simple shading, 45 degree angle",
+                'seed_offset': 3
+            }
+        ]
+        
+        generated_images = []
+        
+        # Ak je reference_image, použij img2img, inak txt2img
+        use_img2img = bool(reference_image)
+        init_image = None
+        
+        if use_img2img:
+            print(f"🎭 Character Generation (img2img): {base_prompt[:50]}...")
+            
+            # Dekóduj reference image
+            if ',' in reference_image:
+                reference_image = reference_image.split(',')[1]
+            
+            image_data = base64.b64decode(reference_image)
+            init_image = Image.open(io.BytesIO(image_data))
+            
+            # Konvertuj na RGB
+            if init_image.mode == 'RGBA':
+                rgb_image = Image.new('RGB', init_image.size, (255, 255, 255))
+                rgb_image.paste(init_image, mask=init_image.split()[3])
+                init_image = rgb_image
+            elif init_image.mode != 'RGB':
+                init_image = init_image.convert('RGB')
+            
+            init_image = init_image.resize((width, height))
+            img2img_pipe = model_entry.get('img2img')
+        else:
+            print(f"🎭 Character Generation (txt2img): {base_prompt[:50]}...")
+            pipe = model_entry.get('pipe')
+        
+        # Generuj každý view
+        for view in views:
+            view_seed = seed + view['seed_offset']
+            generator = torch.Generator(device=device).manual_seed(view_seed)
+            
+            print(f"   └─ Generujem {view['name']} view (seed={view_seed})...")
+            
+            with torch.inference_mode():
+                if use_img2img:
+                    image = img2img_pipe(
+                        prompt=view['prompt'],
+                        negative_prompt=negative_prompt,
+                        image=init_image,
+                        strength=0.65,  # Menej strength pre zachovanie štýlu
+                        num_inference_steps=40,
+                        guidance_scale=7.5,
+                        generator=generator,
+                    ).images[0]
+                else:
+                    image = pipe(
+                        prompt=view['prompt'],
+                        negative_prompt=negative_prompt,
+                        num_inference_steps=40,
+                        guidance_scale=7.5,
+                        width=width,
+                        height=height,
+                        generator=generator,
+                    ).images[0]
+            
+            # Konvertuj na base64
+            buffer = io.BytesIO()
+            image.save(buffer, format='PNG')
+            img_base64 = base64.b64encode(buffer.getvalue()).decode()
+            
+            generated_images.append({
+                'view': view['name'],
+                'image': f'data:image/png;base64,{img_base64}',
+                'prompt': view['prompt'],
+                'seed': view_seed
+            })
+        
+        print("✅ Character views vygenerované!")
+        
+        return jsonify({
+            'images': generated_images,
+            'base_prompt': base_prompt,
+            'base_seed': seed,
+            'model': model_key
+        })
+        
+    except Exception as e:
+        print(f"❌ Chyba pri generovaní characteru: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("=" * 60)
     print("🚀 Stable Diffusion Backend (multi-model, on-demand)")

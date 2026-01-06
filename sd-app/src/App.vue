@@ -2,8 +2,10 @@
 import { ref } from 'vue'
 import BuildingGenerator from './components/BuildingGenerator.vue'
 import EnvironmentGenerator from './components/EnvironmentGenerator.vue'
+import CharacterGenerator from './components/CharacterGenerator.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import CheckerboardCanvas from './components/CheckerboardCanvas.vue'
+import ProjectManager from './components/ProjectManager.vue'
 
 const images = ref([])
 const lastImageCellsX = ref(1)
@@ -16,7 +18,7 @@ const imageGeneratorRef = ref(null)
 const showNumbering = ref(false)
 const showGallery = ref(false)
 const showGrid = ref(true)
-const activeGenerator = ref('building') // 'building' alebo 'environment'
+const activeGenerator = ref('building') // 'building', 'environment' alebo 'character'
 const deleteMode = ref(false) // Režim mazania buildingov
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
@@ -36,7 +38,8 @@ const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   if (selectedCell.value.row !== -1 && selectedCell.value.col !== -1 && canvasRef.value) {
     console.log('🎯 App.vue: Volám placeImageAtSelectedCell()')
     console.log('   URL:', image.url.substring(0, 50) + '...')
-    const result = canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY)
+    console.log('   isBackground:', image.isBackground || false)
+    const result = canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image.isBackground || false)
     console.log('   Výsledok vloženia:', result ? 'ÚSPECH' : 'ZLYHALO')
   } else {
     console.log('⚠️ App.vue: Nevkladám obrázok - políčko nie je vybrané alebo canvas neexistuje')
@@ -114,7 +117,7 @@ const handleCellSelected = ({ row, col }) => {
   if (deleteMode.value && canvasRef.value) {
     console.log(`🗑️ App.vue: Režim mazania - vymazanie buildingu na [${row}, ${col}]`)
     canvasRef.value.deleteImageAtCell(row, col)
-    return // Nevykonaj generovanie ani umiestnovanie
+    return
   }
   
   // Ak je vybraný obrázok z galérie, vlož ho na toto políčko
@@ -122,18 +125,17 @@ const handleCellSelected = ({ row, col }) => {
     const selectedImage = images.value.find(img => img.id === selectedImageId.value)
     if (selectedImage) {
       console.log(`🖼️ App.vue: Vkladám vybraný obrázok z galérie (${selectedImageId.value})`)
-      const cellsX = selectedImage.cellsX || lastImageCellsX.value
-      const cellsY = selectedImage.cellsY || lastImageCellsY.value
-      canvasRef.value.placeImageAtSelectedCell(selectedImage.url, cellsX, cellsY)
-      return // Nevykonaj generovanie
+      // Vždy použij aktuálnu veľkosť z grid size tabs (lastImageCellsX/Y)
+      console.log(`   Aktuálna veľkosť z grid tabs: ${lastImageCellsX.value}x${lastImageCellsY.value}`)
+      console.log(`   isBackground: ${selectedImage.isBackground || false}`)
+      canvasRef.value.placeImageAtSelectedCell(selectedImage.url, lastImageCellsX.value, lastImageCellsY.value, selectedImage.isBackground || false)
+      return
     }
   }
   
-  // Inak spusti automatické generovanie
-  console.log(`🚀 App.vue: Spúšťam automatické generovanie...`)
-  if (imageGeneratorRef.value) {
-    imageGeneratorRef.value.startGeneration()
-  }
+  // Políčko je vybrané, ale obrázok sa nebude automaticky generovať
+  // Užívateľ musí kliknúť na tlačidlo "Generovať" v BuildingGenerator
+  console.log(`✅ App.vue: Políčko [${row}, ${col}] je označené - pripravené na umiestnenie`)
 }
 
 const handleImagePlaced = ({ row, col }) => {
@@ -186,6 +188,107 @@ const handleTilesGenerated = (tilesData) => {
     console.log('✅ Tile-y aplikované na šachovnicu')
   }
 }
+
+const handleCharacterGenerated = (characterData) => {
+  console.log('🎭 App.vue: Prijaté character-generated event')
+  console.log('   Počet obrázkov:', characterData.images.length)
+  console.log('   Prompt:', characterData.prompt)
+  
+  // Pridaj vygenerované character obrázky do galérie
+  characterData.images.forEach(img => {
+    images.value.unshift({
+      id: img.id,
+      url: img.url,
+      cellsX: 1,
+      cellsY: 1,
+      view: img.view
+    })
+  })
+  
+  // Vyber prvý obrázok
+  if (characterData.images.length > 0) {
+    selectedImageId.value = characterData.images[0].id
+  }
+  
+  console.log('✅ Character obrázky pridané do galérie')
+}
+
+const handleLoadProject = (projectData) => {
+  const loadedImages = projectData.images || []
+  const placedImages = projectData.placedImages || {}
+  
+  if (loadedImages.length === 0) {
+    // Vyčisti galériu a šachovnicu
+    images.value = []
+    selectedImageId.value = null
+    if (canvasRef.value && canvasRef.value.clearAll) {
+      canvasRef.value.clearAll()
+    }
+    console.log('🗑️ App.vue: Galéria vyčistená')
+    return
+  }
+  
+  console.log('📂 App.vue: Načítavam projekt s', loadedImages.length, 'obrázkami')
+  console.log('   Umiestnené obrázky:', Object.keys(placedImages).length)
+  
+  // Nahraď všetky obrázky novými
+  images.value = loadedImages.map(img => ({
+    id: img.id || Date.now().toString() + Math.random(),
+    url: img.url,
+    prompt: img.prompt || '',
+    negativePrompt: img.negativePrompt || '',
+    cellsX: img.cellsX || 1,
+    cellsY: img.cellsY || 1,
+    view: img.view || '',
+    timestamp: img.timestamp ? new Date(img.timestamp) : new Date()
+  }))
+  
+  // Vyber prvý obrázok
+  if (images.value.length > 0) {
+    selectedImageId.value = images.value[0].id
+  } else {
+    selectedImageId.value = null
+  }
+  
+  // Obnov umiestnené obrázky na šachovnici
+  if (canvasRef.value && Object.keys(placedImages).length > 0) {
+    // Najprv vyčisti šachovnicu
+    if (typeof canvasRef.value.clearAll === 'function') {
+      canvasRef.value.clearAll()
+      console.log('🧹 Šachovnica vyčistená')
+    }
+    
+    // Potom umiestni obrázky - ale počkaj kým sa dokončí render
+    console.log('🎯 Umiestňujem', Object.keys(placedImages).length, 'obrázkov na šachovnicu...')
+    
+    // Použij setTimeout aby sa canvas stihol vykresliť a obrázky načítať
+    setTimeout(() => {
+      let successCount = 0
+      Object.entries(placedImages).forEach(([key, imageData]) => {
+        const { row, col, url, cellsX, cellsY } = imageData
+        console.log(`   └─ Umiestňujem na [${row}, ${col}] s veľkosťou ${cellsX}x${cellsY}`)
+        
+        if (canvasRef.value && typeof canvasRef.value.placeImageAtCell === 'function') {
+          try {
+            canvasRef.value.placeImageAtCell(row, col, url, cellsX, cellsY)
+            successCount++
+          } catch (error) {
+            console.error(`❌ Chyba pri umiestnení obrázka na [${row}, ${col}]:`, error)
+          }
+        } else {
+          console.error('❌ placeImageAtCell funkcia nie je dostupná')
+        }
+      })
+      console.log(`✅ Umiestnených ${successCount}/${Object.keys(placedImages).length} obrázkov na šachovnici`)
+    }, 500) // Zvýšil som delay na 500ms
+  } else if (Object.keys(placedImages).length === 0) {
+    console.log('ℹ️ Žiadne umiestnené obrázky v projekte')
+  } else {
+    console.error('❌ Canvas ref neexistuje, nemôžem obnoviť umiestnené obrázky')
+  }
+  
+  console.log('✅ Projekt načítaný, obrázky v galérii:', images.value.length)
+}
 </script>
 
 <template>
@@ -210,7 +313,19 @@ const handleTilesGenerated = (tilesData) => {
     />
     
     <!-- Header (absolútne pozicionovaný) -->
-
+    <header>
+      <ProjectManager 
+        :images="images"
+        :showNumbering="showNumbering"
+        :showGallery="showGallery"
+        :showGrid="showGrid"
+        :canvasRef="canvasRef"
+        @load-project="handleLoadProject"
+        @update:showNumbering="showNumbering = $event"
+        @update:showGallery="showGallery = $event"
+        @update:showGrid="showGrid = $event"
+      />
+    </header>
     
     <!-- Pravý sidebar s nástrojmi (absolútne pozicionovaný) -->
     <aside class="sidebar">
@@ -227,6 +342,12 @@ const handleTilesGenerated = (tilesData) => {
           @click="activeGenerator = 'environment'"
         >
           🌍 Environment
+        </button>
+        <button 
+          :class="{ active: activeGenerator === 'character' }"
+          @click="activeGenerator = 'character'"
+        >
+          🎭 Character
         </button>
       </div>
       
@@ -245,6 +366,12 @@ const handleTilesGenerated = (tilesData) => {
         v-if="activeGenerator === 'environment'"
         @environment-generated="handleEnvironmentGenerated"
         @tiles-generated="handleTilesGenerated"
+      />
+      
+      <!-- Character Generator -->
+      <CharacterGenerator
+        v-if="activeGenerator === 'character'"
+        @character-generated="handleCharacterGenerated"
       />
     </aside>
     
@@ -287,13 +414,13 @@ header {
   position: absolute;
   top: 0;
   left: 0;
-  right: 380px;
-  padding: 1rem 2rem;
+  right: 230px;
+  padding: 0.75rem 2rem;
   text-align: center;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(102, 126, 234, 0.95);
   backdrop-filter: blur(10px);
   z-index: 10;
-  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
 
 header h1 {
@@ -319,7 +446,7 @@ header h1 {
   position: absolute;
   bottom: 0;
   left: 0;
-  right: 380px;
+  right: 230px;
   height: 125px;
   z-index: 10;
   overflow-x: auto;

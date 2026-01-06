@@ -11,6 +11,15 @@ const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-chang
 const selectedImage = ref(null)
 const selectedGridSize = ref(1) // 1, 4, 9, 16, 25, alebo -1 pre režim mazania
 
+const copyToClipboard = async (text, label = 'text') => {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (err) {
+    console.error(`Kopírovanie ${label} zlyhalo:`, err)
+  }
+}
+
 // Watch grid size changes and emit to parent
 watch(selectedGridSize, (newSize) => {
   if (newSize === -1) {
@@ -49,7 +58,7 @@ const deleteImage = (id) => {
 }
 
 const placeOnBoard = () => {
-  const selected = images.find(img => img.id === props.selectedImageId)
+  const selected = props.images.find(img => img.id === props.selectedImageId)
   if (selected) {
     // Vypočítaj cellsX a cellsY podľa selectedGridSize
     const cellsPerSide = Math.sqrt(selectedGridSize.value)
@@ -152,8 +161,18 @@ const formatDate = (date) => {
           
           <div class="modal-info">
             <div class="info-section">
-              <h3>Prompt:</h3>
-              <p>{{ selectedImage.prompt }}</p>
+              <div class="info-header">
+                <h3>Prompt:</h3>
+                <button 
+                  class="copy-btn"
+                  @click="copyToClipboard(selectedImage.prompt || '', 'prompt')"
+                  type="button"
+                  :disabled="!selectedImage.prompt"
+                >
+                  Copy
+                </button>
+              </div>
+              <p class="prompt-text">{{ selectedImage.prompt || '—' }}</p>
             </div>
             
             <div v-if="selectedImage.negativePrompt" class="info-section">
@@ -440,6 +459,39 @@ h2 {
 .modal-info {
   padding: 2rem;
 }
+
+.info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.copy-btn {
+  padding: 0.35rem 0.65rem;
+  border: 1px solid #d0d7de;
+  background: #f8f9fa;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.copy-btn:hover:not(:disabled) {
+  background: #eef2ff;
+  border-color: #667eea;
+}
+
+.copy-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.prompt-text {
+  white-space: pre-wrap;
+}
+
+
 
 .info-section h3 {
   margin: 0 0 0.5rem 0;

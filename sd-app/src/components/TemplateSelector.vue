@@ -5,7 +5,7 @@ const emit = defineEmits(['template-selected', 'tab-changed'])
 
 const activeTemplateTab = ref('1size')
 const templateImages = ref({
-  '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'ihlan1.png', 'kuzel.png', 'valec.png'],
+  '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'ihlan1.png', 'kuzel.png', 'valec.png', 'valec2.png'],
   '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png']
 })
 const selectedTemplate = ref(null)
@@ -135,34 +135,34 @@ const selectTemplate = (template) => {
 
 <style scoped>
 .template-selector {
-  margin-bottom: 1rem;
+  margin-bottom: 0.25rem;
 }
 
 .template-selector label {
   display: block;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.25rem;
   font-weight: 600;
   color: #333;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
 }
 
 /* Template tabs */
 .template-tabs {
   display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
 }
 
 .tab-btn {
   width: 100%;
-  padding: 0.75rem 1rem;
+  padding: 0.4rem 0.5rem;
   border: 2px solid #e0e0e0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: white;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.2s;
   color: #666;
 }
 
@@ -181,38 +181,38 @@ const selectTemplate = (template) => {
 .templates-gallery {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 0.75rem;
-  max-height: 250px;
+  gap: 0.4rem;
+  max-height: 130px;
   overflow-y: auto;
-  padding: 0.5rem;
+  padding: 0.25rem;
   background: rgba(0, 0, 0, 0.02);
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .template-item {
-  border: 3px solid #e0e0e0;
-  border-radius: 8px;
+  border: 2px solid #e0e0e0;
+  border-radius: 6px;
   overflow: hidden;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.2s;
   background: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 80px;
-  max-height: 120px;
+  min-height: 55px;
+  max-height: 70px;
 }
 
 .template-item:hover {
   border-color: #667eea;
-  transform: scale(1.05);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  transform: scale(1.02);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
 .template-item.selected {
   border-color: #667eea;
-  border-width: 4px;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+  border-width: 3px;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
 }
 
 .template-item img {
