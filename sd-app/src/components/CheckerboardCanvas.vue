@@ -396,17 +396,27 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       const imgX = originX - drawWidth / 2 + offsetXForCells
       const imgY = originY + tileHeight - drawHeight + offsetYForCells
       
-      // Nakresliť čierny štvorec vedľa obrázka
-      // Šírka = drawHeight (výška obrázka), Výška = drawWidth (šírka obrázka)
-      // Pravý okraj štvorca je v strede obrázka (imgX + drawWidth/2)
-      const shadowWidth = drawHeight
-      const shadowHeight = drawWidth
+      // Nakresliť čierny štvorec (tieň) vedľa obrázka s jemným skew
+      ctx.save()
+      
+      const shadowWidth = drawHeight / 1.3  // šírka podľa výšky obrázka
+      const shadowHeight = drawWidth / 2  // polovičná výška
       const shadowRightEdge = imgX + drawWidth / 2  // stred obrázka
       const shadowX = shadowRightEdge - shadowWidth  // ľavý okraj štvorca
       const shadowY = imgY + drawHeight - shadowHeight  // spodná hrana zarovnaná
       
+      // Aplikujeme skew transformáciu
+      // Presunieme sa na pravý dolný roh tieňa (bod otáčania)
+      ctx.translate(shadowRightEdge, imgY + drawHeight)
+      // Skew transformácia - jemné skosenie
+      ctx.transform(1, -0.1, 0, 1, 0, 0)  // skewY = 0.1
+      // Presunieme späť
+      ctx.translate(-shadowRightEdge, -(imgY + drawHeight))
+      
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
       ctx.fillRect(shadowX, shadowY, shadowWidth, shadowHeight)
+      
+      ctx.restore()
 
       // Nakresliť obrázok
       ctx.drawImage(
