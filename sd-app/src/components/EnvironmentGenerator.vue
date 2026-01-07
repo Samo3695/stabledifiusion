@@ -1,8 +1,15 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import TextureColorPicker from './TextureColorPicker.vue'
 
-const emit = defineEmits(['environment-generated', 'tiles-generated'])
+const props = defineProps({
+  initialColors: {
+    type: Object,
+    default: () => ({ hue: 0, saturation: 100, brightness: 100 })
+  }
+})
+
+const emit = defineEmits(['environment-generated', 'tiles-generated', 'color-change'])
 
 const fileInput = ref(null)
 const uploadedImages = ref([]) // Nahrané obrázky
@@ -223,7 +230,23 @@ const handleTextureApply = (adjustedImage) => {
 // Handler pre zmenu farieb z TextureColorPicker
 const handleColorChange = (colors) => {
   textureColors.value = colors
+  // Emituj zmenu farieb do App.vue pre ukladanie projektu
+  emit('color-change', colors)
 }
+
+// Inicializuj farby z props pri načítaní
+onMounted(() => {
+  if (props.initialColors) {
+    textureColors.value = { ...props.initialColors }
+  }
+})
+
+// Watch na zmenu initialColors (pri načítaní projektu)
+watch(() => props.initialColors, (newColors) => {
+  if (newColors) {
+    textureColors.value = { ...newColors }
+  }
+}, { deep: true })
 
 // Aplikovať farebné úpravy na obrázok
 const applyColorAdjustments = (imageSrc) => {
@@ -256,6 +279,7 @@ const applyColorAdjustments = (imageSrc) => {
       <TextureColorPicker 
         texture-path="/enviroment/grass.jpg"
         :disabled="isGenerating"
+        :initial-colors="textureColors"
         @apply-texture="handleTextureApply"
         @color-change="handleColorChange"
       />

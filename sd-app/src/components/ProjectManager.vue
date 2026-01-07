@@ -21,6 +21,10 @@ const props = defineProps({
   canvasRef: {
     type: Object,
     default: null
+  },
+  environmentColors: {
+    type: Object,
+    default: () => ({ hue: 0, saturation: 100, brightness: 100 })
   }
 })
 
@@ -38,6 +42,8 @@ const saveProject = () => {
   try {
     // Získaj umiestnené obrázky zo šachovnice
     const placedImages = {}
+    let backgroundTiles = []
+    
     if (props.canvasRef && typeof props.canvasRef.cellImages === 'function') {
       // cellImages() je getter funkcia ktorá vráti objekt
       const cellImagesData = props.canvasRef.cellImages()
@@ -53,10 +59,15 @@ const saveProject = () => {
         }
       })
     }
+    
+    // Získaj background tiles zo šachovnice
+    if (props.canvasRef && typeof props.canvasRef.backgroundTiles === 'function') {
+      backgroundTiles = props.canvasRef.backgroundTiles() || []
+    }
 
     // Priprav dáta pre export
     const projectData = {
-      version: '1.1',
+      version: '1.3',
       timestamp: new Date().toISOString(),
       imageCount: props.images.length,
       placedImageCount: Object.keys(placedImages).length,
@@ -70,7 +81,9 @@ const saveProject = () => {
         view: img.view || '',
         timestamp: img.timestamp || new Date().toISOString()
       })),
-      placedImages: placedImages
+      placedImages: placedImages,
+      environmentColors: props.environmentColors,
+      backgroundTiles: backgroundTiles
     }
 
     // Konvertuj na JSON string
@@ -122,7 +135,9 @@ const handleFileUpload = async (event) => {
     // Emituj event do App.vue s načítanými obrázkami a placement dátami
     emit('load-project', {
       images: projectData.images,
-      placedImages: projectData.placedImages || {}
+      placedImages: projectData.placedImages || {},
+      environmentColors: projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 },
+      backgroundTiles: projectData.backgroundTiles || []
     })
 
     // Resetuj file input

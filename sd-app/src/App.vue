@@ -20,6 +20,7 @@ const showGallery = ref(false)
 const showGrid = ref(true)
 const activeGenerator = ref('building') // 'building', 'environment' alebo 'character'
 const deleteMode = ref(false) // Režim mazania buildingov
+const environmentColors = ref({ hue: 0, saturation: 100, brightness: 100 }) // Farby prostredia
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -216,6 +217,18 @@ const handleCharacterGenerated = (characterData) => {
 const handleLoadProject = (projectData) => {
   const loadedImages = projectData.images || []
   const placedImages = projectData.placedImages || {}
+  const loadedColors = projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 }
+  const loadedTiles = projectData.backgroundTiles || []
+  
+  // Obnov farby prostredia
+  environmentColors.value = loadedColors
+  console.log('🎨 App.vue: Farby prostredia načítané:', loadedColors)
+  
+  // Aplikuj background tiles na šachovnicu
+  if (loadedTiles.length > 0 && canvasRef.value && canvasRef.value.setBackgroundTiles) {
+    canvasRef.value.setBackgroundTiles(loadedTiles, 1)
+    console.log('🎨 App.vue: Background tiles aplikované:', loadedTiles.length, 'tile-ov')
+  }
   
   if (loadedImages.length === 0) {
     // Vyčisti galériu a šachovnicu
@@ -320,6 +333,7 @@ const handleLoadProject = (projectData) => {
         :showGallery="showGallery"
         :showGrid="showGrid"
         :canvasRef="canvasRef"
+        :environmentColors="environmentColors"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"
@@ -364,8 +378,10 @@ const handleLoadProject = (projectData) => {
       <!-- Environment Generator -->
       <EnvironmentGenerator
         v-if="activeGenerator === 'environment'"
+        :initialColors="environmentColors"
         @environment-generated="handleEnvironmentGenerated"
         @tiles-generated="handleTilesGenerated"
+        @color-change="environmentColors = $event"
       />
       
       <!-- Character Generator -->

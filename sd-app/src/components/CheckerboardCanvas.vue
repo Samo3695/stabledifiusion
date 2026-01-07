@@ -393,7 +393,7 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       }
       
       // Vypočítame pozíciu obrázka
-      const imgX = originX - drawWidth / 3 + offsetXForCells
+      const imgX = originX - drawWidth / 2 + offsetXForCells
       const imgY = originY + tileHeight - drawHeight + offsetYForCells
       
       // Nakresliť čierny štvorec (tieň) vedľa obrázka s jemným skew
@@ -406,7 +406,7 @@ const drawCheckerboard = (ctx, width, height, highlightRow = -1, highlightCol = 
       const shadowY = imgY + drawHeight - shadowHeight  // spodná hrana zarovnaná
       
       // Deformácia - posun ľavého horného rohu doľava o polovicu šírky
-      const deformX = -shadowWidth / 0.7  // posundoľava o polovicu šírky štvorca
+      const deformX = -shadowWidth / 0.70  // posundoľava o polovicu šírky štvorca
       const deformY = 0.5  // žiadny vertikálny posun
       
       // Nakreslíme deformovaný štvoruholník namiesto rect
@@ -1097,6 +1097,7 @@ defineExpose({
   placeEnvironmentElements,
   deleteImageAtCell,
   cellImages: () => cellImages, // Getter pre prístup k cellImages
+  backgroundTiles: () => backgroundTiles, // Getter pre prístup k backgroundTiles
   clearAll: () => {
     cellImages = {}
     if (canvas.value) {

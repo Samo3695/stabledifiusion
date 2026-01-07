@@ -5,7 +5,7 @@ const emit = defineEmits(['template-selected', 'tab-changed'])
 
 const activeTemplateTab = ref('1size')
 const templateImages = ref({
-  '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'ihlan1.png', 'kuzel.png', 'valec.png', 'valec2.png'],
+  '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'halfsphere.png', 'hole.png', 'ihlan1.png', 'kuzel.png', 'smallvalec.png', 'sphere.png', 'tree.png', 'valec.png', 'valec2.png', 'valec3.png', 'valec4.png'],
   '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png']
 })
 const selectedTemplate = ref(null)

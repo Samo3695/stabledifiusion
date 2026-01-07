@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 
 const emit = defineEmits(['apply-texture', 'color-change'])
 
@@ -11,12 +11,34 @@ const props = defineProps({
   disabled: {
     type: Boolean,
     default: false
+  },
+  initialColors: {
+    type: Object,
+    default: () => ({ hue: 0, saturation: 100, brightness: 100 })
   }
 })
 
 const hueRotation = ref(0)
 const saturation = ref(100)
 const brightness = ref(100)
+
+// Inicializuj farby z props
+onMounted(() => {
+  if (props.initialColors) {
+    hueRotation.value = props.initialColors.hue || 0
+    saturation.value = props.initialColors.saturation || 100
+    brightness.value = props.initialColors.brightness || 100
+  }
+})
+
+// Watch na zmenu initialColors (pri načítaní projektu)
+watch(() => props.initialColors, (newColors) => {
+  if (newColors) {
+    hueRotation.value = newColors.hue || 0
+    saturation.value = newColors.saturation || 100
+    brightness.value = newColors.brightness || 100
+  }
+}, { deep: true })
 
 const filterStyle = computed(() => ({
   filter: `hue-rotate(${hueRotation.value}deg) saturate(${saturation.value}%) brightness(${brightness.value}%)`
