@@ -4,7 +4,7 @@ import BuildingGenerator from './components/BuildingGenerator.vue'
 import EnvironmentGenerator from './components/EnvironmentGenerator.vue'
 import CharacterGenerator from './components/CharacterGenerator.vue'
 import ImageGallery from './components/ImageGallery.vue'
-import CheckerboardCanvas from './components/CheckerboardCanvas.vue'
+import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
 
 const images = ref([])
@@ -307,7 +307,7 @@ const handleLoadProject = (projectData) => {
 <template>
   <div id="app">
     <!-- Canvas na pozadí (celá obrazovka) -->
-    <CheckerboardCanvas
+    <PhaserCanvas
       ref="canvasRef"
       :images="images" 
       :selectedImageId="selectedImageId"
