@@ -66,6 +66,10 @@ class IsoScene extends Phaser.Scene {
     this.isDragging = false
     this.lastPointer = { x: 0, y: 0 }
     this.cameraOffset = { x: 0, y: 0 }
+    this.backgroundTileKey = null
+    this.groundRenderTexture = null
+    this.groundMask = null
+    this.groundMaskGraphics = null
   }
 
   preload() {
@@ -180,6 +184,150 @@ class IsoScene extends Phaser.Scene {
           this.numberTexts.push(text)
         }
       }
+    }
+  }
+
+  // Nakreslí grid s textúrou pozadia
+  drawGridWithTexture() {
+    // Vyčistíme existujúcu mriežku
+    if (this.gridGraphics) {
+      this.gridGraphics.destroy()
+    }
+    
+    // Vyčistíme existujúce tile sprite-y
+    if (this.tileSprites && this.tileSprites.length > 0) {
+      this.tileSprites.forEach(sprite => sprite.destroy())
+      this.tileSprites = []
+    }
+    
+    // Vyčistíme groundRenderTexture
+    if (this.groundRenderTexture) {
+      this.groundRenderTexture.destroy()
+      this.groundRenderTexture = null
+    }
+    
+    // Vyčistíme masku
+    if (this.groundMask) {
+      this.groundMask.destroy()
+      this.groundMask = null
+    }
+    if (this.groundMaskGraphics) {
+      this.groundMaskGraphics.destroy()
+      this.groundMaskGraphics = null
+    }
+    
+    this.numberTexts.forEach(t => t.destroy())
+    this.numberTexts = []
+    
+    if (!props.showGrid) return
+    
+    // Skontroluj či máme textúru
+    const hasTexture = this.backgroundTileKey && this.textures.exists(this.backgroundTileKey)
+    
+    if (hasTexture) {
+      // Veľkosť bloku textúry (5x5 políčka)
+      const blockSize = 5
+      
+      // Vytvor RenderTexture pre textúrované políčka
+      this.groundRenderTexture = this.add.renderTexture(0, 0, 4000, 4000)
+      this.groundRenderTexture.setOrigin(0.5, 0.5)
+      this.groundRenderTexture.setPosition(0, GRID_SIZE * TILE_HEIGHT / 2)
+      this.groundRenderTexture.setDepth(0)
+      
+      // Offset pre RenderTexture
+      const rtOffsetX = 2000
+      const rtOffsetY = 2000 - GRID_SIZE * TILE_HEIGHT / 2
+      
+      // Získame textúru
+      const texture = this.textures.get(this.backgroundTileKey)
+      const frame = texture.get()
+      
+      // Kreslíme textúru po blokoch 5x5
+      for (let blockRow = 0; blockRow < GRID_SIZE; blockRow += blockSize) {
+        for (let blockCol = 0; blockCol < GRID_SIZE; blockCol += blockSize) {
+          // Pozícia ľavého horného rohu bloku
+          const { x: startX, y: startY } = this.gridToIso(blockRow, blockCol)
+          
+          // Vytvoríme dočasný sprite s textúrou
+          const tempSprite = this.make.sprite({
+            key: this.backgroundTileKey,
+            add: false
+          })
+          
+          // Scale aby pokryl 5x5 políčok
+          const scaleX = (TILE_WIDTH * blockSize) / frame.width
+          const scaleY = (TILE_HEIGHT * blockSize) / frame.height
+          tempSprite.setScale(scaleX, scaleY)
+          tempSprite.setOrigin(0.5, 0)
+          
+          // Pozícia stredu bloku
+          const centerX = startX
+          const centerY = startY
+          
+          // Nakreslíme do RenderTexture
+          this.groundRenderTexture.draw(tempSprite, centerX + rtOffsetX, centerY + rtOffsetY)
+          
+          tempSprite.destroy()
+        }
+      }
+      
+      // Vytvoríme masku v tvare izometrického diamantu
+      this.groundMaskGraphics = this.make.graphics()
+      
+      // Vypočítame rohy izometrickej plochy
+      const topCorner = this.gridToIso(0, 0)           // Horný roh
+      const rightCorner = this.gridToIso(0, GRID_SIZE) // Pravý roh
+      const bottomCorner = this.gridToIso(GRID_SIZE, GRID_SIZE) // Spodný roh
+      const leftCorner = this.gridToIso(GRID_SIZE, 0)  // Ľavý roh
+      
+      // Nakreslíme diamantový tvar pre masku
+      this.groundMaskGraphics.fillStyle(0xffffff)
+      this.groundMaskGraphics.beginPath()
+      this.groundMaskGraphics.moveTo(topCorner.x, topCorner.y)
+      this.groundMaskGraphics.lineTo(rightCorner.x, rightCorner.y)
+      this.groundMaskGraphics.lineTo(bottomCorner.x, bottomCorner.y)
+      this.groundMaskGraphics.lineTo(leftCorner.x, leftCorner.y)
+      this.groundMaskGraphics.closePath()
+      this.groundMaskGraphics.fillPath()
+      
+      // Aplikujeme masku na groundRenderTexture
+      this.groundMask = this.groundMaskGraphics.createGeometryMask()
+      this.groundRenderTexture.setMask(this.groundMask)
+      
+      // Pridáme okraje a číslovanie pomocou Graphics
+      this.gridGraphics = this.add.graphics()
+      this.groundContainer.add(this.gridGraphics)
+      
+      for (let row = 0; row < GRID_SIZE; row++) {
+        for (let col = 0; col < GRID_SIZE; col++) {
+          const { x, y } = this.gridToIso(row, col)
+          
+          // Okraj
+          this.gridGraphics.lineStyle(1, 0x666666, 0.3)
+          this.gridGraphics.beginPath()
+          this.gridGraphics.moveTo(x, y)
+          this.gridGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+          this.gridGraphics.lineTo(x, y + TILE_HEIGHT)
+          this.gridGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+          this.gridGraphics.closePath()
+          this.gridGraphics.strokePath()
+          
+          // Číslovanie
+          if (props.showNumbering) {
+            const text = this.add.text(x, y + TILE_HEIGHT / 2, `${row},${col}`, {
+              fontSize: '10px',
+              color: '#ff0000',
+              fontStyle: 'bold'
+            })
+            text.setOrigin(0.5, 0.5)
+            this.uiContainer.add(text)
+            this.numberTexts.push(text)
+          }
+        }
+      }
+    } else {
+      // Fallback na pôvodné kreslenie bez textúry
+      this.drawGrid()
     }
   }
 
@@ -440,8 +588,8 @@ class IsoScene extends Phaser.Scene {
         offsetY: baseShadowOffset * 0.375
       }
       
-      // Pridáme do kontajnerov
-      this.buildingContainer.add(buildingSprite)
+      // Pridáme priamo do scény (nie do kontajnera) aby depth fungoval správne
+      // this.buildingContainer.add(buildingSprite)
       
       // Uložíme referencie
       this.buildingSprites[key] = buildingSprite
@@ -542,18 +690,27 @@ class IsoScene extends Phaser.Scene {
   }
 
   sortBuildings() {
-    // Zoradíme budovy podľa ich pozície (row + col) pre správny z-index
-    const sorted = Object.entries(this.buildingSprites)
-      .map(([key, sprite]) => {
-        const [row, col] = key.split('-').map(Number)
-        return { key, sprite, depth: row + col }
-      })
-      .sort((a, b) => a.depth - b.depth)
-    
-    sorted.forEach((item, index) => {
-      // Budova má depth podľa indexu
-      item.sprite.setDepth(index + 10)
-    })
+    // Zoradíme budovy podľa ich pozície pre správny z-index
+    // Pre multi-cell budovy použijeme spodný roh (najvyšší row + col)
+    for (const key in this.buildingSprites) {
+      const [row, col] = key.split('-').map(Number)
+      
+      // Získame veľkosť budovy z cellImages
+      const imageData = cellImages[key]
+      const cellsX = imageData?.cellsX || 1
+      const cellsY = imageData?.cellsY || 1
+      
+      // Spodný roh budovy je na row + cellsX - 1, col + cellsY - 1
+      const bottomRow = row + cellsX - 1
+      const bottomCol = col + cellsY - 1
+      
+      // Depth je z spodného rohu - vyššia hodnota = budova je vpredu
+      // Base depth 100 aby boli nad tieňmi (depth 1) a mriežkou (depth 0)
+      const depth = 100 + (bottomRow + bottomCol)
+      this.buildingSprites[key].setDepth(depth)
+      
+      console.log(`🏠 Building ${key}: row=${row}, col=${col}, bottomRow=${bottomRow}, bottomCol=${bottomCol}, depth=${depth}`)
+    }
   }
 
   removeBuilding(key) {
@@ -574,7 +731,12 @@ class IsoScene extends Phaser.Scene {
   }
 
   refreshGrid() {
-    this.drawGrid()
+    // Ak máme textúru, použijeme drawGridWithTexture, inak štandardné drawGrid
+    if (this.backgroundTileKey && this.textures.exists(this.backgroundTileKey)) {
+      this.drawGridWithTexture()
+    } else {
+      this.drawGrid()
+    }
     this.drawHover()
     this.drawSelected()
   }
@@ -617,8 +779,32 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false
 // Funkcia na nastavenie pozadia
 const setBackgroundTiles = (tiles, tileSize = 1) => {
   console.log('🎨 PhaserCanvas.setBackgroundTiles()')
+  console.log('   Počet tile-ov:', tiles.length)
+  console.log('   Tile size:', tileSize)
+  
   backgroundTiles = tiles
-  // TODO: Implementovať tile pozadie
+  
+  if (!mainScene || !tiles || tiles.length === 0) {
+    console.log('⚠️ PhaserCanvas: Žiadne tiles alebo scéna neexistuje')
+    return
+  }
+  
+  // Načítaj tile textúry a prekresli grid
+  const tileKey = 'background_tile_0'
+  
+  // Ak už existuje stará textúra, odstrániť
+  if (mainScene.textures.exists(tileKey)) {
+    mainScene.textures.remove(tileKey)
+  }
+  
+  // Načítame prvý tile ako textúru
+  mainScene.load.image(tileKey, tiles[0])
+  mainScene.load.once('complete', () => {
+    console.log('✅ Tile textúra načítaná, prekresľujem grid s textúrou')
+    mainScene.backgroundTileKey = tileKey
+    mainScene.drawGridWithTexture()
+  })
+  mainScene.load.start()
 }
 
 // Funkcia na náhodné rozmiestnenie prvkov
