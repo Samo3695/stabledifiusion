@@ -391,7 +391,7 @@ class IsoScene extends Phaser.Scene {
   }
 
   // Pridanie obrázka s tieňom
-  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false) {
+  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '') {
     const textureKey = `building_${key}`
     
     // Načítame obrázok ako textúru
@@ -422,13 +422,22 @@ class IsoScene extends Phaser.Scene {
       buildingSprite.setOrigin(0.5, 1) // Spodný stred
       
       // Uložíme info o tieni pre renderovanie
+      // Fixný offset založený na veľkosti bunky, nie na rozmeroch obrázka
+      const baseShadowOffset = TILE_WIDTH * cellsX * 0.4
+      
+      // Zistíme či je to tree šablóna z názvu šablóny
+      const isTreeTemplate = templateName.toLowerCase().includes('tree')
+      console.log('🌳 isTree:', isTreeTemplate, 'templateName:', templateName)
+      
       const shadowInfo = {
         textureKey,
         x: x + offsetX,
         y: y + TILE_HEIGHT + offsetY,
         scale,
-        offsetX: -buildingSprite.displayHeight * 0.4,
-        offsetY: buildingSprite.displayHeight * 0.15
+        cellsX, // Veľkosť pre výber správneho offsetu
+        isTree: isTreeTemplate, // Špeciálny flag pre stromy
+        offsetX: -baseShadowOffset,
+        offsetY: baseShadowOffset * 0.375
       }
       
       // Pridáme do kontajnerov
@@ -480,15 +489,51 @@ class IsoScene extends Phaser.Scene {
         key: shadowInfo.textureKey,
         add: false
       })
-      tempSprite.setScale(shadowInfo.scale * 0.45, shadowInfo.scale * 1.3)
-      tempSprite.setOrigin(-0.42, 0.5)
-      tempSprite.setAngle(-90) // Otočené o 40° proti smeru hodinových ručičiek (pôvodne -10)
+      
+      // Získame rozmery textúry
+      const texture = this.textures.get(shadowInfo.textureKey)
+      const frame = texture.get()
+      
+      // Nastavíme scale pre tieň
+      const shadowScaleX = shadowInfo.scale * 0.45
+      const shadowScaleY = shadowInfo.scale * 1.3
+      
+      tempSprite.setScale(shadowScaleX, shadowScaleY)
+      // Origin na spodný stred - rovnaký ako budova
+      tempSprite.setOrigin(0.5, 1)
+      tempSprite.setAngle(-90)
       tempSprite.setTint(0x000000)
-      // Dôležité: alpha je 1 tu, celková alpha sa nastavuje na RenderTexture
       tempSprite.setAlpha(1)
       
+      // Po rotácii o -90° sa výška obrázka stane šírkou tieňa
+      // Kompenzujeme pozíciu tak, aby tieň bol vždy rovnako ďaleko od spodku budovy
+      // Výška obrázka * scale určuje, ako ďaleko je stred obrázka od spodku
+      const imageHeight = frame.height * shadowInfo.scale
+      
+      // Offset tieňa pre rôzne veľkosti - dolaď tieto hodnoty
+      const shadowOffsets = {
+        '1x1': { x: 44, y: -23 },
+        '2x2': { x: 89 , y: -45 },
+        '3x3': { x: 138, y: -68 },
+        '4x4': { x: 180, y: -89 },
+        '5x5': { x: 219, y: -112 },
+        // Špeciálne offsety pre stromy (tree šablóna)
+        'tree1x1': { x: 26, y: -11 },
+        'tree2x2': { x: 89, y: -45 },
+        'tree3x3': { x: 138, y: -68 }
+      }
+      
+      // Získame veľkosť z shadowInfo (zatiaľ len cellsX, predpokladáme štvorcové)
+      const cellsX = shadowInfo.cellsX || 1
+      const isTree = shadowInfo.isTree || false
+      const sizeKey = isTree ? `tree${cellsX}x${cellsX}` : `${cellsX}x${cellsX}`
+      const offsets = shadowOffsets[sizeKey] || shadowOffsets[`${cellsX}x${cellsX}`] || shadowOffsets['1x1']
+      
+      const fixedOffsetX = offsets.x
+      const fixedOffsetY = offsets.y
+      
       // Nakreslíme do RenderTexture
-      this.shadowRenderTexture.draw(tempSprite, drawX, drawY)
+      this.shadowRenderTexture.draw(tempSprite, drawX + fixedOffsetX, drawY + fixedOffsetY)
       
       tempSprite.destroy()
     }
@@ -534,8 +579,9 @@ class IsoScene extends Phaser.Scene {
 }
 
 // Funkcia na vloženie obrázka
-const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false) => {
+const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false, templateName = '') => {
   console.log('🖼️ PhaserCanvas.placeImageAtSelectedCell()')
+  console.log('   templateName:', templateName)
   
   if (!mainScene || mainScene.selectedCell.row === -1) {
     console.log('❌ Žiadne políčko nie je vybrané')
@@ -551,11 +597,12 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false
     url: imageUrl,
     cellsX,
     cellsY,
-    isBackground
+    isBackground,
+    templateName
   }
   
   // Pridaj budovu s tieňom
-  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground)
+  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName)
   
   // Vyčisti výber
   mainScene.clearSelection()

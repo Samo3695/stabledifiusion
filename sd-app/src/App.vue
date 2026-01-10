@@ -40,7 +40,8 @@ const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
     console.log('🎯 App.vue: Volám placeImageAtSelectedCell()')
     console.log('   URL:', image.url.substring(0, 50) + '...')
     console.log('   isBackground:', image.isBackground || false)
-    const result = canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image.isBackground || false)
+    console.log('   templateName:', image.templateName || '')
+    const result = canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image.isBackground || false, image.templateName || '')
     console.log('   Výsledok vloženia:', result ? 'ÚSPECH' : 'ZLYHALO')
   } else {
     console.log('⚠️ App.vue: Nevkladám obrázok - políčko nie je vybrané alebo canvas neexistuje')
@@ -129,7 +130,8 @@ const handleCellSelected = ({ row, col }) => {
       // Vždy použij aktuálnu veľkosť z grid size tabs (lastImageCellsX/Y)
       console.log(`   Aktuálna veľkosť z grid tabs: ${lastImageCellsX.value}x${lastImageCellsY.value}`)
       console.log(`   isBackground: ${selectedImage.isBackground || false}`)
-      canvasRef.value.placeImageAtSelectedCell(selectedImage.url, lastImageCellsX.value, lastImageCellsY.value, selectedImage.isBackground || false)
+      console.log(`   templateName: ${selectedImage.templateName || ''}`)
+      canvasRef.value.placeImageAtSelectedCell(selectedImage.url, lastImageCellsX.value, lastImageCellsY.value, selectedImage.isBackground || false, selectedImage.templateName || '')
       return
     }
   }

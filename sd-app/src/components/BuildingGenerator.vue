@@ -201,6 +201,7 @@ const generateImage = async () => {
       negativePrompt: negativePrompt.value,
       timestamp: new Date(),
       isBackground: isBackgroundTemplate, // Flag pre ignorovanie kolízie
+      templateName: currentTemplateName.value, // Názov šablóny pre tieň
     }
 
     // Ulož posledný vygenerovaný obrázok
