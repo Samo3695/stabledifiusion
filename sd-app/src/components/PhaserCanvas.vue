@@ -519,8 +519,10 @@ class IsoScene extends Phaser.Scene {
         '5x5': { x: 219, y: -112 },
         // Špeciálne offsety pre stromy (tree šablóna)
         'tree1x1': { x: 26, y: -11 },
-        'tree2x2': { x: 89, y: -45 },
-        'tree3x3': { x: 138, y: -68 }
+        'tree2x2': { x: 44, y: -19 },
+        'tree3x3': { x: 75, y: -32 },
+        'tree4x4': { x: 100, y: -45 },
+        'tree5x5': { x: 125, y: -58 }
       }
       
       // Získame veľkosť z shadowInfo (zatiaľ len cellsX, predpokladáme štvorcové)
