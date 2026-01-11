@@ -6,7 +6,8 @@ const emit = defineEmits(['template-selected', 'tab-changed'])
 const activeTemplateTab = ref('1size')
 const templateImages = ref({
   '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'halfsphere.png', 'hole.png', 'ihlan1.png', 'kuzel.png', 'smallvalec.png', 'sphere.png', 'tree.png', 'tree2.png', 'valec.png', 'valec2.png', 'valec3.png', 'valec4.png'],
-  '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png']
+  '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png'],
+  'roads': ['cross.png', 'left-right.png', 'left-top.png', 'left.png', 'right-left.png', 'right-top.png', 'right.png']
 })
 const selectedTemplate = ref(null)
 
@@ -31,8 +32,18 @@ onMounted(() => {
   emitTabSize(activeTemplateTab.value)
 })
 
+// Mapovanie tabov na priečinky
+const getTemplateFolder = (tab) => {
+  const folderMap = {
+    '1size': 'all',
+    '2size': 'cubes2',
+    'roads': 'roads/flat'
+  }
+  return folderMap[tab] || 'all'
+}
+
 const selectTemplate = (template) => {
-  const folder = activeTemplateTab.value === '1size' ? 'all' : 'cubes2'
+  const folder = getTemplateFolder(activeTemplateTab.value)
   const templatePath = `/templates/${folder}/${template}`
   
   selectedTemplate.value = template
@@ -42,6 +53,7 @@ const selectTemplate = (template) => {
   const currentCellsY = activeTemplateTab.value === '2size' ? 2 : 1
   
   console.log(`📐 TemplateSelector: Vybraná šablóna "${template}" v tabe "${activeTemplateTab.value}"`)
+  console.log(`   Priečinok: ${folder}`)
   console.log(`   Políčka: ${currentCellsX}x${currentCellsY}`)
   
   // Načítaj šablónu ako blob a zisti jej rozmery
@@ -113,6 +125,14 @@ const selectTemplate = (template) => {
       >
         2size
       </button>
+      <button 
+        @click="activeTemplateTab = 'roads'" 
+        :class="{ active: activeTemplateTab === 'roads' }"
+        class="tab-btn"
+        type="button"
+      >
+        🛣️ Roads
+      </button>
     </div>
     
     <!-- Galéria šablón -->
@@ -125,7 +145,7 @@ const selectTemplate = (template) => {
         class="template-item"
       >
         <img 
-          :src="`/templates/${activeTemplateTab === '1size' ? 'all' : 'cubes2'}/${template}`" 
+          :src="`/templates/${getTemplateFolder(activeTemplateTab)}/${template}`" 
           :alt="template"
         />
       </div>

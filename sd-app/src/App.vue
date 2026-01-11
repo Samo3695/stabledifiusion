@@ -11,6 +11,7 @@ const images = ref([])
 const lastImageCellsX = ref(1)
 const lastImageCellsY = ref(1)
 const selectedImageId = ref(null)
+const selectedImageData = ref(null) // Celý objekt vybraného obrázka (aj road tiles)
 const templateSelected = ref(false)
 const selectedCell = ref({ row: -1, col: -1 })
 const canvasRef = ref(null)
@@ -56,8 +57,10 @@ const handleDelete = (id) => {
   }
 }
 
-const handleSelectImage = (id) => {
+const handleSelectImage = ({ id, imageData }) => {
   selectedImageId.value = id
+  selectedImageData.value = imageData
+  console.log(`🖼️ App.vue: Vybraný obrázok ID: ${id}`, imageData ? '(s dátami)' : '(bez dát)')
 }
 
 const handleGridSizeChanged = ({ cellsX, cellsY }) => {
@@ -124,14 +127,32 @@ const handleCellSelected = ({ row, col }) => {
   
   // Ak je vybraný obrázok z galérie, vlož ho na toto políčko
   if (selectedImageId.value && canvasRef.value) {
-    const selectedImage = images.value.find(img => img.id === selectedImageId.value)
+    // Najprv skús nájsť v images, potom použi selectedImageData (pre road tiles)
+    let selectedImage = images.value.find(img => img.id === selectedImageId.value)
+    
+    if (!selectedImage && selectedImageData.value) {
+      selectedImage = selectedImageData.value
+    }
+    
     if (selectedImage) {
       console.log(`🖼️ App.vue: Vkladám vybraný obrázok z galérie (${selectedImageId.value})`)
       // Vždy použij aktuálnu veľkosť z grid size tabs (lastImageCellsX/Y)
       console.log(`   Aktuálna veľkosť z grid tabs: ${lastImageCellsX.value}x${lastImageCellsY.value}`)
       console.log(`   isBackground: ${selectedImage.isBackground || false}`)
       console.log(`   templateName: ${selectedImage.templateName || ''}`)
-      canvasRef.value.placeImageAtSelectedCell(selectedImage.url, lastImageCellsX.value, lastImageCellsY.value, selectedImage.isBackground || false, selectedImage.templateName || '')
+      
+      // Zisti či je to road tile (ID začína na "road_tile_")
+      const isRoadTile = selectedImageId.value.startsWith('road_tile_')
+      console.log(`   isRoadTile: ${isRoadTile}`)
+      
+      canvasRef.value.placeImageAtSelectedCell(
+        selectedImage.url, 
+        lastImageCellsX.value, 
+        lastImageCellsY.value, 
+        selectedImage.isBackground || false, 
+        selectedImage.templateName || '',
+        isRoadTile
+      )
       return
     }
   }
@@ -465,7 +486,7 @@ header h1 {
   bottom: 0;
   left: 0;
   right: 230px;
-  height: 125px;
+  height: 480px;
   z-index: 10;
   overflow-x: auto;
   overflow-y: hidden;

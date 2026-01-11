@@ -539,7 +539,7 @@ class IsoScene extends Phaser.Scene {
   }
 
   // Pridanie obrázka s tieňom
-  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '') {
+  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false) {
     const textureKey = `building_${key}`
     
     // Načítame obrázok ako textúru
@@ -560,7 +560,43 @@ class IsoScene extends Phaser.Scene {
         offsetY = TILE_HEIGHT * (cellsX - 1)
       }
       
-      // Vytvoríme sprite pre budovu
+      // Pre road tiles - iné umiestnenie (priamo na políčko)
+      if (isRoadTile) {
+        // Vytvoríme sprite pre road tile
+        const roadSprite = this.add.sprite(x, y + TILE_HEIGHT / 2, textureKey)
+        
+        // Nechaj pôvodnú veľkosť - len vycentruj
+        roadSprite.setOrigin(0.5, 0.5) // Stred
+        
+        // Vytvor izometrickú masku pre políčko
+        const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false })
+        maskGraphics.fillStyle(0xffffff)
+        
+        // Izometrický diamant pre masku
+        const maskX = x
+        const maskY = y + TILE_HEIGHT / 2
+        maskGraphics.beginPath()
+        maskGraphics.moveTo(maskX, maskY - TILE_HEIGHT / 2) // Hore
+        maskGraphics.lineTo(maskX + TILE_WIDTH / 2, maskY) // Vpravo
+        maskGraphics.lineTo(maskX, maskY + TILE_HEIGHT / 2) // Dole
+        maskGraphics.lineTo(maskX - TILE_WIDTH / 2, maskY) // Vľavo
+        maskGraphics.closePath()
+        maskGraphics.fillPath()
+        
+        // Aplikuj masku
+        const mask = maskGraphics.createGeometryMask()
+        roadSprite.setMask(mask)
+        
+        // Uložíme referencie
+        this.buildingSprites[key] = roadSprite
+        this.shadowSprites[key] = null // Road tiles nemajú tieň
+        
+        // Zoradíme budovy podľa depth (row + col)
+        this.sortBuildings()
+        return
+      }
+      
+      // Vytvoríme sprite pre budovu (normálny flow)
       const buildingSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
       
       // Nastavíme veľkosť - zmenšená pre správne rozmery
@@ -743,9 +779,10 @@ class IsoScene extends Phaser.Scene {
 }
 
 // Funkcia na vloženie obrázka
-const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false, templateName = '') => {
+const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false) => {
   console.log('🖼️ PhaserCanvas.placeImageAtSelectedCell()')
   console.log('   templateName:', templateName)
+  console.log('   isRoadTile:', isRoadTile)
   
   if (!mainScene || mainScene.selectedCell.row === -1) {
     console.log('❌ Žiadne políčko nie je vybrané')
@@ -762,11 +799,12 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false
     cellsX,
     cellsY,
     isBackground,
-    templateName
+    templateName,
+    isRoadTile
   }
   
   // Pridaj budovu s tieňom
-  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName)
+  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName, isRoadTile)
   
   // Vyčisti výber
   mainScene.clearSelection()
