@@ -10,53 +10,98 @@ const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-chang
 
 const selectedImage = ref(null)
 const selectedGridSize = ref(1) // 1, 4, 9, 16, 25, alebo -1 pre režim mazania
-const activeGalleryTab = ref('gallery') // 'gallery' alebo 'roads'
+const activeGalleryTab = ref('roads') // 'gallery' alebo 'roads'
 const roadTiles = ref([]) // Vyrezané road tiles zo sprite
 
-// Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky)
+// Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
 const loadRoadSprite = async () => {
   const spritePath = '/templates/roads/sprites/presentroad.png'
   const img = new Image()
   img.crossOrigin = 'anonymous'
   
   img.onload = () => {
-    const cols = 4
-    const rows = 3
-    const tileWidth = img.width / cols
-    const tileHeight = img.height / rows
-    
-    const tiles = []
-    const tileNames = [
-      'Rovná ↔', 'Rovná ↕', 'Roh ↙', 'Roh ↘',
-      'Roh ↗', 'Roh ↖', 'T ↓', 'T ↑',
-      'T →', 'T ←', 'Križovatka +', 'Koniec'
+    // ═══════════════════════════════════════════════════════════════════
+    // MANUÁLNA DEFINÍCIA POZÍCIÍ ROAD TILES V SPRITE (presentroad.png)
+    // 
+    // Každý tile má vlastné súradnice:
+    //   x, y     = pozícia ľavého horného rohu v sprite (v pixeloch)
+    //   width    = šírka výrezu v sprite (v pixeloch)
+    //   height   = výška výrezu v sprite (v pixeloch)
+    //   name     = názov tile pre zobrazenie v galérii
+    //
+    // Cieľová veľkosť po vyrezaní: 64×32 px (izometrické políčko)
+    // ═══════════════════════════════════════════════════════════════════
+    const tileDefinitions = [
+      // { name: 'Názov', x: 0, y: 0, width: 100, height: 50 },
+      
+      // Rovné cesty
+      { name: 'Rovná ↔', x: 0, y: 0, width: 256, height: 128 },
+      { name: 'Rovná ↕', x: 296, y: 10, width: 150, height: 120 },
+      
+      // Rohy
+      { name: 'Roh ↙', x: 0, y: 128, width: 256, height: 128 },
+      { name: 'Roh ↘', x: 256, y: 128, width: 256, height: 128 },
+      { name: 'Roh ↗', x: 572, y: 143, width: 205, height: 105 }, //nastavené ručne
+      { name: 'Roh ↖', x: 768, y: 128, width: 256, height: 128 },
+      
+      // T-križovatky
+      { name: 'T ↓', x: 0, y: 256, width: 256, height: 128 },
+      { name: 'T ↑', x: 256, y: 256, width: 256, height: 128 },
+      { name: 'T →', x: 512, y: 256, width: 205, height: 105 },
+      { name: 'T ←', x: 768, y: 256, width: 256, height: 128 },
+      
+      // Križovatka a koniec
+      { name: 'Križovatka +', x: 449, y: 206, width: 205, height: 105 },
+      { name: 'Koniec', x: 768, y: 384, width: 256, height: 128 },
     ]
     
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const canvas = document.createElement('canvas')
-        canvas.width = tileWidth
-        canvas.height = tileHeight
-        const ctx = canvas.getContext('2d')
-        
-        ctx.drawImage(
-          img,
-          col * tileWidth, row * tileHeight, tileWidth, tileHeight,
-          0, 0, tileWidth, tileHeight
-        )
-        
-        const index = row * cols + col
-        tiles.push({
-          id: `road_tile_${index}`,
-          url: canvas.toDataURL('image/png'),
-          name: tileNames[index] || `Tile ${index + 1}`,
-          index: index
-        })
-      }
+    // Cieľová veľkosť políčka (rovnaká ako v PhaserCanvas)
+    // Zväčši tieto hodnoty pre väčšie priblíženie v galérii
+    const TILE_WIDTH = 128
+    const TILE_HEIGHT = 64
+    
+    const tiles = []
+    
+    for (let i = 0; i < tileDefinitions.length; i++) {
+      const def = tileDefinitions[i]
+      
+      // Vytvor canvas s veľkosťou políčka
+      const canvas = document.createElement('canvas')
+      canvas.width = TILE_WIDTH
+      canvas.height = TILE_HEIGHT
+      const ctx = canvas.getContext('2d')
+      
+      // Škáluj obrázok aby šírka zodpovedala TILE_WIDTH
+      const scale = TILE_WIDTH / def.width
+      const scaledHeight = def.height * scale
+      
+      // Najprv vytvor izometrickú masku (diamant)
+      ctx.beginPath()
+      ctx.moveTo(TILE_WIDTH / 2, 0) // Hore
+      ctx.lineTo(TILE_WIDTH, TILE_HEIGHT / 2) // Vpravo
+      ctx.lineTo(TILE_WIDTH / 2, TILE_HEIGHT) // Dole
+      ctx.lineTo(0, TILE_HEIGHT / 2) // Vľavo
+      ctx.closePath()
+      ctx.clip() // Aplikuj masku
+      
+      // Potom nakresli tile (vycentrovaný a škálovaný)
+      const offsetY = (TILE_HEIGHT - scaledHeight) / 2
+      ctx.drawImage(
+        img,
+        def.x, def.y, def.width, def.height,  // Zdrojová oblasť v sprite
+        0, offsetY, TILE_WIDTH, scaledHeight   // Cieľová oblasť na canvas
+      )
+      
+      tiles.push({
+        id: `road_tile_${i}`,
+        url: canvas.toDataURL('image/png'),
+        name: def.name,
+        index: i
+      })
     }
     
     roadTiles.value = tiles
-    console.log(`🛣️ Načítaných ${tiles.length} road tiles zo sprite`)
+    console.log(`🛣️ Načítaných ${tiles.length} road tiles zo sprite (manuálne pozície)`)
   }
   
   img.onerror = () => {

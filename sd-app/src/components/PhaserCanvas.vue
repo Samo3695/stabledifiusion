@@ -565,7 +565,10 @@ class IsoScene extends Phaser.Scene {
         // Vytvoríme sprite pre road tile
         const roadSprite = this.add.sprite(x, y + TILE_HEIGHT / 2, textureKey)
         
-        // Nechaj pôvodnú veľkosť - len vycentruj
+        // Škáluj obrázok aby jeho šírka zodpovedala šírke políčka
+        // Sprite tile má pomer 2:1 (šírka:výška) pre izometriu
+        const scale = TILE_WIDTH / roadSprite.width
+        roadSprite.setScale(scale)
         roadSprite.setOrigin(0.5, 0.5) // Stred
         
         // Vytvor izometrickú masku pre políčko
