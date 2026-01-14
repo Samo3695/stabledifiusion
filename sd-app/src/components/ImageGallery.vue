@@ -15,7 +15,7 @@ const roadTiles = ref([]) // Vyrezané road tiles zo sprite
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
 const loadRoadSprite = async () => {
-  const spritePath = '/templates/roads/sprites/presentroad.png'
+  const spritePath = '/templates/roads/sprites/pastroad.png'
   const img = new Image()
   img.crossOrigin = 'anonymous'
   
@@ -34,25 +34,24 @@ const loadRoadSprite = async () => {
     const tileDefinitions = [
       // { name: 'Názov', x: 0, y: 0, width: 100, height: 50 },
       
-      // Rovné cesty
-      { name: 'Rovná ↔', x: 0, y: 0, width: 256, height: 128 },
-      { name: 'Rovná ↕', x: 296, y: 10, width: 150, height: 120 },
+    { name: 'Rovná ↘', x: 570, y: 266, width: 205, height: 105, rotation: 2 },
+      { name: 'Rovná ↙', x: 20, y: 152, width: 205, height: 105, rotation: 0 },
       
       // Rohy
-      { name: 'Roh ↙', x: 0, y: 128, width: 256, height: 128 },
-      { name: 'Roh ↘', x: 256, y: 128, width: 256, height: 128 },
-      { name: 'Roh ↗', x: 572, y: 143, width: 205, height: 105 }, //nastavené ručne
-      { name: 'Roh ↖', x: 768, y: 128, width: 256, height: 128 },
+      { name: 'Roh ↙', x: 439, y: 78, width: 205, height: 105, rotation: 0 },
+      { name: 'Roh ↘', x: 727, y: 342, width: 205, height: 105, rotation: 0 },
+      { name: 'Roh ↗', x: 438, y: 75, width: 205, height: 105, rotation: 0  }, //nastavené ručne
+      { name: 'Roh ↖', x: 768, y: 128, width: 256, height: 128, rotation: 0 },
       
       // T-križovatky
-      { name: 'T ↓', x: 0, y: 256, width: 256, height: 128 },
-      { name: 'T ↑', x: 256, y: 256, width: 256, height: 128 },
-      { name: 'T →', x: 512, y: 256, width: 205, height: 105 },
-      { name: 'T ←', x: 768, y: 256, width: 256, height: 128 },
+      { name: 'T ↖', x: 576, y: 146, width: 205, height: 105, rotation: 0 },
+      { name: 'T ↘', x: 176, y: 73, width: 205, height: 105, rotation: 0 },
+      { name: 'T ↗', x: 313, y: 141, width: 205, height: 105, rotation: 1 },
+      { name: 'T ↙', x: 726, y: 74, width: 205, height: 105, rotation: 0 },
       
       // Križovatka a koniec
-      { name: 'Križovatka +', x: 449, y: 206, width: 205, height: 105 },
-      { name: 'Koniec', x: 768, y: 384, width: 256, height: 128 },
+      { name: 'Križovatka +', x: 449, y: 206, width: 205, height: 105, rotation: 0 }, //vyladane super
+      { name: 'Koniec', x: 768, y: 384, width: 256, height: 128, rotation: 0 },
     ]
     
     // Cieľová veľkosť políčka (rovnaká ako v PhaserCanvas)

@@ -571,6 +571,10 @@ class IsoScene extends Phaser.Scene {
         roadSprite.setScale(scale)
         roadSprite.setOrigin(0.5, 0.5) // Stred
         
+        // Road tiles musia byť pod tieňmi (depth 1), ale nad mriežkou (depth 0)
+        // Použijeme depth 0.5 aby tiene padali na road tiles
+        roadSprite.setDepth(0.5)
+        
         // Vytvor izometrickú masku pre políčko
         const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false })
         maskGraphics.fillStyle(0xffffff)
@@ -590,12 +594,11 @@ class IsoScene extends Phaser.Scene {
         const mask = maskGraphics.createGeometryMask()
         roadSprite.setMask(mask)
         
-        // Uložíme referencie
+        // Uložíme referencie - road tiles nemajú vlastný tieň a neriadia sa sortBuildings
         this.buildingSprites[key] = roadSprite
         this.shadowSprites[key] = null // Road tiles nemajú tieň
         
-        // Zoradíme budovy podľa depth (row + col)
-        this.sortBuildings()
+        // NEZAVOLAJ sortBuildings() pre road tiles - už majú fixný depth
         return
       }
       
@@ -738,6 +741,11 @@ class IsoScene extends Phaser.Scene {
       const imageData = cellImages[key]
       const cellsX = imageData?.cellsX || 1
       const cellsY = imageData?.cellsY || 1
+      
+      // Preskočíme road tiles - tie majú fixný depth 0.5
+      if (imageData?.isRoadTile) {
+        continue
+      }
       
       // Spodný roh budovy je na row + cellsX - 1, col + cellsY - 1
       const bottomRow = row + cellsX - 1
