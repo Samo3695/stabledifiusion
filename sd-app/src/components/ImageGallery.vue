@@ -34,14 +34,14 @@ const loadRoadSprite = async () => {
     const tileDefinitions = [
       // { name: 'Názov', x: 0, y: 0, width: 100, height: 50 },
       
-    { name: 'Rovná ↘', x: 570, y: 266, width: 205, height: 105, rotation: 2 },
+      { name: 'Rovná ↘', x: 570, y: 266, width: 205, height: 105, rotation: 10 },
       { name: 'Rovná ↙', x: 20, y: 152, width: 205, height: 105, rotation: 0 },
       
       // Rohy
-      { name: 'Roh ↙', x: 439, y: 78, width: 205, height: 105, rotation: 0 },
+      { name: 'Roh ↙', x: 580, y: 413, width: 205, height: 105, rotation: 0},
       { name: 'Roh ↘', x: 727, y: 342, width: 205, height: 105, rotation: 0 },
-      { name: 'Roh ↗', x: 438, y: 75, width: 205, height: 105, rotation: 0  }, //nastavené ručne
-      { name: 'Roh ↖', x: 768, y: 128, width: 256, height: 128, rotation: 0 },
+      { name: 'Roh ↗', x: 437, y: 78, width: 205, height: 105, rotation: 0  }, //nastavené ručne
+      { name: 'Roh ↖', x: 309, y: 275, width: 205, height: 105, rotation: 0  },
       
       // T-križovatky
       { name: 'T ↖', x: 576, y: 146, width: 205, height: 105, rotation: 0 },
@@ -725,7 +725,7 @@ h2 {
 
 /* Roads grid */
 .roads-grid {
-  display: grid;
+  display: flex;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   padding: 0.5rem;

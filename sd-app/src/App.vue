@@ -486,7 +486,7 @@ header h1 {
   bottom: 0;
   left: 0;
   right: 230px;
-  height: 480px;
+  height: 210px;
   z-index: 10;
   overflow-x: auto;
   overflow-y: hidden;
