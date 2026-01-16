@@ -26,13 +26,45 @@ function detectDirection(cell1, cell2) {
  * @param {string} direction - 'horizontal' alebo 'vertical'
  * @returns {Object|null} Tile objekt alebo null
  */
-function selectTileByDirection(roadTiles, direction) {
-  if (direction === 'vertical') {
+function selectTileByDirection(roadTiles, direction, topLeft, topRight, bottomLeft, bottomRight) {
+  if (topLeft && bottomLeft && topRight && bottomRight) {
+    return roadTiles.find(t => t.name === 'Križovatka +')
+  }
+  if (!topLeft && !bottomRight && bottomLeft && topRight) {
     return roadTiles.find(t => t.name === 'Rovná ↙')
   }
+  if (topLeft && bottomRight && !bottomLeft && !topRight) {
+    return roadTiles.find(t => t.name === 'Rovná ↘')
+  }
+  if (topLeft && !bottomRight && !bottomLeft && topRight) {
+    return roadTiles.find(t => t.name === 'Roh ↙')
+  }
+  if (topLeft && !bottomRight && bottomLeft && !topRight) {
+    return roadTiles.find(t => t.name === 'Roh ↘')
+  }
+  if (!topLeft && bottomRight && !bottomLeft && topRight) {
+    return roadTiles.find(t => t.name === 'Roh ↖')
+  }
+  if (!topLeft && bottomRight && bottomLeft && !topRight) {
+    return roadTiles.find(t => t.name === 'Roh ↗')
+  }
+  if (topLeft && !bottomRight && bottomLeft && topRight) {
+    return roadTiles.find(t => t.name === 'T ↖')
+  }
+  if (!topLeft && bottomRight && bottomLeft && topRight) {
+    return roadTiles.find(t => t.name === 'T ↘')
+  }
+  if (topLeft && bottomRight && !bottomLeft && topRight) {
+    return roadTiles.find(t => t.name === 'T ↗')
+  }
+  if (topLeft && bottomRight && bottomLeft && !topRight) {
+    return roadTiles.find(t => t.name === 'T ↙')
+  }
   // horizontal alebo default
-  return roadTiles.find(t => t.name === 'Rovná ↘')
+  return direction === 'vertical' ? roadTiles.find(t => t.name === 'Rovná ↙'): roadTiles.find(t => t.name === 'Rovná ↘');
 }
+
+
 
 /**
  * Postaví cestu na canvas
@@ -68,12 +100,40 @@ export function buildRoad(canvas, roadTiles, path) {
       // Pre prvú bunku porovnaj s nasledujúcou
       direction = detectDirection(cell, path[i + 1])
     }
+
+    // Získaj existujúce obrázky z canvas
+    const existingImages = canvas.cellImages ? canvas.cellImages() : {}
+    // Kontrola susedných buniek - v aktuálnej ceste AJ na canvas
+    const checkNeighbor = (row, col) => {
+      // Kontrola v aktuálnej ceste
+      const inPath = path.some(p => p.row === row && p.col === col)
+      // Kontrola existujúcich obrázkov na canvas
+      const onCanvas = existingImages[`${row}-${col}`] !== undefined
+      const all = inPath || onCanvas
+      return { inPath, onCanvas, hasRoad: inPath || onCanvas, all }
+    }
+    
+    const neighbors = {
+      topright: checkNeighbor(cell.row - 1, cell.col),
+      bottomleft: checkNeighbor(cell.row + 1, cell.col),
+      topleft: checkNeighbor(cell.row, cell.col - 1),
+      bottomright: checkNeighbor(cell.row, cell.col + 1)
+    }
+    /*
+    console.warn(`🔢 Tile č. ${i} [${cell.row},${cell.col}] | Susedné cesty:`)
+    console.warn(`   ↗ topright: inPath=${neighbors.topright.inPath}, onCanvas=${neighbors.topright.onCanvas}, all=${neighbors.topright.all}`)
+    console.warn(`   ↙ bottomleft: inPath=${neighbors.bottomleft.inPath}, onCanvas=${neighbors.bottomleft.onCanvas}, all=${neighbors.bottomleft.all}`)
+    console.warn(`   ↖ topleft: inPath=${neighbors.topleft.inPath}, onCanvas=${neighbors.topleft.onCanvas}, all=${neighbors.topleft.all}`)
+    console.warn(`   ↘ bottomright: inPath=${neighbors.bottomright.inPath}, onCanvas=${neighbors.bottomright.onCanvas}, all=${neighbors.bottomright.all}`)
+    */
     
     // Vyber správny tile
-    const tile = selectTileByDirection(roadTiles, direction)
+    const tile = selectTileByDirection(roadTiles, direction, neighbors.topleft.all, neighbors.topright.all, neighbors.bottomleft.all, neighbors.bottomright.all)
     console.log(`➤ Umiestňujem tile pre smer "${direction}" na [${cell.row}, ${cell.col}]`)
     
-    //sem 
+
+    
+    
     if (!tile) {
       console.error(`❌ Tile pre smer "${direction}" nenájdený`)
       continue
