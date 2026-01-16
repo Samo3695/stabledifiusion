@@ -3,16 +3,19 @@ import { ref, watch, onMounted } from 'vue'
 
 const props = defineProps({
   images: Array,
-  selectedImageId: String
+  selectedImageId: String,
+  canvas: Object // Referencia na canvas pre regeneráciu road tiles
 })
 
-const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-changed', 'delete-mode-changed', 'road-building-mode-changed', 'road-tiles-ready'])
+const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-changed', 'delete-mode-changed', 'road-building-mode-changed', 'road-tiles-ready', 'road-opacity-changed'])
 
 const selectedImage = ref(null)
 const selectedGridSize = ref(1) // 1, 4, 9, 16, 25, alebo -1 pre režim mazania
 const activeGalleryTab = ref('roads') // 'gallery' alebo 'roads'
 const roadTiles = ref([]) // Vyrezané road tiles zo sprite
+const roadTilesOriginal = ref([]) // Originálne road tiles bez opacity zmeny
 const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber tiles
+const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
 const loadRoadSprite = async () => {
@@ -109,6 +112,7 @@ const loadRoadSprite = async () => {
     }
     
     roadTiles.value = tiles
+    roadTilesOriginal.value = JSON.parse(JSON.stringify(tiles)) // Ulož originály
     console.log(`🛣️ Načítaných ${tiles.length} road tiles zo sprite (manuálne pozície)`)
   }
   
@@ -141,6 +145,65 @@ watch(roadTiles, (tiles) => {
     }
   }
 }, { immediate: true })
+
+// Funkcia na regenerovanie road tiles s novou opacity
+const regenerateRoadTilesWithOpacity = async () => {
+  if (roadTilesOriginal.value.length === 0) {
+    console.warn('⚠️ Originálne tiles nie sú dostupné')
+    return
+  }
+  
+  const opacityValue = roadOpacity.value / 100 // Konvertuj na 0-1
+  const newTiles = []
+  
+  for (const originalTile of roadTilesOriginal.value) {
+    // Vytvor canvas z originálneho URL
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    
+    await new Promise((resolve, reject) => {
+      img.onload = async () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.width
+        canvas.height = img.height
+        const ctx = canvas.getContext('2d')
+        
+        // Nastav opacity a nakresli obrázok
+        ctx.globalAlpha = opacityValue
+        ctx.drawImage(img, 0, 0)
+        
+        let bitmap = null
+        try {
+          bitmap = await createImageBitmap(canvas)
+        } catch (e) {
+          console.warn('createImageBitmap zlyhalo, fallback na dataURL', e)
+        }
+        
+        newTiles.push({
+          ...originalTile,
+          url: canvas.toDataURL('image/png'),
+          bitmap,
+          opacity: roadOpacity.value
+        })
+        
+        resolve()
+      }
+      img.onerror = reject
+      img.src = originalTile.url
+    })
+  }
+  
+  roadTiles.value = newTiles
+  console.log(`🎨 Road tiles regenerované s opacity ${roadOpacity.value}%`)
+  
+  // Emitni event s novými tiles pre parent komponent aby regeneroval canvas
+  emit('road-opacity-changed', roadOpacity.value)
+}
+
+// Watch pre zmenu opacity
+watch(roadOpacity, async (newOpacity) => {
+  await regenerateRoadTilesWithOpacity()
+})
 
 // Funkcia na získanie road tile podľa smeru
 const getRoadTileByDirection = (direction) => {
@@ -294,6 +357,23 @@ const formatDate = (date) => {
     >
       🛣️ Roads
     </button>
+  </div>
+  
+  <!-- Opacity control for roads -->
+  <div v-if="activeGalleryTab === 'roads'" class="opacity-control">
+    <label for="road-opacity">Priehľadnosť (Opacity):</label>
+    <div class="opacity-input-group">
+      <input 
+        id="road-opacity"
+        v-model.number="roadOpacity" 
+        type="range" 
+        min="0" 
+        max="100" 
+        step="5"
+        class="opacity-slider"
+      />
+      <span class="opacity-value">{{ roadOpacity }}%</span>
+    </div>
   </div>
   
   <div class="gallery">
@@ -761,6 +841,72 @@ h2 {
 
 .btn-delete:hover {
   background: #fdd;
+}
+
+/* Opacity control */
+.opacity-control {
+  padding: 0.75rem;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.opacity-control label {
+  font-weight: 600;
+  color: #333;
+  margin: 0;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.opacity-input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  max-width: 300px;
+}
+
+.opacity-slider {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(to right, rgba(102, 126, 234, 0.2), rgba(102, 126, 234, 1));
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+  border: 2px solid white;
+}
+
+.opacity-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+  border: 2px solid white;
+}
+
+.opacity-value {
+  font-weight: 600;
+  color: #667eea;
+  min-width: 50px;
+  text-align: right;
+  font-size: 0.9rem;
 }
 
 /* Roads grid */

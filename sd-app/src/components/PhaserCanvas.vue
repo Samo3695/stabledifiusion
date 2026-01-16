@@ -1192,15 +1192,24 @@ defineExpose({
     })
     cellImages = {}
   },
-  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false) => {
+  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false, bitmap = null, tileName = '') => {
     const key = `${row}-${col}`
     // Najprv vymaž existujúci obrázok ak tam je
     if (cellImages[key]) {
       mainScene?.removeBuilding(key)
       delete cellImages[key]
     }
-    cellImages[key] = { url, cellsX, cellsY, isBackground, isRoadTile }
-    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, '', isRoadTile)
+    cellImages[key] = { 
+      url, 
+      cellsX, 
+      cellsY, 
+      isBackground, 
+      isRoadTile,
+      bitmap,
+      templateName: tileName,
+      tileMetadata: isRoadTile && tileName ? { name: tileName } : null
+    }
+    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap)
   },
   clearRoadBuilding: () => {
     mainScene?.clearRoadBuilding()

@@ -1,12 +1,12 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import BuildingGenerator from './components/BuildingGenerator.vue'
 import EnvironmentGenerator from './components/EnvironmentGenerator.vue'
 import CharacterGenerator from './components/CharacterGenerator.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
-import { buildRoad } from './utils/roadBuilder.js'
+import { buildRoad, regenerateRoadTilesOnCanvas } from './utils/roadBuilder.js'
 
 const images = ref([])
 const lastImageCellsX = ref(1)
@@ -90,6 +90,25 @@ const handleRoadBuildingModeChanged = (isRoadMode) => {
 const handleRoadTilesReady = (tiles) => {
   roadTiles.value = tiles
   console.log(`🛣️ App.vue: Road tiles načítané: ${tiles.length} tiles`)
+}
+
+// Watch pre zmenu roadTiles - keď sa zmení opacity, regeneruj canvas
+watch(roadTiles, (newTiles, oldTiles) => {
+  // Kontrola či sa zmenila opacity (nie len prvé načítanie)
+  if (oldTiles && oldTiles.length > 0 && newTiles.length > 0) {
+    const oldOpacity = oldTiles[0]?.opacity || 100
+    const newOpacity = newTiles[0]?.opacity || 100
+    
+    if (oldOpacity !== newOpacity && canvasRef.value) {
+      console.log(`🎨 App.vue: Detekovaná zmena opacity ${oldOpacity}% → ${newOpacity}%, regenerujem canvas`)
+      regenerateRoadTilesOnCanvas(canvasRef.value, newTiles)
+    }
+  }
+}, { deep: true })
+
+const handleRoadOpacityChanged = (newOpacity) => {
+  // Tento handler už nie je potrebný, watch na roadTiles to zvládne
+  console.log(`🎨 App.vue: Road opacity event prijatý: ${newOpacity}%`)
 }
 
 const handleRoadPlaced = ({ path }) => {
@@ -448,6 +467,7 @@ const handleLoadProject = (projectData) => {
         @delete-mode-changed="handleDeleteModeChanged"
         @road-building-mode-changed="handleRoadBuildingModeChanged"
         @road-tiles-ready="handleRoadTilesReady"
+        @road-opacity-changed="handleRoadOpacityChanged"
       />
     </div>
   </div>
