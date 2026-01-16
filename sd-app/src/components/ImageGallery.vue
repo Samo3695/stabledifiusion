@@ -6,12 +6,13 @@ const props = defineProps({
   selectedImageId: String
 })
 
-const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-changed', 'delete-mode-changed'])
+const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-changed', 'delete-mode-changed', 'road-building-mode-changed', 'road-tiles-ready'])
 
 const selectedImage = ref(null)
 const selectedGridSize = ref(1) // 1, 4, 9, 16, 25, alebo -1 pre režim mazania
 const activeGalleryTab = ref('roads') // 'gallery' alebo 'roads'
 const roadTiles = ref([]) // Vyrezané road tiles zo sprite
+const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber tiles
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
 const loadRoadSprite = async () => {
@@ -19,7 +20,7 @@ const loadRoadSprite = async () => {
   const img = new Image()
   img.crossOrigin = 'anonymous'
   
-  img.onload = () => {
+  img.onload = async () => {
     // ═══════════════════════════════════════════════════════════════════
     // MANUÁLNA DEFINÍCIA POZÍCIÍ ROAD TILES V SPRITE (presentroad.png)
     // 
@@ -40,8 +41,8 @@ const loadRoadSprite = async () => {
       // Rohy
       { name: 'Roh ↙', x: 580, y: 413, width: 205, height: 105, rotation: 0},
       { name: 'Roh ↘', x: 727, y: 342, width: 205, height: 105, rotation: 0 },
-      { name: 'Roh ↗', x: 437, y: 78, width: 205, height: 105, rotation: 0  }, //nastavené ručne
       { name: 'Roh ↖', x: 309, y: 275, width: 205, height: 105, rotation: 0  },
+      { name: 'Roh ↗', x: 437, y: 78, width: 205, height: 105, rotation: 0  }, //nastavené ručne
       
       // T-križovatky
       { name: 'T ↖', x: 576, y: 146, width: 205, height: 105, rotation: 0 },
@@ -91,9 +92,17 @@ const loadRoadSprite = async () => {
         0, offsetY, TILE_WIDTH, scaledHeight   // Cieľová oblasť na canvas
       )
       
+      let bitmap = null
+      try {
+        bitmap = await createImageBitmap(canvas)
+      } catch (e) {
+        console.warn('createImageBitmap zlyhalo, fallback na dataURL', e)
+      }
+      
       tiles.push({
         id: `road_tile_${i}`,
         url: canvas.toDataURL('image/png'),
+        bitmap, // pripravené na rýchle kreslenie
         name: def.name,
         index: i
       })
@@ -113,6 +122,37 @@ const loadRoadSprite = async () => {
 // Načítaj sprite pri štarte
 onMounted(() => {
   loadRoadSprite()
+})
+
+// Watch pre zmenu tabu - aktivuj road building mode keď je roads tab
+watch(activeGalleryTab, (newTab) => {
+  const isRoadTab = newTab === 'roads'
+  emit('road-building-mode-changed', isRoadTab && roadBuildingMode.value)
+  console.log(`🛣️ Road building mode: ${isRoadTab && roadBuildingMode.value ? 'AKTÍVNY' : 'NEAKTÍVNY'}`)
+})
+
+// Watch pre roadTiles - keď sú načítané, pošli ich do parent komponentu
+watch(roadTiles, (tiles) => {
+  if (tiles.length > 0) {
+    emit('road-tiles-ready', tiles)
+    // Aktivuj road building mode ak sme na roads tabe
+    if (activeGalleryTab.value === 'roads') {
+      emit('road-building-mode-changed', roadBuildingMode.value)
+    }
+  }
+}, { immediate: true })
+
+// Funkcia na získanie road tile podľa smeru
+const getRoadTileByDirection = (direction) => {
+  // direction: 'horizontal' (↘) alebo 'vertical' (↙)
+  const tileName = direction === 'horizontal' ? 'Rovná ↘' : 'Rovná ↙'
+  return roadTiles.value.find(t => t.name === tileName)
+}
+
+// Expose pre parent komponent
+defineExpose({
+  getRoadTileByDirection,
+  roadTiles
 })
 
 const copyToClipboard = async (text, label = 'text') => {

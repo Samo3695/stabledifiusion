@@ -32,10 +32,18 @@ const props = defineProps({
   deleteMode: {
     type: Boolean,
     default: false
+  },
+  roadBuildingMode: {
+    type: Boolean,
+    default: false
+  },
+  roadTiles: {
+    type: Array,
+    default: () => []
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed'])
 
 const gameContainer = ref(null)
 let game = null
@@ -70,6 +78,11 @@ class IsoScene extends Phaser.Scene {
     this.groundRenderTexture = null
     this.groundMask = null
     this.groundMaskGraphics = null
+    
+    // Road building mode
+    this.roadStartCell = null // Začiatočný bod cesty
+    this.roadPath = [] // Aktuálna cesta (pole bunk)
+    this.roadPathGraphics = null // Grafika pre preview cesty
   }
 
   preload() {
@@ -336,6 +349,29 @@ class IsoScene extends Phaser.Scene {
       this.hoverGraphics.destroy()
     }
     
+    // Pre road building mode zobraz hover aj keď ešte nekreslím
+    if (props.roadBuildingMode && this.hoveredCell.row !== -1) {
+      this.hoverGraphics = this.add.graphics()
+      this.uiContainer.add(this.hoverGraphics)
+      
+      const { x, y } = this.gridToIso(this.hoveredCell.row, this.hoveredCell.col)
+      
+      // Semi-transparent modrý hover pre road building
+      this.hoverGraphics.fillStyle(0x3b82f6, 0.4)
+      this.hoverGraphics.beginPath()
+      this.hoverGraphics.moveTo(x, y)
+      this.hoverGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.hoverGraphics.lineTo(x, y + TILE_HEIGHT)
+      this.hoverGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.hoverGraphics.closePath()
+      this.hoverGraphics.fillPath()
+      
+      this.hoverGraphics.lineStyle(2, 0x3b82f6, 0.8)
+      this.hoverGraphics.strokePath()
+      
+      return
+    }
+    
     const canInteract = props.templateSelected || props.deleteMode || props.selectedImageId
     if (!canInteract || this.hoveredCell.row === -1) return
     
@@ -448,13 +484,27 @@ class IsoScene extends Phaser.Scene {
       const existing = cellImages[key]
       if (existing.isBackground) continue
       
-      const [existingRow, existingCol] = key.split('-').map(Number)
-      const existingCells = this.getAffectedCells(existingRow, existingCol, existing.cellsX || 1, existing.cellsY || 1)
-        .map(c => `${c.row}-${c.col}`)
-      
-      for (const cell of newCells) {
-        if (existingCells.includes(cell)) {
-          return true
+      // Políčka s cestou (road tiles) sú vždy blokované na stavanie
+      if (existing.isRoadTile) {
+        const [existingRow, existingCol] = key.split('-').map(Number)
+        const existingCells = this.getAffectedCells(existingRow, existingCol, existing.cellsX || 1, existing.cellsY || 1)
+          .map(c => `${c.row}-${c.col}`)
+        
+        for (const cell of newCells) {
+          if (existingCells.includes(cell)) {
+            return true // Kolízia - político má cestu
+          }
+        }
+      } else {
+        // Normálne obrázky/budovy
+        const [existingRow, existingCol] = key.split('-').map(Number)
+        const existingCells = this.getAffectedCells(existingRow, existingCol, existing.cellsX || 1, existing.cellsY || 1)
+          .map(c => `${c.row}-${c.col}`)
+        
+        for (const cell of newCells) {
+          if (existingCells.includes(cell)) {
+            return true
+          }
         }
       }
     }
@@ -483,6 +533,12 @@ class IsoScene extends Phaser.Scene {
     if (cell.row >= 0 && cell.row < GRID_SIZE && cell.col >= 0 && cell.col < GRID_SIZE) {
       if (this.hoveredCell.row !== cell.row || this.hoveredCell.col !== cell.col) {
         this.hoveredCell = cell
+        
+        // Road building mode - aktualizuj cestu
+        if (props.roadBuildingMode && this.roadStartCell) {
+          this.updateRoadPath(cell)
+        }
+        
         this.drawHover()
       }
     } else {
@@ -490,6 +546,176 @@ class IsoScene extends Phaser.Scene {
         this.hoveredCell = { row: -1, col: -1 }
         this.drawHover()
       }
+    }
+  }
+  
+  // Vypočítaj cestu od štartu po aktuálnu bunku (len rovné čiary - vertikálne alebo horizontálne)
+  updateRoadPath(endCell) {
+    if (!this.roadStartCell) return
+    
+    const path = []
+    const startRow = this.roadStartCell.row
+    const startCol = this.roadStartCell.col
+    const endRow = endCell.row
+    const endCol = endCell.col
+    
+    // Zisti vzdialenosti v oboch smeroch
+    const rowDiff = Math.abs(endRow - startRow)
+    const colDiff = Math.abs(endCol - startCol)
+    
+    // 🛣️ Určíme orientáciu cesty podľa toho, kde je väčší posun
+    const isVertical = rowDiff >= colDiff
+    const direction = isVertical ? 'vertical' : 'horizontal'
+    const pathType = isVertical ? '📏 ROVNÁ ČIARA (vertikálne)' : '📏 ROVNÁ ČIARA (horizontálne)'
+    
+    console.log(`🛣️ ${pathType}: [${startRow}, ${startCol}] → [${endRow}, ${endCol}]`)
+    
+    if (isVertical) {
+      // Vertikálna cesta - mení sa row, col zostáva konštantný
+      const rowDirection = endRow > startRow ? 1 : (endRow < startRow ? -1 : 0)
+      if (rowDirection !== 0) {
+        for (let row = startRow; row !== endRow + rowDirection; row += rowDirection) {
+          path.push({ 
+            row: row, 
+            col: startCol, 
+            direction: 'vertical',
+            fromDir: null,
+            toDir: null
+          })
+        }
+      } else {
+        // Len jeden bod
+        path.push({ 
+          row: startRow, 
+          col: startCol, 
+          direction: 'vertical',
+          fromDir: null,
+          toDir: null
+        })
+      }
+    } else {
+      // Horizontálna cesta - mení sa col, row zostáva konštantný
+      const colDirection = endCol > startCol ? 1 : (endCol < startCol ? -1 : 0)
+      if (colDirection !== 0) {
+        for (let col = startCol; col !== endCol + colDirection; col += colDirection) {
+          path.push({ 
+            row: startRow, 
+            col: col, 
+            direction: 'horizontal',
+            fromDir: null,
+            toDir: null
+          })
+        }
+      } else {
+        // Len jeden bod
+        path.push({ 
+          row: startRow, 
+          col: startCol, 
+          direction: 'horizontal',
+          fromDir: null,
+          toDir: null
+        })
+      }
+    }
+    
+    // Určíme smery pre každý segment (pre rohy)
+    for (let i = 0; i < path.length; i++) {
+      const prev = path[i - 1]
+      const curr = path[i]
+      const next = path[i + 1]
+      
+      // Odkiaľ prichádza
+      if (prev) {
+        if (prev.row < curr.row) curr.fromDir = 'N' // z hora (nižší row)
+        else if (prev.row > curr.row) curr.fromDir = 'S' // z dola (vyšší row)
+        else if (prev.col < curr.col) curr.fromDir = 'W' // z ľava (nižší col)
+        else if (prev.col > curr.col) curr.fromDir = 'E' // z prava (vyšší col)
+      }
+      
+      // Kam odchádza
+      if (next) {
+        if (next.row < curr.row) curr.toDir = 'N'
+        else if (next.row > curr.row) curr.toDir = 'S'
+        else if (next.col < curr.col) curr.toDir = 'W'
+        else if (next.col > curr.col) curr.toDir = 'E'
+      }
+      
+      // Určíme typ tile
+      curr.tileType = this.determineTileType(curr.fromDir, curr.toDir, curr.direction)
+    }
+    
+    this.roadPath = path
+    this.drawRoadPath()
+  }
+  
+  // Určí typ tile podľa smeru odkiaľ a kam
+  determineTileType(fromDir, toDir, defaultDirection) {
+    // Ak nemáme oba smery, použijeme rovnú cestu
+    if (!fromDir && !toDir) {
+      return defaultDirection === 'horizontal' ? 'straight_h' : 'straight_v'
+    }
+    
+    // Len začiatok alebo koniec
+    if (!fromDir || !toDir) {
+      // Určíme smer podľa toho čo máme
+      const dir = fromDir || toDir
+      if (dir === 'N' || dir === 'S') return 'straight_v'
+      return 'straight_h'
+    }
+    
+    // Máme oba smery - môže byť roh
+    const combo = fromDir + toDir
+    
+    // Rovné cesty
+    if (combo === 'NS' || combo === 'SN') return 'straight_v'
+    if (combo === 'WE' || combo === 'EW') return 'straight_h'
+    
+    // Rohy - mapovanie na naše tile názvy
+    // V izometrii: N=hore-vpravo, S=dole-vľavo, W=hore-vľavo, E=dole-vpravo
+    if (combo === 'NE' || combo === 'EN') return 'corner_SW' // Roh ↙
+    if (combo === 'NW' || combo === 'WN') return 'corner_SE' // Roh ↘
+    if (combo === 'SE' || combo === 'ES') return 'corner_NW' // Roh ↖
+    if (combo === 'SW' || combo === 'WS') return 'corner_NE' // Roh ↗
+    
+    return defaultDirection === 'horizontal' ? 'straight_h' : 'straight_v'
+  }
+  
+  // Nakresli preview cesty
+  drawRoadPath() {
+    if (this.roadPathGraphics) {
+      this.roadPathGraphics.destroy()
+    }
+    
+    if (this.roadPath.length === 0) return
+    
+    this.roadPathGraphics = this.add.graphics()
+    this.uiContainer.add(this.roadPathGraphics)
+    
+    for (const cell of this.roadPath) {
+      const { x, y } = this.gridToIso(cell.row, cell.col)
+      
+      // Modrá farba pre preview
+      this.roadPathGraphics.fillStyle(0x667eea, 0.5)
+      this.roadPathGraphics.beginPath()
+      this.roadPathGraphics.moveTo(x, y)
+      this.roadPathGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.roadPathGraphics.lineTo(x, y + TILE_HEIGHT)
+      this.roadPathGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.roadPathGraphics.closePath()
+      this.roadPathGraphics.fillPath()
+      
+      this.roadPathGraphics.lineStyle(3, 0x667eea, 1)
+      this.roadPathGraphics.strokePath()
+    }
+  }
+  
+  // Vyčisti road building stav
+  clearRoadBuilding() {
+    this.roadStartCell = null
+    this.roadPath = []
+    if (this.roadPathGraphics) {
+      this.roadPathGraphics.destroy()
+      this.roadPathGraphics = null
     }
   }
 
@@ -502,13 +728,34 @@ class IsoScene extends Phaser.Scene {
     }
     
     if (pointer.leftButtonDown()) {
-      const canSelect = props.templateSelected || props.deleteMode || props.selectedImageId
-      if (!canSelect) return
-      
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y)
       const cell = this.isoToGrid(worldPoint.x, worldPoint.y)
       
       if (cell.row >= 0 && cell.row < GRID_SIZE && cell.col >= 0 && cell.col < GRID_SIZE) {
+        
+        // Road building mode
+        if (props.roadBuildingMode) {
+          if (!this.roadStartCell) {
+            // Prvý klik - nastav štartovací bod
+            this.roadStartCell = { row: cell.row, col: cell.col }
+            this.roadPath = [{ row: cell.row, col: cell.col, direction: 'horizontal' }]
+            this.drawRoadPath()
+            console.log(`🛣️ Začiatok cesty: [${cell.row}, ${cell.col}]`)
+          } else {
+            // Druhý klik - postav cestu
+            if (this.roadPath.length > 0) {
+              console.log(`🛣️ Staviam cestu s ${this.roadPath.length} segmentami`)
+              emit('road-placed', { path: [...this.roadPath] })
+            }
+            this.clearRoadBuilding()
+          }
+          return
+        }
+        
+        // Normálny režim
+        const canSelect = props.templateSelected || props.deleteMode || props.selectedImageId
+        if (!canSelect) return
+        
         if (!props.deleteMode) {
           const cellsX = props.lastImageCellsX || 1
           const cellsY = props.lastImageCellsY || 1
@@ -540,6 +787,52 @@ class IsoScene extends Phaser.Scene {
 
   // Pridanie obrázka s tieňom
   addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false) {
+    // Pre road tiles - jednoduchá logika bez cache
+    if (isRoadTile) {
+      // Unikátny kľúč s timestampom aby sa vždy načítala nová textúra
+      const roadTextureKey = `road_${key}_${Date.now()}`
+      
+      this.load.image(roadTextureKey, imageUrl)
+      this.load.once('complete', () => {
+        const { x, y } = this.gridToIso(row, col)
+        
+        // Vytvoríme sprite pre road tile
+        const roadSprite = this.add.sprite(x, y + TILE_HEIGHT / 2, roadTextureKey)
+        
+        // Škáluj obrázok aby jeho šírka zodpovedala šírke políčka
+        const scale = TILE_WIDTH / roadSprite.width
+        roadSprite.setScale(scale)
+        roadSprite.setOrigin(0.5, 0.5)
+        
+        // Road tiles sú nad mriežkou ale pod budovami
+        roadSprite.setDepth(0.5)
+        
+        // Vytvor izometrickú masku pre políčko
+        const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false })
+        maskGraphics.fillStyle(0xffffff)
+        
+        const maskX = x
+        const maskY = y + TILE_HEIGHT / 2
+        maskGraphics.beginPath()
+        maskGraphics.moveTo(maskX, maskY - TILE_HEIGHT / 2)
+        maskGraphics.lineTo(maskX + TILE_WIDTH / 2, maskY)
+        maskGraphics.lineTo(maskX, maskY + TILE_HEIGHT / 2)
+        maskGraphics.lineTo(maskX - TILE_WIDTH / 2, maskY)
+        maskGraphics.closePath()
+        maskGraphics.fillPath()
+        
+        const mask = maskGraphics.createGeometryMask()
+        roadSprite.setMask(mask)
+        
+        // Uložíme referenciu (bez tieňa)
+        this.buildingSprites[key] = roadSprite
+        
+        console.log(`🛣️ Road tile umiestnený: ${key}`)
+      })
+      this.load.start()
+      return
+    }
+    
     const textureKey = `building_${key}`
     
     // Načítame obrázok ako textúru
@@ -558,48 +851,6 @@ class IsoScene extends Phaser.Scene {
         offsetY = TILE_HEIGHT
       } else if (cellsX >= 3) {
         offsetY = TILE_HEIGHT * (cellsX - 1)
-      }
-      
-      // Pre road tiles - iné umiestnenie (priamo na políčko)
-      if (isRoadTile) {
-        // Vytvoríme sprite pre road tile
-        const roadSprite = this.add.sprite(x, y + TILE_HEIGHT / 2, textureKey)
-        
-        // Škáluj obrázok aby jeho šírka zodpovedala šírke políčka
-        // Sprite tile má pomer 2:1 (šírka:výška) pre izometriu
-        const scale = TILE_WIDTH / roadSprite.width
-        roadSprite.setScale(scale)
-        roadSprite.setOrigin(0.5, 0.5) // Stred
-        
-        // Road tiles musia byť pod tieňmi (depth 1), ale nad mriežkou (depth 0)
-        // Použijeme depth 0.5 aby tiene padali na road tiles
-        roadSprite.setDepth(0.5)
-        
-        // Vytvor izometrickú masku pre políčko
-        const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false })
-        maskGraphics.fillStyle(0xffffff)
-        
-        // Izometrický diamant pre masku
-        const maskX = x
-        const maskY = y + TILE_HEIGHT / 2
-        maskGraphics.beginPath()
-        maskGraphics.moveTo(maskX, maskY - TILE_HEIGHT / 2) // Hore
-        maskGraphics.lineTo(maskX + TILE_WIDTH / 2, maskY) // Vpravo
-        maskGraphics.lineTo(maskX, maskY + TILE_HEIGHT / 2) // Dole
-        maskGraphics.lineTo(maskX - TILE_WIDTH / 2, maskY) // Vľavo
-        maskGraphics.closePath()
-        maskGraphics.fillPath()
-        
-        // Aplikuj masku
-        const mask = maskGraphics.createGeometryMask()
-        roadSprite.setMask(mask)
-        
-        // Uložíme referencie - road tiles nemajú vlastný tieň a neriadia sa sortBuildings
-        this.buildingSprites[key] = roadSprite
-        this.shadowSprites[key] = null // Road tiles nemajú tieň
-        
-        // NEZAVOLAJ sortBuildings() pre road tiles - už majú fixný depth
-        return
       }
       
       // Vytvoríme sprite pre budovu (normálny flow)
@@ -761,9 +1012,14 @@ class IsoScene extends Phaser.Scene {
   }
 
   removeBuilding(key) {
+    console.log(`🗑️ removeBuilding: key=${key}, existuje v buildingSprites=${!!this.buildingSprites[key]}`)
+    console.log(`🗑️ Všetky kľúče v buildingSprites:`, Object.keys(this.buildingSprites))
     if (this.buildingSprites[key]) {
       this.buildingSprites[key].destroy()
       delete this.buildingSprites[key]
+      console.log(`✅ Sprite ${key} zmazaný`)
+    } else {
+      console.log(`⚠️ Sprite ${key} neexistuje v buildingSprites!`)
     }
     if (this.shadowSprites[key]) {
       delete this.shadowSprites[key]
@@ -790,10 +1046,29 @@ class IsoScene extends Phaser.Scene {
 }
 
 // Funkcia na vloženie obrázka
-const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false) => {
+const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackground = false, templateName = '', isRoadTile = false, imageBitmap = null) => {
   console.log('🖼️ PhaserCanvas.placeImageAtSelectedCell()')
-  console.log('   templateName:', templateName)
-  console.log('   isRoadTile:', isRoadTile)
+  console.log('   imageDataOrIsBackground:', imageDataOrIsBackground)
+  
+  // Parsuj parametre - ak je 4. parameter objekt, je to imageData s metaúdajmi
+  let isBackground = false
+  let imageData = imageDataOrIsBackground
+  
+  if (typeof imageDataOrIsBackground === 'boolean') {
+    // Staré volanie s boolean parametrom
+    isBackground = imageDataOrIsBackground
+    imageData = null
+  } else if (typeof imageDataOrIsBackground === 'object' && imageDataOrIsBackground !== null) {
+    // Nové volanie s image objektom - extrahuj metaúdaje
+    isBackground = imageDataOrIsBackground.isBackground || false
+    if (!templateName && imageDataOrIsBackground.name) {
+      templateName = imageDataOrIsBackground.name
+    }
+    if (imageDataOrIsBackground.isRoadTile !== undefined) {
+      isRoadTile = imageDataOrIsBackground.isRoadTile
+    }
+    console.log('   📍 Road tile metaúdaje:', { name: imageDataOrIsBackground.name, x: imageDataOrIsBackground.x, y: imageDataOrIsBackground.y, width: imageDataOrIsBackground.width, height: imageDataOrIsBackground.height, rotation: imageDataOrIsBackground.rotation })
+  }
   
   if (!mainScene || mainScene.selectedCell.row === -1) {
     console.log('❌ Žiadne políčko nie je vybrané')
@@ -804,18 +1079,28 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, isBackground = false
   const col = mainScene.selectedCell.col
   const key = `${row}-${col}`
   
-  // Ulož do cellImages
+  // Ulož do cellImages s metaúdajmi
   cellImages[key] = {
     url: imageUrl,
+    bitmap: imageBitmap,  // Priamo bitmap pre rýchle kreslenie
     cellsX,
     cellsY,
     isBackground,
     templateName,
-    isRoadTile
+    isRoadTile,
+    // Ulož aj metaúdaje road tile-u
+    tileMetadata: imageData && typeof imageData === 'object' ? {
+      name: imageData.name,
+      x: imageData.x,
+      y: imageData.y,
+      width: imageData.width,
+      height: imageData.height,
+      rotation: imageData.rotation
+    } : null
   }
   
   // Pridaj budovu s tieňom
-  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName, isRoadTile)
+  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName, isRoadTile, imageBitmap)
   
   // Vyčisti výber
   mainScene.clearSelection()
@@ -864,20 +1149,32 @@ const placeEnvironmentElements = (images, count = 10, gridSize = 50) => {
 
 // Funkcia na vymazanie obrázka
 const deleteImageAtCell = (row, col) => {
-  console.log(`🗑️ PhaserCanvas: Vymazanie obrázka na [${row}, ${col}]`)
+  const key = `${row}-${col}`
+  console.log(`🗑️ PhaserCanvas: Vymazanie obrázka na [${row}, ${col}], key=${key}`)
   
-  for (const key in cellImages) {
-    const [imgRow, imgCol] = key.split('-').map(Number)
-    const img = cellImages[key]
+  // Najprv skús priamo podľa kľúča (pre 1x1 tiles ako roads)
+  if (cellImages[key]) {
+    console.log(`🗑️ Nájdený priamy kľúč ${key}, mažem...`)
+    mainScene.removeBuilding(key)
+    delete cellImages[key]
+    return true
+  }
+  
+  // Ak nie je priamy kľúč, hľadaj obrázok ktorý zaberá túto bunku
+  for (const imgKey in cellImages) {
+    const [imgRow, imgCol] = imgKey.split('-').map(Number)
+    const img = cellImages[imgKey]
     const cells = mainScene.getAffectedCells(imgRow, imgCol, img.cellsX || 1, img.cellsY || 1)
     
     if (cells.some(c => c.row === row && c.col === col)) {
-      mainScene.removeBuilding(key)
-      delete cellImages[key]
+      console.log(`🗑️ Nájdený obrázok ${imgKey} zaberajúci [${row}, ${col}], mažem...`)
+      mainScene.removeBuilding(imgKey)
+      delete cellImages[imgKey]
       return true
     }
   }
   
+  console.log(`⚠️ Žiadny obrázok na [${row}, ${col}] nebol nájdený`)
   return false
 }
 
@@ -895,10 +1192,18 @@ defineExpose({
     })
     cellImages = {}
   },
-  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false) => {
+  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false) => {
     const key = `${row}-${col}`
-    cellImages[key] = { url, cellsX, cellsY, isBackground }
-    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground)
+    // Najprv vymaž existujúci obrázok ak tam je
+    if (cellImages[key]) {
+      mainScene?.removeBuilding(key)
+      delete cellImages[key]
+    }
+    cellImages[key] = { url, cellsX, cellsY, isBackground, isRoadTile }
+    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, '', isRoadTile)
+  },
+  clearRoadBuilding: () => {
+    mainScene?.clearRoadBuilding()
   }
 })
 
@@ -909,6 +1214,13 @@ watch(() => props.showGrid, () => {
 
 watch(() => props.showNumbering, () => {
   mainScene?.refreshGrid()
+})
+
+// Watch pre road building mode - vyčisti stav keď sa vypne
+watch(() => props.roadBuildingMode, (newVal) => {
+  if (!newVal && mainScene) {
+    mainScene.clearRoadBuilding()
+  }
 })
 
 onMounted(() => {

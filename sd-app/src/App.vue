@@ -6,6 +6,7 @@ import CharacterGenerator from './components/CharacterGenerator.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
+import { buildRoad } from './utils/roadBuilder.js'
 
 const images = ref([])
 const lastImageCellsX = ref(1)
@@ -22,6 +23,9 @@ const showGrid = ref(true)
 const activeGenerator = ref('building') // 'building', 'environment' alebo 'character'
 const deleteMode = ref(false) // Režim mazania buildingov
 const environmentColors = ref({ hue: 0, saturation: 100, brightness: 100 }) // Farby prostredia
+const roadBuildingMode = ref(false) // Režim stavby ciest
+const roadTiles = ref([]) // Road tiles z ImageGallery
+const imageGalleryRef = ref(null) // Referencia na ImageGallery
 
 const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -78,15 +82,29 @@ const handleDeleteModeChanged = (isDeleteMode) => {
   }
 }
 
+const handleRoadBuildingModeChanged = (isRoadMode) => {
+  roadBuildingMode.value = isRoadMode
+  console.log(`🛣️ App.vue: Road building mode ${isRoadMode ? 'zapnutý' : 'vypnutý'}`)
+}
+
+const handleRoadTilesReady = (tiles) => {
+  roadTiles.value = tiles
+  console.log(`🛣️ App.vue: Road tiles načítané: ${tiles.length} tiles`)
+}
+
+const handleRoadPlaced = ({ path }) => {
+  buildRoad(canvasRef.value, roadTiles.value, path)
+}
+
 const handlePlaceOnBoard = (image) => {
-  console.log('📌 App.vue: Prijatý place-on-board event pre obrázok:', image.id)
+  console.log('📌 App.vue: Prijatý place-on-board event pre obrázok:', image.id, image)
   
   if (canvasRef.value && selectedCell.value.row !== -1 && selectedCell.value.col !== -1) {
     // Ak je vybraté políčko, vlož obrázok tam
     const cellsX = image.cellsX || lastImageCellsX.value
     const cellsY = image.cellsY || lastImageCellsY.value
     console.log('🎯 Vkladám obrázok na políčko:', selectedCell.value, `s veľkosťou ${cellsX}x${cellsY}`)
-    canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY)
+    canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image)
   } else if (canvasRef.value) {
     // Inak vlož obrázok na prvé voľné políčko
     console.log('🎯 Vkladám obrázok na prvé voľné políčko')
@@ -94,7 +112,7 @@ const handlePlaceOnBoard = (image) => {
     const cellsY = image.cellsY || lastImageCellsY.value
     // Vyber prvé políčko ako fallback
     selectedCell.value = { row: 0, col: 0 }
-    canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY)
+    canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image)
   } else {
     console.warn('⚠️ Canvas ref neexistuje - nemôžem vložiť obrázok')
   }
@@ -341,11 +359,14 @@ const handleLoadProject = (projectData) => {
       :showGallery="showGallery"
       :showGrid="showGrid"
       :deleteMode="deleteMode"
+      :roadBuildingMode="roadBuildingMode"
+      :roadTiles="roadTiles"
       @cell-selected="handleCellSelected"
       @image-placed="handleImagePlaced"
       @toggle-numbering="handleToggleNumbering"
       @toggle-gallery="handleToggleGallery"
       @toggle-grid="handleToggleGrid"
+      @road-placed="handleRoadPlaced"
     />
     
     <!-- Header (absolútne pozicionovaný) -->
@@ -417,6 +438,7 @@ const handleLoadProject = (projectData) => {
     <!-- Galéria dole (absolútne pozicionovaná) -->
     <div v-if="showGallery" class="gallery-container">
       <ImageGallery 
+        ref="imageGalleryRef"
         :images="images" 
         :selectedImageId="selectedImageId"
         @delete="handleDelete" 
@@ -424,6 +446,8 @@ const handleLoadProject = (projectData) => {
         @place-on-board="handlePlaceOnBoard"
         @grid-size-changed="handleGridSizeChanged"
         @delete-mode-changed="handleDeleteModeChanged"
+        @road-building-mode-changed="handleRoadBuildingModeChanged"
+        @road-tiles-ready="handleRoadTilesReady"
       />
     </div>
   </div>
