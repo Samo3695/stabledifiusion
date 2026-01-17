@@ -1,13 +1,13 @@
 <script setup>
 import { ref, watch, onMounted } from 'vue'
 
-const emit = defineEmits(['template-selected', 'tab-changed'])
+const emit = defineEmits(['template-selected', 'tab-changed', 'road-sprite-selected'])
 
 const activeTemplateTab = ref('1size')
 const templateImages = ref({
   '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'halfsphere.png', 'hole.png', 'ihlan1.png', 'kuzel.png', 'smallvalec.png', 'sphere.png', 'tree.png', 'tree2.png', 'valec.png', 'valec2.png', 'valec3.png', 'valec4.png'],
   '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png'],
-  'roads': ['cross.png', 'left-right.png', 'left-top.png', 'left.png', 'right-left.png', 'right-top.png', 'right.png']
+  'roads': ['basic.png', 'futureroad.png', 'presentroad.png', 'pastroad.png']
 })
 const selectedTemplate = ref(null)
 
@@ -37,7 +37,7 @@ const getTemplateFolder = (tab) => {
   const folderMap = {
     '1size': 'all',
     '2size': 'cubes2',
-    'roads': 'roads/flat'
+    'roads': 'roads/sprites'
   }
   return folderMap[tab] || 'all'
 }
@@ -47,6 +47,12 @@ const selectTemplate = (template) => {
   const templatePath = `/templates/${folder}/${template}`
   
   selectedTemplate.value = template
+  
+  // Ak je to roads tab, emituj sprite URL pre ImageGallery
+  const isRoadSprite = activeTemplateTab.value === 'roads'
+  if (isRoadSprite) {
+    emit('road-sprite-selected', templatePath)
+  }
   
   // Zisti počet políčok podľa tabu (ULOŽÍME DO KONŠTANTY aby sa nezmenili)
   const currentCellsX = 1
@@ -62,7 +68,28 @@ const selectTemplate = (template) => {
     .then(blob => {
       const reader = new FileReader()
       reader.onload = (e) => {
-        // Načítaj obrázok aby sme zistili rozmery
+        // Pre roads tab použij fixné rozmery
+        if (activeTemplateTab.value === 'roads') {
+          const width = 1024
+          const height = 585
+          
+          console.log(`📤 TemplateSelector: Emitujem template-selected (Roads)`)
+          console.log(`   Fixné rozmery: ${width}x${height}`)
+          console.log(`   Políčka: ${currentCellsX}x${currentCellsY}`)
+          
+          emit('template-selected', {
+            dataUrl: e.target.result,
+            templateName: template,
+            width: width,
+            height: height,
+            cellsX: currentCellsX,
+            cellsY: currentCellsY,
+            isRoadSprite: isRoadSprite
+          })
+          return
+        }
+        
+        // Pre ostatné taby - načítaj obrázok aby sme zistili rozmery
         const img = new Image()
         img.onload = () => {
           // Zachováme pomer strán, ale max šírka bude 400px
@@ -92,7 +119,8 @@ const selectTemplate = (template) => {
             width: width,
             height: height,
             cellsX: currentCellsX,
-            cellsY: currentCellsY
+            cellsY: currentCellsY,
+            isRoadSprite: isRoadSprite
           })
         }
         img.src = e.target.result

@@ -27,13 +27,29 @@ const roadBuildingMode = ref(false) // Režim stavby ciest
 const roadTiles = ref([]) // Road tiles z ImageGallery
 const imageGalleryRef = ref(null) // Referencia na ImageGallery
 
-const handleImageGenerated = (image, cellsX = 1, cellsY = 1) => {
+const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
   console.log('   Image ID:', image.id)
   console.log('   CellsX x CellsY:', cellsX, 'x', cellsY)
+  console.log('   Template name:', image.templateName)
   console.log('   Vybrané políčko:', selectedCell.value)
   console.log('   Canvas ref existuje?', canvasRef.value ? 'ÁNO' : 'NIE')
   
+  // Ak ide o road sprite, aktualizuj sprite namiesto pridania do galérie
+  if (image.isRoadSprite) {
+    console.log('🛣️ App.vue: Detekovaný Road Sprite - aktualizujem sprite namiesto pridania do galérie')
+    console.log('   Template name:', image.templateName)
+    console.log('   Image URL (prvých 100 znakov):', image.url.substring(0, 100))
+    if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
+      await imageGalleryRef.value.updateRoadSprite(image.url)
+      console.log('✅ Road sprite úspešne aktualizovaný v ImageGallery')
+    } else {
+      console.warn('⚠️ ImageGallery ref alebo updateRoadSprite funkcia nie je dostupná')
+    }
+    return // Skonči tu, nepridávaj do galérie
+  }
+  
+  // Pre ostatné taby - normálne pridaj do galérie
   images.value.unshift(image)
   lastImageCellsX.value = cellsX
   lastImageCellsY.value = cellsY
@@ -149,6 +165,16 @@ const handleTemplateSelected = (isSelected) => {
 const handleTabChanged = ({ cellsX, cellsY }) => {
   lastImageCellsX.value = cellsX
   lastImageCellsY.value = cellsY
+}
+
+const handleRoadSpriteSelected = async (spriteUrl) => {
+  console.log('🛣️ App.vue: Prijatý road-sprite-selected event:', spriteUrl)
+  if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
+    await imageGalleryRef.value.updateRoadSprite(spriteUrl)
+    console.log('✅ Road sprite úspešne aktualizovaný v ImageGallery')
+  } else {
+    console.warn('⚠️ ImageGallery ref alebo updateRoadSprite funkcia nie je dostupná')
+  }
 }
 
 const handleCellSelected = ({ row, col }) => {
@@ -436,6 +462,7 @@ const handleLoadProject = (projectData) => {
         @template-selected="handleTemplateSelected"
         @tab-changed="handleTabChanged"
         @numbering-changed="handleNumberingChanged"
+        @road-sprite-selected="handleRoadSpriteSelected"
       />
       
       <!-- Environment Generator -->

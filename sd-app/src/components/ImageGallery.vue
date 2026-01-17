@@ -16,10 +16,11 @@ const roadTiles = ref([]) // Vyrezané road tiles zo sprite
 const roadTilesOriginal = ref([]) // Originálne road tiles bez opacity zmeny
 const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber tiles
 const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
+const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny sprite URL
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
 const loadRoadSprite = async () => {
-  const spritePath = '/templates/roads/sprites/pastroad.png'
+  const spritePath = roadSpriteUrl.value
   const img = new Image()
   img.crossOrigin = 'anonymous'
   
@@ -123,6 +124,13 @@ const loadRoadSprite = async () => {
   img.src = spritePath
 }
 
+// Funkcia na aktualizáciu sprite URL a reloadnutie tiles
+const updateRoadSprite = async (newSpriteUrl) => {
+  console.log('🔄 Aktualizujem road sprite na:', newSpriteUrl)
+  roadSpriteUrl.value = newSpriteUrl
+  await loadRoadSprite()
+}
+
 // Načítaj sprite pri štarte
 onMounted(() => {
   loadRoadSprite()
@@ -215,7 +223,9 @@ const getRoadTileByDirection = (direction) => {
 // Expose pre parent komponent
 defineExpose({
   getRoadTileByDirection,
-  roadTiles
+  roadTiles,
+  updateRoadSprite,
+  activeGalleryTab
 })
 
 const copyToClipboard = async (text, label = 'text') => {

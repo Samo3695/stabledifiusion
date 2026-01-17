@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import TemplateSelector from './TemplateSelector.vue'
 
-const emit = defineEmits(['image-generated', 'template-selected', 'tab-changed', 'numbering-changed'])
+const emit = defineEmits(['image-generated', 'template-selected', 'tab-changed', 'numbering-changed', 'road-sprite-selected'])
 
 const prompt = ref('')
 const negativePrompt = ref('')
@@ -22,6 +22,7 @@ const showNumbering = ref(true) // Či zobrazovať číslovanie šachovnice
 const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
 const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
 const currentTemplateName = ref('') // Názov aktuálnej šablóny
+const isRoadSprite = ref(false) // Či je aktuálna šablóna road sprite
 
 // Sleduj zmeny showNumbering a oznám App.vue
 watch(showNumbering, (newValue) => {
@@ -38,12 +39,19 @@ const handleTabChanged = ({ cellsX, cellsY }) => {
   console.log(`Tab zmenený, políčka: ${cellsX}x${cellsY}`)
 }
 
+// Funkcia na preposlanie road sprite URL do App.vue
+const handleRoadSpriteSelected = (spriteUrl) => {
+  console.log('🛣️ Road sprite vybraný:', spriteUrl)
+  emit('road-sprite-selected', spriteUrl)
+}
+
 // Funkcia na spracovanie vybranej šablóny
-const handleTemplateSelected = ({ dataUrl, templateName, width, height, cellsX, cellsY }) => {
+const handleTemplateSelected = ({ dataUrl, templateName, width, height, cellsX, cellsY, isRoadSprite: isRoad }) => {
   inputImage.value = dataUrl
   inputImagePreview.value = dataUrl
   error.value = ''
   currentTemplateName.value = templateName // Ulož názov šablóny
+  isRoadSprite.value = isRoad || false // Ulož či je to road sprite
   
   // Ulož informáciu o počte políčok pre canvas
   if (cellsX && cellsY) {
@@ -123,6 +131,7 @@ const removeInputImage = () => {
   inputImage.value = null
   inputImagePreview.value = ''
   currentTemplateName.value = '' // Vymaž názov šablóny
+  isRoadSprite.value = false // Vymaž road sprite flag
   const fileInput = document.getElementById('image-upload')
   if (fileInput) fileInput.value = ''
   
@@ -202,6 +211,7 @@ const generateImage = async () => {
       timestamp: new Date(),
       isBackground: isBackgroundTemplate, // Flag pre ignorovanie kolízie
       templateName: currentTemplateName.value, // Názov šablóny pre tieň
+      isRoadSprite: isRoadSprite.value, // Či je to road sprite
     }
 
     // Ulož posledný vygenerovaný obrázok
@@ -397,6 +407,7 @@ defineExpose({
       <TemplateSelector 
         @template-selected="handleTemplateSelected" 
         @tab-changed="handleTabChanged"
+        @road-sprite-selected="handleRoadSpriteSelected"
       />
       
       <!-- 2. Upload vlastného obrázka -->
