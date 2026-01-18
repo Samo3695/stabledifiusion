@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import Phaser from 'phaser'
+import { PersonManager } from '../utils/personManager.js'
 
 const props = defineProps({
   images: Array,
@@ -85,9 +86,8 @@ class IsoScene extends Phaser.Scene {
     this.roadPath = [] // Aktuálna cesta (pole bunk)
     this.roadPathGraphics = null // Grafika pre preview cesty
     
-    // Pohyblivé osoby (pole pre viaceré osoby)
-    this.persons = [] // Pole objektov { sprite, shadow, currentCell, targetCell, moveTween, moveTimer }
-    this.personCount = 20 // Počet osôb
+    // PersonManager pre správu postáv
+    this.personManager = null
   }
 
   preload() {
@@ -134,255 +134,27 @@ class IsoScene extends Phaser.Scene {
     
     // Pravé tlačidlo pre dragging
     this.input.mouse.disableContextMenu()
+    
+    // Inicializujeme PersonManager
+    this.personManager = new PersonManager(this, cellImages, {
+      personCount: 200,
+      TILE_WIDTH,
+      TILE_HEIGHT,
+      moveDuration: 2400,
+      initialDelayRange: [0, 4000]
+    })
   }
 
   createPerson() {
-    // Ak už osoby existujú, len ich aktualizujeme
-    if (this.persons.length > 0) {
-      this.updateAllPersonsPosition()
-      return
-    }
-    
-    // Nájdeme všetky road tiles
-    const allRoadTiles = this.getAllRoadTiles()
-    if (allRoadTiles.length === 0) {
-      console.log('🚶 Žiadne road tiles, osoby sa nevytvoria')
-      return
-    }
-    
-    // Vytvoríme viaceré osoby
-    for (let i = 0; i < this.personCount; i++) {
-      // Náhodný road tile pre každú osobu
-      const randomTile = Phaser.Utils.Array.GetRandom(allRoadTiles)
-      
-      // Vytvoríme sprite pre osobu
-      const personSprite = this.add.sprite(0, 0, 'person')
-      personSprite.setScale(0.25)
-      personSprite.setOrigin(0.5, 1)
-      personSprite.setDepth(1000 + i) // Každá osoba má vlastný depth
-      
-      // Vytvoríme tieň
-      const personShadow = this.add.sprite(0, 0, 'person')
-      personShadow.setDepth(0.6)
-      personShadow.setOrigin(0.5, 1)
-      personShadow.setTint(0x000000)
-      personShadow.setAlpha(0.35)
-      personShadow.setAngle(-90)
-      personShadow.setScale(0.25 * 0.7, 0.25 * 0.4)
-      
-      const { x, y } = this.gridToIso(randomTile.row, randomTile.col)
-      personSprite.setPosition(x, y + TILE_HEIGHT / 2)
-      personSprite.setVisible(true)
-      
-      // Aktualizujeme pozíciu tieňa
-      const shadowOffsetX = 4
-      const shadowOffsetY = 2
-      personShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
-      personShadow.setVisible(true)
-      
-      // Uložíme do poľa
-      const person = {
-        sprite: personSprite,
-        shadow: personShadow,
-        currentCell: { row: randomTile.row, col: randomTile.col },
-        targetCell: null,
-        moveTween: null,
-        moveTimer: null
-      }
-      
-      this.persons.push(person)
-      
-      // Spustíme náhodný pohyb s náhodným delayom
-      const initialDelay = Phaser.Math.Between(0, 4000)
-      this.time.delayedCall(initialDelay, () => {
-        this.startPersonMovement(person)
-      })
-    }
-    
-    console.log(`🚶 Vytvorených ${this.persons.length} osôb`)
-  }
-  
-  createPersonShadow(x, y) {
-    // Vytvoríme sprite pre tieň osoby (rovnaká textúra ako osoba)
-    if (!this.personShadow) {
-      this.personShadow = this.add.sprite(0, 0, 'person')
-      this.personShadow.setDepth(0.6) // Nad cestami (0.5) ale pod budovami
-      this.personShadow.setOrigin(0.5, 1) // Spodný stred
-      this.personShadow.setTint(0x000000) // Čierna farba
-      this.personShadow.setAlpha(0.35) // Priehľadnosť
-      this.personShadow.setAngle(-90) // Rotácia na bok
-      this.personShadow.setScale(0.25 * 0.7, 0.25 * 0.4) // Zmenšený a zploštený
-    }
-    
-    this.updatePersonShadow(x, y)
-  }
-  
-  updatePersonShadow(x, y) {
-    if (!this.personShadow) return
-    
-    // Offset pre tieň (bližšie k osobe)
-    const shadowOffsetX = 4
-    const shadowOffsetY = 2
-    
-    this.personShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
-  }
-  
-  updateAllPersonsPosition() {
-    // Aktualizujeme pozíciu všetkých osôb ak už existujú
-    if (this.persons.length === 0) return
-    
-    const allRoadTiles = this.getAllRoadTiles()
-    if (allRoadTiles.length === 0) {
-      // Ak už nie sú žiadne road tiles, skryjeme všetky osoby
-      this.persons.forEach(person => {
-        person.sprite.setVisible(false)
-        person.shadow.setVisible(false)
-        this.stopPersonMovement(person)
-      })
-      return
-    }
-    
-    // Ukážeme osoby ak sú skryté
-    this.persons.forEach(person => {
-      if (!person.sprite.visible) {
-        const randomTile = Phaser.Utils.Array.GetRandom(allRoadTiles)
-        person.currentCell = { row: randomTile.row, col: randomTile.col }
-        const { x, y } = this.gridToIso(randomTile.row, randomTile.col)
-        person.sprite.setPosition(x, y + TILE_HEIGHT / 2)
-        person.sprite.setVisible(true)
-        person.shadow.setVisible(true)
-        this.startPersonMovement(person)
-      }
-    })
-  }
-  
-  findFirstRoadTile() {
-    // Nájdeme prvý road tile v cellImages
-    for (const key in cellImages) {
-      const img = cellImages[key]
-      if (img.isRoadTile) {
-        const [row, col] = key.split('-').map(Number)
-        return { row, col }
-      }
-    }
-    return null
-  }
-  
-  getAllRoadTiles() {
-    // Vrátime všetky road tiles
-    const roadTiles = []
-    for (const key in cellImages) {
-      const img = cellImages[key]
-      if (img.isRoadTile) {
-        const [row, col] = key.split('-').map(Number)
-        roadTiles.push({ row, col })
-      }
-    }
-    return roadTiles
-  }
-  
-  findAdjacentRoadTiles(row, col) {
-    // Nájdeme susedné road tiles (hore, dole, vľavo, vpravo)
-    const adjacent = []
-    const directions = [
-      { row: -1, col: 0 }, // hore
-      { row: 1, col: 0 },  // dole
-      { row: 0, col: -1 }, // vľavo
-      { row: 0, col: 1 }   // vpravo
-    ]
-    
-    for (const dir of directions) {
-      const newRow = row + dir.row
-      const newCol = col + dir.col
-      const key = `${newRow}-${newCol}`
-      
-      if (cellImages[key] && cellImages[key].isRoadTile) {
-        adjacent.push({ row: newRow, col: newCol })
-      }
-    }
-    
-    return adjacent
-  }
-  
-  startPersonMovement(person) {
-    if (!person || !person.sprite || !person.currentCell) return
-    
-    // Okamžite začneme pohyb bez delay
-    this.movePersonToNextTile(person)
-  }
-  
-  movePersonToNextTile(person) {
-    if (!person || !person.sprite || !person.currentCell) return
-    
-    // Nájdeme susedné road tiles
-    const adjacent = this.findAdjacentRoadTiles(person.currentCell.row, person.currentCell.col)
-    
-    if (adjacent.length === 0) {
-      // Žiadne susedné road tiles - skúsime nájsť iný náhodný
-      const allRoads = this.getAllRoadTiles()
-      if (allRoads.length > 0) {
-        const randomRoad = Phaser.Utils.Array.GetRandom(allRoads)
-        person.currentCell = randomRoad
-        const { x, y } = this.gridToIso(randomRoad.row, randomRoad.col)
-        person.sprite.setPosition(x, y + TILE_HEIGHT / 2)
-        person.shadow.setPosition(x + 4, y + 2)
-      }
-      this.startPersonMovement(person)
-      return
-    }
-    
-    // Vyberieme náhodný susedný tile
-    const target = Phaser.Utils.Array.GetRandom(adjacent)
-    const { x: targetX, y: targetY } = this.gridToIso(target.row, target.col)
-    
-    // Animujeme pohyb - pomalšie pre pokojnejší pohyb
-    const duration = 1200 // 1.2 sekundy
-    person.moveTween = this.tweens.add({
-      targets: person.sprite,
-      x: targetX,
-      y: targetY + TILE_HEIGHT / 2,
-      duration: duration,
-      ease: 'Linear',
-      onUpdate: () => {
-        // Aktualizujeme pozíciu tieňa počas pohybu
-        const shadowOffsetX = 4
-        const shadowOffsetY = 2
-        person.shadow.setPosition(person.sprite.x + shadowOffsetX, person.sprite.y + shadowOffsetY)
-      },
-      onComplete: () => {
-        person.currentCell = target
-        // Okamžite pokračujeme ďalším pohybom
-        this.movePersonToNextTile(person)
-      }
-    })
-  }
-  
-  stopPersonMovement(person) {
-    if (person.moveTimer) {
-      person.moveTimer.remove()
-      person.moveTimer = null
-    }
-    if (person.moveTween) {
-      person.moveTween.stop()
-      person.moveTween = null
+    if (this.personManager) {
+      this.personManager.createPersons()
     }
   }
   
   togglePerson(visible) {
-    this.persons.forEach(person => {
-      if (visible) {
-        person.sprite.setVisible(true)
-        person.shadow.setVisible(true)
-        // Reštartujeme pohyb ak bol zastavený
-        if (!person.moveTimer) {
-          this.startPersonMovement(person)
-        }
-      } else {
-        person.sprite.setVisible(false)
-        person.shadow.setVisible(false)
-        this.stopPersonMovement(person)
-      }
-    })
+    if (this.personManager) {
+      this.personManager.togglePersons(visible)
+    }
   }
 
   createShadowTexture() {
@@ -1043,113 +815,122 @@ class IsoScene extends Phaser.Scene {
   }
 
   // Pridanie obrázka s tieňom
-  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false) {
+  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false, bitmap = null, skipShadows = false) {
     // Pre road tiles - jednoduchá logika bez cache
     if (isRoadTile) {
       // Unikátny kľúč s timestampom aby sa vždy načítala nová textúra
       const roadTextureKey = `road_${key}_${Date.now()}`
       
+      // Asynchrónne načítanie aby neblokoval hlavné vlákno
       this.load.image(roadTextureKey, imageUrl)
+      
+      // Použijeme once namiesto on aby sa callback zavolal len raz
       this.load.once('complete', () => {
-        const { x, y } = this.gridToIso(row, col)
-        
-        // Vytvoríme sprite pre road tile
-        const roadSprite = this.add.sprite(x, y + TILE_HEIGHT / 2, roadTextureKey)
-        
-        // Škáluj obrázok aby jeho šírka zodpovedala šírke políčka
-        const scale = TILE_WIDTH / roadSprite.width
-        roadSprite.setScale(scale)
-        roadSprite.setOrigin(0.5, 0.5)
-        
-        // Road tiles sú nad mriežkou ale pod budovami
-        roadSprite.setDepth(0.5)
-        
-        // Vytvor izometrickú masku pre políčko
-        const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false })
-        maskGraphics.fillStyle(0xffffff)
-        
-        const maskX = x
-        const maskY = y + TILE_HEIGHT / 2
-        maskGraphics.beginPath()
-        maskGraphics.moveTo(maskX, maskY - TILE_HEIGHT / 2)
-        maskGraphics.lineTo(maskX + TILE_WIDTH / 2, maskY)
-        maskGraphics.lineTo(maskX, maskY + TILE_HEIGHT / 2)
-        maskGraphics.lineTo(maskX - TILE_WIDTH / 2, maskY)
-        maskGraphics.closePath()
-        maskGraphics.fillPath()
-        
-        const mask = maskGraphics.createGeometryMask()
-        roadSprite.setMask(mask)
-        
-        // Uložíme referenciu (bez tieňa)
-        this.buildingSprites[key] = roadSprite
-        
-        console.log(`🛣️ Road tile umiestnený: ${key}`)
+        // Zabezpečíme že load je dokončený v nasledujúcom frame
+        this.time.delayedCall(0, () => {
+          const { x, y } = this.gridToIso(row, col)
+          
+          // Vytvoríme sprite pre road tile
+          const roadSprite = this.add.sprite(x, y + TILE_HEIGHT / 2, roadTextureKey)
+          
+          // Škáluj obrázok aby jeho šírka zodpovedala šírke políčka
+          const scale = TILE_WIDTH / roadSprite.width
+          roadSprite.setScale(scale)
+          roadSprite.setOrigin(0.5, 0.5)
+          
+          // Road tiles sú nad mriežkou ale pod budovami
+          roadSprite.setDepth(0.5)
+          
+          // Vytvor izometrickú masku pre políčko
+          const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false })
+          maskGraphics.fillStyle(0xffffff)
+          
+          const maskX = x
+          const maskY = y + TILE_HEIGHT / 2
+          maskGraphics.beginPath()
+          maskGraphics.moveTo(maskX, maskY - TILE_HEIGHT / 2)
+          maskGraphics.lineTo(maskX + TILE_WIDTH / 2, maskY)
+          maskGraphics.lineTo(maskX, maskY + TILE_HEIGHT / 2)
+          maskGraphics.lineTo(maskX - TILE_WIDTH / 2, maskY)
+          maskGraphics.closePath()
+          maskGraphics.fillPath()
+          
+          const mask = maskGraphics.createGeometryMask()
+          roadSprite.setMask(mask)
+          
+          // Uložíme referenciu (bez tieňa)
+          this.buildingSprites[key] = roadSprite
+          
+          console.log(`🛣️ Road tile umiestnený: ${key}`)
+        })
       })
+      
+      // Spustíme loading asynchrónne (neblokuje)
       this.load.start()
       return
     }
     
     const textureKey = `building_${key}`
     
-    // Načítame obrázok ako textúru
+    // Asynchrónne načítanie textúry
     this.load.image(textureKey, imageUrl)
     this.load.once('complete', () => {
-      const { x, y } = this.gridToIso(row, col)
-      
-      // Vypočítame offset pre multi-cell objekty
-      let offsetX = 0
-      let offsetY = 0
-      
-      if (cellsX === 1 && cellsY === 2) {
-        offsetX = -TILE_WIDTH / 4
-        offsetY = TILE_HEIGHT / 2
-      } else if (cellsX === 2 && cellsY === 2) {
-        offsetY = TILE_HEIGHT
-      } else if (cellsX >= 3) {
-        offsetY = TILE_HEIGHT * (cellsX - 1)
-      }
-      
-      // Vytvoríme sprite pre budovu (normálny flow)
-      const buildingSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
-      
-      // Nastavíme veľkosť - zmenšená pre správne rozmery
-      const targetWidth = TILE_WIDTH * cellsX * 0.9
-      const scale = targetWidth / buildingSprite.width
-      buildingSprite.setScale(scale)
-      buildingSprite.setOrigin(0.5, 1) // Spodný stred
-      
-      // Uložíme info o tieni pre renderovanie
-      // Fixný offset založený na veľkosti bunky, nie na rozmeroch obrázka
-      const baseShadowOffset = TILE_WIDTH * cellsX * 0.4
-      
-      // Zistíme či je to tree šablóna z názvu šablóny
-      const isTreeTemplate = templateName.toLowerCase().includes('tree')
-      console.log('🌳 isTree:', isTreeTemplate, 'templateName:', templateName)
-      
-      const shadowInfo = {
-        textureKey,
-        x: x + offsetX,
-        y: y + TILE_HEIGHT + offsetY,
-        scale,
-        cellsX, // Veľkosť pre výber správneho offsetu
-        isTree: isTreeTemplate, // Špeciálny flag pre stromy
-        offsetX: -baseShadowOffset,
-        offsetY: baseShadowOffset * 0.375
-      }
-      
-      // Pridáme priamo do scény (nie do kontajnera) aby depth fungoval správne
-      // this.buildingContainer.add(buildingSprite)
-      
-      // Uložíme referencie
-      this.buildingSprites[key] = buildingSprite
-      this.shadowSprites[key] = shadowInfo // Uložíme info pre RenderTexture
-      
-      // Zoradíme budovy podľa depth (row + col)
-      this.sortBuildings()
-      
-      // Prekreslíme všetky tiene do RenderTexture
-      this.redrawAllShadows()
+      // Odložíme vykreslenie do nasledujúceho frame
+      this.time.delayedCall(0, () => {
+        const { x, y } = this.gridToIso(row, col)
+        
+        // Vypočítame offset pre multi-cell objekty
+        let offsetX = 0
+        let offsetY = 0
+        
+        if (cellsX === 1 && cellsY === 2) {
+          offsetX = -TILE_WIDTH / 4
+          offsetY = TILE_HEIGHT / 2
+        } else if (cellsX === 2 && cellsY === 2) {
+          offsetY = TILE_HEIGHT
+        } else if (cellsX >= 3) {
+          offsetY = TILE_HEIGHT * (cellsX - 1)
+        }
+        
+        // Vytvoríme sprite pre budovu (normálny flow)
+        const buildingSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
+        
+        // Nastavíme veľkosť - zmenšená pre správne rozmery
+        const targetWidth = TILE_WIDTH * cellsX * 0.9
+        const scale = targetWidth / buildingSprite.width
+        buildingSprite.setScale(scale)
+        buildingSprite.setOrigin(0.5, 1) // Spodný stred
+        
+        // Uložíme info o tieni pre renderovanie
+        // Fixný offset založený na veľkosti bunky, nie na rozmeroch obrázka
+        const baseShadowOffset = TILE_WIDTH * cellsX * 0.4
+        
+        // Zistíme či je to tree šablóna z názvu šablóny
+        const isTreeTemplate = templateName.toLowerCase().includes('tree')
+        
+        const shadowInfo = {
+          textureKey,
+          x: x + offsetX,
+          y: y + TILE_HEIGHT + offsetY,
+          scale,
+          cellsX, // Veľkosť pre výber správneho offsetu
+          isTree: isTreeTemplate, // Špeciálny flag pre stromy
+          offsetX: -baseShadowOffset,
+          offsetY: baseShadowOffset * 0.375
+        }
+        
+        // Uložíme referencie
+        this.buildingSprites[key] = buildingSprite
+        this.shadowSprites[key] = shadowInfo // Uložíme info pre RenderTexture
+        
+        // Zoradíme budovy podľa depth (row + col)
+        this.sortBuildings()
+        
+        // Prekreslíme tiene len ak nie sme v batch loading mode
+        if (!skipShadows && !this.batchLoading) {
+          this.redrawAllShadows()
+        }
+      })
     })
     
     this.load.start()
@@ -1163,6 +944,14 @@ class IsoScene extends Phaser.Scene {
 
   // Prekreslí všetky tiene do RenderTexture - zabezpečí že sa neprekrývajú
   redrawAllShadows() {
+    // Odložíme prekreslenie do nasledujúceho frame aby sme neblokovali animácie
+    requestAnimationFrame(() => {
+      this.performShadowRedraw()
+    })
+  }
+  
+  // Skutočné prekreslenie tieňov
+  performShadowRedraw() {
     // Vyčistíme RenderTexture
     this.shadowRenderTexture.clear()
     
@@ -1436,6 +1225,8 @@ const deleteImageAtCell = (row, col) => {
 }
 
 // Expose funkcie
+let isBatchLoading = false // Flag pre batch loading
+
 defineExpose({
   placeImageAtSelectedCell,
   setBackgroundTiles,
@@ -1443,6 +1234,36 @@ defineExpose({
   deleteImageAtCell,
   cellImages: () => cellImages,
   backgroundTiles: () => backgroundTiles,
+  // Zapne batch loading mode - preskakuje tiene a osoby
+  startBatchLoading: () => {
+    isBatchLoading = true
+    if (mainScene) {
+      mainScene.batchLoading = true
+    }
+    console.log('📦 Batch loading ZAČATÝ')
+  },
+  // Ukončí batch loading a vykoná všetky odložené operácie
+  finishBatchLoading: () => {
+    isBatchLoading = false
+    if (mainScene) {
+      mainScene.batchLoading = false
+      // Teraz prekresli tiene RAZ
+      console.log('🌓 Prekreslenie všetkých tieňov...')
+      mainScene.redrawAllShadows()
+      // Vytvor osoby ak sú road tiles
+      if (mainScene.personManager) {
+        mainScene.personManager.updateWorkerRoadTiles()
+        if (mainScene.personManager.getPersonCount() === 0) {
+          const hasRoadTiles = Object.values(cellImages).some(img => img.isRoadTile)
+          if (hasRoadTiles) {
+            console.log('🚶 Vytváram osoby...')
+            mainScene.createPerson()
+          }
+        }
+      }
+    }
+    console.log('📦 Batch loading DOKONČENÝ')
+  },
   clearAll: () => {
     Object.keys(cellImages).forEach(key => {
       mainScene?.removeBuilding(key)
@@ -1466,11 +1287,20 @@ defineExpose({
       templateName: tileName,
       tileMetadata: isRoadTile && tileName ? { name: tileName } : null
     }
-    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap)
+    // Počas batch loadingu preskočíme tiene (vykonajú sa na konci)
+    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap, isBatchLoading)
     
-    // Ak sme pridali road tile a osoby ešte neexistujú, vytvoríme ich
-    if (isRoadTile && mainScene && mainScene.persons.length === 0) {
-      mainScene.createPerson()
+    // Počas batch loadingu preskočíme vytváranie osôb a aktualizciu workera
+    if (!isBatchLoading) {
+      // Ak sme pridali road tile a osoby ešte neexistujú, vytvoríme ich
+      if (isRoadTile && mainScene && mainScene.personManager && mainScene.personManager.getPersonCount() === 0) {
+        mainScene.createPerson()
+      }
+      
+      // Ak sme pridali/odobrali road tile, aktualizujeme worker
+      if (mainScene && mainScene.personManager) {
+        mainScene.personManager.updateWorkerRoadTiles()
+      }
     }
   },
   clearRoadBuilding: () => {

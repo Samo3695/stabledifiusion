@@ -26,6 +26,9 @@ const environmentColors = ref({ hue: 0, saturation: 100, brightness: 100 }) // F
 const roadBuildingMode = ref(false) // Režim stavby ciest
 const roadTiles = ref([]) // Road tiles z ImageGallery
 const imageGalleryRef = ref(null) // Referencia na ImageGallery
+const isLoading = ref(false) // Loading state
+const loadingProgress = ref(0) // Loading progress (0-100)
+const loadingStatus = ref('') // Loading status text
 
 const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -349,7 +352,7 @@ const handleLoadProject = (projectData) => {
     selectedImageId.value = null
   }
   
-  // Obnov umiestnené obrázky na šachovnici
+  // Obnov umiestnené obrázky na šachovnici - POSTUPNE PO DÁVKACH
   if (canvasRef.value && Object.keys(placedImages).length > 0) {
     // Najprv vyčisti šachovnicu
     if (typeof canvasRef.value.clearAll === 'function') {
@@ -357,29 +360,75 @@ const handleLoadProject = (projectData) => {
       console.log('🧹 Šachovnica vyčistená')
     }
     
-    // Potom umiestni obrázky - ale počkaj kým sa dokončí render
-    console.log('🎯 Umiestňujem', Object.keys(placedImages).length, 'obrázkov na šachovnicu...')
+    const totalObjects = Object.keys(placedImages).length
+    console.log('🎯 Začínam postupné načítavanie', totalObjects, 'objektov...')
     
-    // Použij setTimeout aby sa canvas stihol vykresliť a obrázky načítať
-    setTimeout(() => {
-      let successCount = 0
-      Object.entries(placedImages).forEach(([key, imageData]) => {
+    // Zapni loading a batch mode
+    isLoading.value = true
+    loadingProgress.value = 0
+    loadingStatus.value = `Načítavam mapu (0/${totalObjects})...`
+    
+    // Zapni batch loading mode - preskočí tiene a osoby
+    if (typeof canvasRef.value.startBatchLoading === 'function') {
+      canvasRef.value.startBatchLoading()
+    }
+    
+    // Konvertuj na pole pre jednoduchšie spracovanie
+    const objectsToLoad = Object.entries(placedImages)
+    
+    // Načítavaj po dávkach (10 objektov za frame - menej pre lepšiu plynulosť)
+    const BATCH_SIZE = 10
+    let currentIndex = 0
+    let successCount = 0
+    
+    const loadBatch = () => {
+      const batchEnd = Math.min(currentIndex + BATCH_SIZE, totalObjects)
+      
+      for (let i = currentIndex; i < batchEnd; i++) {
+        const [key, imageData] = objectsToLoad[i]
         const { row, col, url, cellsX, cellsY } = imageData
-        console.log(`   └─ Umiestňujem na [${row}, ${col}] s veľkosťou ${cellsX}x${cellsY}`)
         
         if (canvasRef.value && typeof canvasRef.value.placeImageAtCell === 'function') {
           try {
             canvasRef.value.placeImageAtCell(row, col, url, cellsX, cellsY)
             successCount++
           } catch (error) {
-            console.error(`❌ Chyba pri umiestnení obrázka na [${row}, ${col}]:`, error)
+            console.error(`❌ Chyba pri umiestnení objektu na [${row}, ${col}]:`, error)
           }
-        } else {
-          console.error('❌ placeImageAtCell funkcia nie je dostupná')
         }
-      })
-      console.log(`✅ Umiestnených ${successCount}/${Object.keys(placedImages).length} obrázkov na šachovnici`)
-    }, 500) // Zvýšil som delay na 500ms
+      }
+      
+      currentIndex = batchEnd
+      loadingProgress.value = Math.round((currentIndex / totalObjects) * 100)
+      loadingStatus.value = `Načítavam mapu (${currentIndex}/${totalObjects})...`
+      
+      if (currentIndex < totalObjects) {
+        // Načítaj ďalšiu dávku v nasledujúcom frame
+        requestAnimationFrame(loadBatch)
+      } else {
+        // Všetky objekty načítané - teraz vykonaj odložené operácie
+        loadingStatus.value = 'Finalizujem tiene a postavy...'
+        
+        // Ukonči batch loading - vykoná tiene a osoby
+        setTimeout(() => {
+          if (canvasRef.value && typeof canvasRef.value.finishBatchLoading === 'function') {
+            canvasRef.value.finishBatchLoading()
+          }
+          
+          setTimeout(() => {
+            isLoading.value = false
+            loadingProgress.value = 100
+            loadingStatus.value = 'Hotovo!'
+            console.log(`✅ Načítaných ${successCount}/${totalObjects} objektov na šachovnici`)
+          }, 500)
+        }, 100)
+      }
+    }
+    
+    // Začni načítavanie po 500ms (aby sa canvas stihol inicializovať)
+    setTimeout(() => {
+      requestAnimationFrame(loadBatch)
+    }, 500)
   } else if (Object.keys(placedImages).length === 0) {
     console.log('ℹ️ Žiadne umiestnené obrázky v projekte')
   } else {
@@ -392,6 +441,18 @@ const handleLoadProject = (projectData) => {
 
 <template>
   <div id="app">
+    <!-- Loading overlay -->
+    <div v-if="isLoading" class="loading-overlay">
+      <div class="loading-content">
+        <div class="loading-spinner"></div>
+        <h2>{{ loadingStatus }}</h2>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: loadingProgress + '%' }"></div>
+        </div>
+        <p class="progress-text">{{ loadingProgress }}%</p>
+      </div>
+    </div>
+    
     <!-- Canvas na pozadí (celá obrazovka) -->
     <PhaserCanvas
       ref="canvasRef"
@@ -561,6 +622,71 @@ header h1 {
   z-index: 10;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* Loading overlay styles */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(5px);
+}
+
+.loading-content {
+  text-align: center;
+  color: white;
+  max-width: 400px;
+  padding: 2rem;
+}
+
+.loading-spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 1.5rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-content h2 {
+  margin: 0 0 1rem 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  transition: width 0.3s ease;
+  border-radius: 4px;
+}
+
+.progress-text {
+  margin: 0.5rem 0 0 0;
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .generator-switcher {

@@ -44,16 +44,32 @@ const saveProject = () => {
     const placedImages = {}
     let backgroundTiles = []
     
+    // Mapa pre deduplikáciu obrázkov - url -> id
+    const uniqueImages = new Map()
+    let imageIdCounter = 1
+    
     if (props.canvasRef && typeof props.canvasRef.cellImages === 'function') {
-      // cellImages() je getter funkcia ktorá vráti objekt
       const cellImagesData = props.canvasRef.cellImages()
-      // cellImagesData je objekt kde kľúč je "row-col" a hodnota je objekt s url, cellsX, cellsY
+      
       Object.entries(cellImagesData).forEach(([key, imageData]) => {
         const [row, col] = key.split('-').map(Number)
+        const url = imageData.url
+        
+        // Skontroluj či tento obrázok už máme
+        let imageId
+        if (uniqueImages.has(url)) {
+          imageId = uniqueImages.get(url)
+        } else {
+          // Nový unikátny obrázok
+          imageId = `img_${imageIdCounter++}`
+          uniqueImages.set(url, imageId)
+        }
+        
+        // Ulož len referenciu na obrázok (nie celé base64!)
         placedImages[key] = {
           row,
           col,
-          url: imageData.url,
+          imageId,  // referencia namiesto url
           cellsX: imageData.cellsX || 1,
           cellsY: imageData.cellsY || 1
         }
@@ -64,16 +80,23 @@ const saveProject = () => {
     if (props.canvasRef && typeof props.canvasRef.backgroundTiles === 'function') {
       backgroundTiles = props.canvasRef.backgroundTiles() || []
     }
+    
+    // Konvertuj uniqueImages mapu na pole objektov
+    const imageLibrary = []
+    uniqueImages.forEach((id, url) => {
+      imageLibrary.push({ id, url })
+    })
 
     // Priprav dáta pre export
     const projectData = {
-      version: '1.3',
+      version: '1.4',  // Nová verzia s deduplikáciou
       timestamp: new Date().toISOString(),
       imageCount: props.images.length,
       placedImageCount: Object.keys(placedImages).length,
+      uniqueImageCount: imageLibrary.length,  // Počet unikátnych obrázkov
       images: props.images.map(img => ({
         id: img.id,
-        url: img.url, // base64 data
+        url: img.url,
         prompt: img.prompt || '',
         negativePrompt: img.negativePrompt || '',
         cellsX: img.cellsX || 1,
@@ -81,7 +104,8 @@ const saveProject = () => {
         view: img.view || '',
         timestamp: img.timestamp || new Date().toISOString()
       })),
-      placedImages: placedImages,
+      imageLibrary,  // Unikátne obrázky pre placedImages
+      placedImages,
       environmentColors: props.environmentColors,
       backgroundTiles: backgroundTiles
     }
@@ -101,6 +125,7 @@ const saveProject = () => {
     URL.revokeObjectURL(url)
 
     console.log('✅ Projekt uložený:', projectData.imageCount, 'obrázkov v galérii,', projectData.placedImageCount, 'umiestnených na šachovnici')
+    console.log('   📦 Unikátnych obrázkov:', imageLibrary.length, '(deduplikované z', Object.keys(placedImages).length, ')')
   } catch (error) {
     console.error('❌ Chyba pri ukladaní projektu:', error)
     alert('Chyba pri ukladaní projektu: ' + error.message)
@@ -131,11 +156,37 @@ const handleFileUpload = async (event) => {
     if (projectData.placedImages) {
       console.log('   Umiestnené obrázky na šachovnici:', Object.keys(projectData.placedImages).length)
     }
+    
+    // Spracuj placedImages - zrekonštruuj URL z imageLibrary (verzia 1.4+)
+    let processedPlacedImages = projectData.placedImages || {}
+    
+    if (projectData.version >= '1.4' && projectData.imageLibrary) {
+      // Nový formát s deduplikáciou - vytvor mapu id -> url
+      const imageMap = new Map()
+      projectData.imageLibrary.forEach(img => {
+        imageMap.set(img.id, img.url)
+      })
+      
+      console.log('   📦 Unikátnych obrázkov v knižnici:', projectData.imageLibrary.length)
+      
+      // Zrekonštruuj plné URL pre každý placedImage
+      processedPlacedImages = {}
+      Object.entries(projectData.placedImages).forEach(([key, data]) => {
+        processedPlacedImages[key] = {
+          row: data.row,
+          col: data.col,
+          url: imageMap.get(data.imageId) || data.url,  // fallback na url ak existuje
+          cellsX: data.cellsX || 1,
+          cellsY: data.cellsY || 1
+        }
+      })
+    }
+    // Pre staršie verzie (1.3 a menej) - url je priamo v placedImages
 
     // Emituj event do App.vue s načítanými obrázkami a placement dátami
     emit('load-project', {
       images: projectData.images,
-      placedImages: projectData.placedImages || {},
+      placedImages: processedPlacedImages,
       environmentColors: projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 },
       backgroundTiles: projectData.backgroundTiles || []
     })
