@@ -61,8 +61,8 @@ const loadRoadSprite = async () => {
     
     // Cieľová veľkosť políčka (rovnaká ako v PhaserCanvas)
     // Zväčši tieto hodnoty pre väčšie priblíženie v galérii
-    const TILE_WIDTH = 128
-    const TILE_HEIGHT = 64
+    const TILE_WIDTH = 80
+    const TILE_HEIGHT = 40
     
     const tiles = []
     
