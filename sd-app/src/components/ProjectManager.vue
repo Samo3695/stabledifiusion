@@ -25,6 +25,10 @@ const props = defineProps({
   environmentColors: {
     type: Object,
     default: () => ({ hue: 0, saturation: 100, brightness: 100 })
+  },
+  personSpawnSettings: {
+    type: Object,
+    default: () => ({ enabled: false, count: 3 })
   }
 })
 
@@ -65,13 +69,17 @@ const saveProject = () => {
           uniqueImages.set(url, imageId)
         }
         
-        // Ulož len referenciu na obrázok (nie celé base64!)
+        // Ulož len referenciu na obrázok (nie celé base64!) + všetky metadáta
         placedImages[key] = {
           row,
           col,
           imageId,  // referencia namiesto url
           cellsX: imageData.cellsX || 1,
-          cellsY: imageData.cellsY || 1
+          cellsY: imageData.cellsY || 1,
+          isBackground: imageData.isBackground || false,
+          isRoadTile: imageData.isRoadTile || false,
+          templateName: imageData.templateName || '',
+          tileMetadata: imageData.tileMetadata || null
         }
       })
     }
@@ -169,7 +177,7 @@ const handleFileUpload = async (event) => {
       
       console.log('   📦 Unikátnych obrázkov v knižnici:', projectData.imageLibrary.length)
       
-      // Zrekonštruuj plné URL pre každý placedImage
+      // Zrekonštruuj plné URL pre každý placedImage + všetky metadáta
       processedPlacedImages = {}
       Object.entries(projectData.placedImages).forEach(([key, data]) => {
         processedPlacedImages[key] = {
@@ -177,7 +185,11 @@ const handleFileUpload = async (event) => {
           col: data.col,
           url: imageMap.get(data.imageId) || data.url,  // fallback na url ak existuje
           cellsX: data.cellsX || 1,
-          cellsY: data.cellsY || 1
+          cellsY: data.cellsY || 1,
+          isBackground: data.isBackground || false,
+          isRoadTile: data.isRoadTile || false,
+          templateName: data.templateName || '',
+          tileMetadata: data.tileMetadata || null
         }
       })
     }

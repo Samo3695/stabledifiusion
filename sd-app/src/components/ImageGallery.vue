@@ -4,7 +4,15 @@ import { ref, watch, onMounted } from 'vue'
 const props = defineProps({
   images: Array,
   selectedImageId: String,
-  canvas: Object // Referencia na canvas pre regeneráciu road tiles
+  canvas: Object, // Referencia na canvas pre regeneráciu road tiles
+  personSpawnEnabled: {
+    type: Boolean,
+    default: false
+  },
+  personSpawnCount: {
+    type: Number,
+    default: 3
+  }
 })
 
 const emit = defineEmits([
@@ -27,8 +35,19 @@ const roadTilesOriginal = ref([]) // Originálne road tiles bez opacity zmeny
 const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber tiles
 const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny sprite URL
-const spawnPersonsEnabled = ref(false) // Či pridať osoby pri kliknutí na road tile
-const personsPerPlacement = ref(3) // Počet osôb na jedno umiestnenie road tile
+const spawnPersonsEnabled = ref(props.personSpawnEnabled) // Či pridať osoby pri kliknutí na road tile
+const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno umiestnenie road tile
+
+// Watch pre props - aktualizuj lokálne refs keď sa zmenia props (napr. po načítaní projektu)
+watch(() => props.personSpawnEnabled, (newVal) => {
+  spawnPersonsEnabled.value = newVal
+  console.log('🔄 ImageGallery: personSpawnEnabled updated from props:', newVal)
+})
+
+watch(() => props.personSpawnCount, (newVal) => {
+  personsPerPlacement.value = Math.max(0, Math.min(500, Math.round(newVal || 0)))
+  console.log('🔄 ImageGallery: personsPerPlacement updated from props:', personsPerPlacement.value)
+})
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
 const loadRoadSprite = async () => {

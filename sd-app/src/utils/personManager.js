@@ -14,7 +14,7 @@ export class PersonManager {
     this.personCount = config.personCount || 20
     this.TILE_WIDTH = config.TILE_WIDTH || 64
     this.TILE_HEIGHT = config.TILE_HEIGHT || 32
-    this.moveDuration = config.moveDuration || 2400 // ms
+    this.moveDuration = config.moveDuration || 60600 // ms (spomalené o polovicu)
     this.initialDelayRange = config.initialDelayRange || [0, 4000] // [min, max] ms
     
     // Web Worker pre výpočty pohybu
@@ -119,7 +119,7 @@ export class PersonManager {
     const { x, y } = this.gridToIso(row, col)
 
     const personSprite = this.scene.add.sprite(0, 0, 'person1')
-    personSprite.setScale(0.25)
+    personSprite.setScale(0.167) // Zmenšené o 1/3 (2/3 z pôvodných 0.25)
     personSprite.setOrigin(0.5, 1)
     
     // Spusti animáciu chôdze
@@ -133,7 +133,7 @@ export class PersonManager {
     personShadow.setTint(0x000000)
     personShadow.setAlpha(0.35)
     personShadow.setAngle(-90)
-    personShadow.setScale(0.25 * 0.7, 0.25 * 0.4)
+    personShadow.setScale(0.167 * 0.7, 0.167 * 0.4) // Úmerne zmenšený tieň
 
     personSprite.setPosition(x, y + this.TILE_HEIGHT / 2)
     personSprite.setVisible(true)

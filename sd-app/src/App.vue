@@ -197,6 +197,9 @@ const handleCellSelected = ({ row, col }) => {
   if (deleteMode.value && canvasRef.value) {
     console.log(`🗑️ App.vue: Režim mazania - vymazanie buildingu na [${row}, ${col}]`)
     canvasRef.value.deleteImageAtCell(row, col)
+    // Vyčisti výber obrázku aby sa nestal náhodne vložený na ďalšie políčko
+    selectedImageId.value = null
+    selectedImageData.value = null
     return
   }
   
@@ -395,11 +398,21 @@ const handleLoadProject = (projectData) => {
       
       for (let i = currentIndex; i < batchEnd; i++) {
         const [key, imageData] = objectsToLoad[i]
-        const { row, col, url, cellsX, cellsY } = imageData
+        const { row, col, url, cellsX, cellsY, isBackground, isRoadTile, templateName, tileMetadata } = imageData
         
         if (canvasRef.value && typeof canvasRef.value.placeImageAtCell === 'function') {
           try {
-            canvasRef.value.placeImageAtCell(row, col, url, cellsX, cellsY)
+            canvasRef.value.placeImageAtCell(
+              row, 
+              col, 
+              url, 
+              cellsX, 
+              cellsY, 
+              isBackground || false, 
+              isRoadTile || false, 
+              null, // bitmap
+              templateName || ''
+            )
             successCount++
           } catch (error) {
             console.error(`❌ Chyba pri umiestnení objektu na [${row}, ${col}]:`, error)
@@ -495,6 +508,7 @@ const handleLoadProject = (projectData) => {
         :showGrid="showGrid"
         :canvasRef="canvasRef"
         :environmentColors="environmentColors"
+      :personSpawnSettings="{ enabled: personSpawnEnabled, count: personSpawnCount }"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"
@@ -559,6 +573,8 @@ const handleLoadProject = (projectData) => {
         ref="imageGalleryRef"
         :images="images" 
         :selectedImageId="selectedImageId"
+        :personSpawnEnabled="personSpawnEnabled"
+        :personSpawnCount="personSpawnCount"
         @delete="handleDelete" 
         @select="handleSelectImage"
         @place-on-board="handlePlaceOnBoard"

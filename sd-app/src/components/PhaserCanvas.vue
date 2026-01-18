@@ -165,7 +165,7 @@ class IsoScene extends Phaser.Scene {
       personCount: 200,
       TILE_WIDTH,
       TILE_HEIGHT,
-      moveDuration: 2400,
+      moveDuration: 6000, // Výrazne spomalené pre pomalý realistický pohyb
       initialDelayRange: [0, 4000]
     })
   }
@@ -901,7 +901,9 @@ class IsoScene extends Phaser.Scene {
       return
     }
     
-    const textureKey = `building_${key}`
+    // Unikátny kľúč s timestampom aby sa vždy načítala nová textúra
+    // (rovnaký prístup ako pre road tiles)
+    const textureKey = `building_${key}_${Date.now()}`
     
     // Asynchrónne načítanie textúry
     this.load.image(textureKey, imageUrl)
@@ -1184,6 +1186,11 @@ class IsoScene extends Phaser.Scene {
       // Prekreslíme tiene
       this.redrawAllShadows()
     }
+    
+    // Aktualizuj PersonManager cache aby postavy vedeli o vymazaní bunky
+    if (this.personManager) {
+      this.personManager.updateWorkerRoadTiles()
+    }
   }
 
   clearSelection() {
@@ -1310,30 +1317,44 @@ const deleteImageAtCell = (row, col) => {
   const key = `${row}-${col}`
   console.log(`🗑️ PhaserCanvas: Vymazanie obrázka na [${row}, ${col}], key=${key}`)
   
+  let deleted = false
+  
   // Najprv skús priamo podľa kľúča (pre 1x1 tiles ako roads)
   if (cellImages[key]) {
     console.log(`🗑️ Nájdený priamy kľúč ${key}, mažem...`)
     mainScene.removeBuilding(key)
     delete cellImages[key]
-    return true
+    deleted = true
   }
   
   // Ak nie je priamy kľúč, hľadaj obrázok ktorý zaberá túto bunku
-  for (const imgKey in cellImages) {
-    const [imgRow, imgCol] = imgKey.split('-').map(Number)
-    const img = cellImages[imgKey]
-    const cells = mainScene.getAffectedCells(imgRow, imgCol, img.cellsX || 1, img.cellsY || 1)
-    
-    if (cells.some(c => c.row === row && c.col === col)) {
-      console.log(`🗑️ Nájdený obrázok ${imgKey} zaberajúci [${row}, ${col}], mažem...`)
-      mainScene.removeBuilding(imgKey)
-      delete cellImages[imgKey]
-      return true
+  if (!deleted) {
+    for (const imgKey in cellImages) {
+      const [imgRow, imgCol] = imgKey.split('-').map(Number)
+      const img = cellImages[imgKey]
+      const cells = mainScene.getAffectedCells(imgRow, imgCol, img.cellsX || 1, img.cellsY || 1)
+      
+      if (cells.some(c => c.row === row && c.col === col)) {
+        console.log(`🗑️ Nájdený obrázok ${imgKey} zaberajúci [${row}, ${col}], mažem...`)
+        mainScene.removeBuilding(imgKey)
+        delete cellImages[imgKey]
+        deleted = true
+        break
+      }
     }
   }
   
-  console.log(`⚠️ Žiadny obrázok na [${row}, ${col}] nebol nájdený`)
-  return false
+  if (deleted && mainScene && mainScene.personManager) {
+    // Aktualizuj PersonManager cache po vymazaní
+    mainScene.personManager.updateWorkerRoadTiles()
+    console.log('🔄 PersonManager cache aktualizovaný po vymazaní')
+  }
+  
+  if (!deleted) {
+    console.log(`⚠️ Žiadny obrázok na [${row}, ${col}] nebol nájdený`)
+  }
+  
+  return deleted
 }
 
 // Expose funkcie
@@ -1379,8 +1400,9 @@ defineExpose({
   clearAll: () => {
     Object.keys(cellImages).forEach(key => {
       mainScene?.removeBuilding(key)
+      delete cellImages[key] // Vymaž vlastnosť namiesto prepísania objektu
     })
-    cellImages = {}
+    // NEPREPISUJ cellImages = {} lebo PersonManager má referenciu na tento objekt!
   },
   placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false, bitmap = null, tileName = '') => {
     const key = `${row}-${col}`
