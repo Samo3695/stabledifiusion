@@ -29,6 +29,8 @@ const imageGalleryRef = ref(null) // Referencia na ImageGallery
 const isLoading = ref(false) // Loading state
 const loadingProgress = ref(0) // Loading progress (0-100)
 const loadingStatus = ref('') // Loading status text
+const personSpawnEnabled = ref(false)
+const personSpawnCount = ref(0)
 
 const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -109,6 +111,13 @@ const handleRoadBuildingModeChanged = (isRoadMode) => {
 const handleRoadTilesReady = (tiles) => {
   roadTiles.value = tiles
   console.log(`🛣️ App.vue: Road tiles načítané: ${tiles.length} tiles`)
+}
+
+const handlePersonSpawnSettingsChanged = ({ enabled, count }) => {
+  personSpawnEnabled.value = !!enabled
+  const parsed = Number.isFinite(count) ? count : 0
+  personSpawnCount.value = Math.max(0, Math.min(500, Math.round(parsed)))
+  console.log(`🚶 App.vue: Person spawn ${personSpawnEnabled.value ? 'ON' : 'OFF'}, count=${personSpawnCount.value}`)
 }
 
 // Watch pre zmenu roadTiles - keď sa zmení opacity, regeneruj canvas
@@ -467,6 +476,8 @@ const handleLoadProject = (projectData) => {
       :deleteMode="deleteMode"
       :roadBuildingMode="roadBuildingMode"
       :roadTiles="roadTiles"
+      :personSpawnEnabled="personSpawnEnabled"
+      :personSpawnCount="personSpawnCount"
       @cell-selected="handleCellSelected"
       @image-placed="handleImagePlaced"
       @toggle-numbering="handleToggleNumbering"
@@ -556,6 +567,7 @@ const handleLoadProject = (projectData) => {
         @road-building-mode-changed="handleRoadBuildingModeChanged"
         @road-tiles-ready="handleRoadTilesReady"
         @road-opacity-changed="handleRoadOpacityChanged"
+        @person-spawn-settings-changed="handlePersonSpawnSettingsChanged"
       />
     </div>
   </div>

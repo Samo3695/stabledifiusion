@@ -8,6 +8,7 @@ export class PersonManager {
     this.scene = scene
     this.cellImages = cellImages
     this.persons = []
+    this.personIdSeq = 0
     
     // Konfigurácia
     this.personCount = config.personCount || 20
@@ -25,6 +26,12 @@ export class PersonManager {
     
     // Inicializujeme worker
     this.initWorker()
+  }
+
+  generatePersonId() {
+    const id = `person_${this.personIdSeq}`
+    this.personIdSeq += 1
+    return id
   }
 
   /**
@@ -98,61 +105,81 @@ export class PersonManager {
     
     // Vytvoríme viaceré osoby
     for (let i = 0; i < this.personCount; i++) {
-      // Náhodný road tile pre každú osobu
       const randomTile = Phaser.Utils.Array.GetRandom(allRoadTiles)
-      
-      // Vytvoríme sprite pre osobu
-      const personSprite = this.scene.add.sprite(0, 0, 'person')
-      personSprite.setScale(0.25)
-      personSprite.setOrigin(0.5, 1)
-      
-      // Vytvoríme tieň
-      const personShadow = this.scene.add.sprite(0, 0, 'person')
-      personShadow.setDepth(0.6)
-      personShadow.setOrigin(0.5, 1)
-      personShadow.setTint(0x000000)
-      personShadow.setAlpha(0.35)
-      personShadow.setAngle(-90)
-      personShadow.setScale(0.25 * 0.7, 0.25 * 0.4)
-      
-      const { x, y } = this.gridToIso(randomTile.row, randomTile.col)
-      personSprite.setPosition(x, y + this.TILE_HEIGHT / 2)
-      personSprite.setVisible(true)
-      
-      // Depth založený na pozícii - rovnaký systém ako budovy ale o 1 nižší
-      const personDepth = 99 + (randomTile.row + randomTile.col)
-      personSprite.setDepth(personDepth)
-      
-      // Aktualizujeme pozíciu tieňa
-      const shadowOffsetX = 4
-      const shadowOffsetY = 2
-      personShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
-      personShadow.setVisible(true)
-      
-      // Uložíme do poľa
-      const person = {
-        id: `person_${i}`, // Unikátne ID pre komunikáciu s worker-om
-        sprite: personSprite,
-        shadow: personShadow,
-        currentCell: { row: randomTile.row, col: randomTile.col },
-        targetCell: null,
-        moveTween: null,
-        moveTimer: null
-      }
-      
-      this.persons.push(person)
-      
-      // Spustíme náhodný pohyb s náhodným delayom
-      const [minDelay, maxDelay] = this.initialDelayRange
-      const initialDelay = Phaser.Math.Between(minDelay, maxDelay)
-      this.scene.time.delayedCall(initialDelay, () => {
-        this.startPersonMovement(person)
-      })
+      this.spawnSinglePersonAt(randomTile.row, randomTile.col)
     }
     
     console.log(`🚶 Vytvorených ${this.persons.length} osôb`)
     
     // Aktualizujeme worker s aktuálnymi road tiles
+    this.updateWorkerRoadTiles()
+  }
+
+  spawnSinglePersonAt(row, col) {
+    const { x, y } = this.gridToIso(row, col)
+
+    const personSprite = this.scene.add.sprite(0, 0, 'person1')
+    personSprite.setScale(0.25)
+    personSprite.setOrigin(0.5, 1)
+    
+    // Spusti animáciu chôdze
+    if (this.scene.anims.exists('person_walk')) {
+      personSprite.play('person_walk')
+    }
+
+    const personShadow = this.scene.add.sprite(0, 0, 'person1')
+    personShadow.setDepth(0.6)
+    personShadow.setOrigin(0.5, 1)
+    personShadow.setTint(0x000000)
+    personShadow.setAlpha(0.35)
+    personShadow.setAngle(-90)
+    personShadow.setScale(0.25 * 0.7, 0.25 * 0.4)
+
+    personSprite.setPosition(x, y + this.TILE_HEIGHT / 2)
+    personSprite.setVisible(true)
+
+    const personDepth = 99 + (row + col)
+    personSprite.setDepth(personDepth)
+
+    const shadowOffsetX = 4
+    const shadowOffsetY = 2
+    personShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
+    personShadow.setVisible(true)
+
+    const person = {
+      id: this.generatePersonId(),
+      sprite: personSprite,
+      shadow: personShadow,
+      currentCell: { row, col },
+      targetCell: null,
+      moveTween: null,
+      moveTimer: null
+    }
+
+    this.persons.push(person)
+
+    const [minDelay, maxDelay] = this.initialDelayRange
+    const initialDelay = Phaser.Math.Between(minDelay, maxDelay)
+    this.scene.time.delayedCall(initialDelay, () => {
+      this.startPersonMovement(person)
+    })
+  }
+
+  createPersonsAtTile(count = 1, row, col) {
+    const key = `${row}-${col}`
+    const tile = this.cellImages[key]
+    if (!tile || !tile.isRoadTile) {
+      console.warn('🚫 createPersonsAtTile: tile nie je road, spawn preskočený', key)
+      return
+    }
+
+    const safeCount = Math.max(0, Math.min(500, Math.round(count)))
+    if (safeCount === 0) return
+
+    for (let i = 0; i < safeCount; i++) {
+      this.spawnSinglePersonAt(row, col)
+    }
+
     this.updateWorkerRoadTiles()
   }
 

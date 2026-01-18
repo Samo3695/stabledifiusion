@@ -41,6 +41,14 @@ const props = defineProps({
   roadTiles: {
     type: Array,
     default: () => []
+  },
+  personSpawnEnabled: {
+    type: Boolean,
+    default: false
+  },
+  personSpawnCount: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -95,8 +103,10 @@ class IsoScene extends Phaser.Scene {
     // Vytvoríme placeholder textúru pre tiene
     this.createShadowTexture()
     
-    // Načítame sprite osoby
-    this.load.image('person', '/templates/roads/sprites/person.png')
+    // Načítame sprite osoby - 3 framey pre animáciu
+    this.load.image('person1', '/templates/roads/sprites/person1.png')
+    this.load.image('person2', '/templates/roads/sprites/person2.png')
+    this.load.image('person3', '/templates/roads/sprites/person3.png')
   }
 
   create() {
@@ -136,6 +146,20 @@ class IsoScene extends Phaser.Scene {
     // Pravé tlačidlo pre dragging
     this.input.mouse.disableContextMenu()
     
+    // Vytvoríme animáciu pre osobu
+    if (!this.anims.exists('person_walk')) {
+      this.anims.create({
+        key: 'person_walk',
+        frames: [
+          { key: 'person1' },
+          { key: 'person2' },
+          { key: 'person3' }
+        ],
+        frameRate: 4,
+        repeat: -1
+      })
+    }
+    
     // Inicializujeme PersonManager
     this.personManager = new PersonManager(this, cellImages, {
       personCount: 200,
@@ -149,6 +173,12 @@ class IsoScene extends Phaser.Scene {
   createPerson() {
     if (this.personManager) {
       this.personManager.createPersons()
+    }
+  }
+
+  createPersonsAt(row, col, count) {
+    if (this.personManager) {
+      this.personManager.createPersonsAtTile(count, row, col)
     }
   }
   
@@ -1374,12 +1404,13 @@ defineExpose({
     
     // Počas batch loadingu preskočíme vytváranie osôb a aktualizciu workera
     if (!isBatchLoading) {
-      // Ak sme pridali road tile a osoby ešte neexistujú, vytvoríme ich
-      if (isRoadTile && mainScene && mainScene.personManager && mainScene.personManager.getPersonCount() === 0) {
-        mainScene.createPerson()
+      if (isRoadTile && mainScene && mainScene.personManager && props.personSpawnEnabled) {
+        const spawnCount = Math.max(0, Math.min(500, Math.round(props.personSpawnCount || 0)))
+        if (spawnCount > 0) {
+          mainScene.createPersonsAt(row, col, spawnCount)
+        }
       }
-      
-      // Ak sme pridali/odobrali road tile, aktualizujeme worker
+
       if (mainScene && mainScene.personManager) {
         mainScene.personManager.updateWorkerRoadTiles()
       }

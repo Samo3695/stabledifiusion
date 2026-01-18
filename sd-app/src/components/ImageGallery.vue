@@ -7,7 +7,17 @@ const props = defineProps({
   canvas: Object // Referencia na canvas pre regeneráciu road tiles
 })
 
-const emit = defineEmits(['delete', 'select', 'place-on-board', 'grid-size-changed', 'delete-mode-changed', 'road-building-mode-changed', 'road-tiles-ready', 'road-opacity-changed'])
+const emit = defineEmits([
+  'delete',
+  'select',
+  'place-on-board',
+  'grid-size-changed',
+  'delete-mode-changed',
+  'road-building-mode-changed',
+  'road-tiles-ready',
+  'road-opacity-changed',
+  'person-spawn-settings-changed'
+])
 
 const selectedImage = ref(null)
 const selectedGridSize = ref(1) // 1, 4, 9, 16, 25, alebo -1 pre režim mazania
@@ -17,6 +27,8 @@ const roadTilesOriginal = ref([]) // Originálne road tiles bez opacity zmeny
 const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber tiles
 const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny sprite URL
+const spawnPersonsEnabled = ref(false) // Či pridať osoby pri kliknutí na road tile
+const personsPerPlacement = ref(3) // Počet osôb na jedno umiestnenie road tile
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
 const loadRoadSprite = async () => {
@@ -61,8 +73,8 @@ const loadRoadSprite = async () => {
     
     // Cieľová veľkosť políčka (rovnaká ako v PhaserCanvas)
     // Zväčši tieto hodnoty pre väčšie priblíženie v galérii
-    const TILE_WIDTH = 80
-    const TILE_HEIGHT = 40
+    const TILE_WIDTH = 120
+    const TILE_HEIGHT = 60
     
     const tiles = []
     
@@ -153,6 +165,18 @@ watch(roadTiles, (tiles) => {
     }
   }
 }, { immediate: true })
+
+const emitPersonSettings = () => {
+  const safeCount = Math.max(0, Math.min(500, Math.round(personsPerPlacement.value || 0)))
+  personsPerPlacement.value = safeCount
+  emit('person-spawn-settings-changed', {
+    enabled: spawnPersonsEnabled.value,
+    count: safeCount
+  })
+}
+
+watch(spawnPersonsEnabled, () => emitPersonSettings(), { immediate: true })
+watch(personsPerPlacement, () => emitPersonSettings())
 
 // Funkcia na regenerovanie road tiles s novou opacity
 const regenerateRoadTilesWithOpacity = async () => {
@@ -383,6 +407,25 @@ const formatDate = (date) => {
         class="opacity-slider"
       />
       <span class="opacity-value">{{ roadOpacity }}%</span>
+    </div>
+  </div>
+
+  <!-- Person spawn controls -->
+  <div v-if="activeGalleryTab === 'roads'" class="person-spawn-controls">
+    <label class="person-spawn-checkbox">
+      <input type="checkbox" v-model="spawnPersonsEnabled" />
+      <span>Pridať osoby pri položení road</span>
+    </label>
+    <div class="person-count-input">
+      <label for="persons-per-placement">Počet osôb:</label>
+      <input
+        id="persons-per-placement"
+        type="number"
+        min="0"
+        max="500"
+        step="1"
+        v-model.number="personsPerPlacement"
+      />
     </div>
   </div>
   
@@ -917,6 +960,41 @@ h2 {
   min-width: 50px;
   text-align: right;
   font-size: 0.9rem;
+}
+
+/* Person spawn controls */
+.person-spawn-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.person-spawn-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: #333;
+  margin: 0;
+}
+
+.person-count-input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.person-count-input input {
+  width: 80px;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font-weight: 600;
 }
 
 /* Roads grid */
