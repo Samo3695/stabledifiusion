@@ -71,6 +71,7 @@ class IsoScene extends Phaser.Scene {
     this.selectedGraphics = null
     this.buildingSprites = {}
     this.shadowSprites = {}
+    this.batchLoading = false
     this.tileSprites = []
     this.numberTexts = []
     this.isDragging = false
@@ -928,7 +929,7 @@ class IsoScene extends Phaser.Scene {
         
         // Prekreslíme tiene len ak nie sme v batch loading mode
         if (!skipShadows && !this.batchLoading) {
-          this.redrawAllShadows()
+          this.redrawShadowsAround(row, col)
         }
       })
     })
@@ -947,6 +948,27 @@ class IsoScene extends Phaser.Scene {
     // Odložíme prekreslenie do nasledujúceho frame aby sme neblokovali animácie
     requestAnimationFrame(() => {
       this.performShadowRedraw()
+    })
+  }
+
+  // Prekreslí tiene len pre budovu a jej susedov (optimalizované)
+  redrawShadowsAround(centerRow, centerCol) {
+    // Susediace bunky podľa príkladu: (r,c), (r,c-1), (r+1,c-1), (r+1,c)
+    const offsets = [
+      { dr: 0, dc: 0 },
+      { dr: 0, dc: -1 },
+      { dr: 1, dc: -1 },
+      { dr: 1, dc: 0 }
+    ]
+
+    const keys = offsets
+      .map(({ dr, dc }) => `${centerRow + dr}-${centerCol + dc}`)
+      .filter(key => this.shadowSprites[key])
+
+    if (keys.length === 0) return
+
+    requestAnimationFrame(() => {
+      this.performShadowRedrawForKeys(keys)
     })
   }
   
@@ -1026,6 +1048,66 @@ class IsoScene extends Phaser.Scene {
       
       tempSprite.destroy()
     }
+  }
+
+  // Skutočné prekreslenie tieňov len pre vybrané kľúče (bez čistenia celej RT)
+  performShadowRedrawForKeys(keys) {
+    const rtOffsetX = 2000
+    const rtOffsetY = 2000 - GRID_SIZE * TILE_HEIGHT / 2
+
+    keys.forEach(key => {
+      const shadowInfo = this.shadowSprites[key]
+      if (!shadowInfo || !shadowInfo.textureKey) return
+      if (!this.textures.exists(shadowInfo.textureKey)) return
+
+      const drawX = shadowInfo.x + shadowInfo.offsetX + rtOffsetX
+      const drawY = shadowInfo.y + shadowInfo.offsetY + rtOffsetY
+
+      const tempSprite = this.make.sprite({
+        key: shadowInfo.textureKey,
+        add: false
+      })
+
+      const texture = this.textures.get(shadowInfo.textureKey)
+      const frame = texture.get()
+
+      const shadowScaleX = shadowInfo.scale * 0.45
+      const shadowScaleY = shadowInfo.scale * 1.3
+      tempSprite.setScale(shadowScaleX, shadowScaleY)
+      tempSprite.setOrigin(0.5, 1)
+      tempSprite.setAngle(-90)
+      tempSprite.setTint(0x000000)
+      tempSprite.setAlpha(1)
+
+      const shadowOffsets = {
+        '1x1': { x: 44, y: -23 },
+        '2x2': { x: 89 , y: -45 },
+        '3x3': { x: 138, y: -68 },
+        '4x4': { x: 180, y: -89 },
+        '5x5': { x: 219, y: -112 },
+        'tree1x1': { x: 26, y: -11 },
+        'tree2x2': { x: 44, y: -19 },
+        'tree3x3': { x: 75, y: -32 },
+        'tree4x4': { x: 100, y: -45 },
+        'tree5x5': { x: 125, y: -58 }
+      }
+
+      const cellsX = shadowInfo.cellsX || 1
+      const isTree = shadowInfo.isTree || false
+      const sizeKey = isTree ? `tree${cellsX}x${cellsX}` : `${cellsX}x${cellsX}`
+      const offsets = shadowOffsets[sizeKey] || shadowOffsets[`${cellsX}x${cellsX}`] || shadowOffsets['1x1']
+
+      const fixedOffsetX = offsets.x
+      const fixedOffsetY = offsets.y
+
+      // Najprv sa pokús vymazať starý tieň ak engine podporuje erase
+      if (typeof this.shadowRenderTexture.erase === 'function') {
+        this.shadowRenderTexture.erase(tempSprite, drawX + fixedOffsetX, drawY + fixedOffsetY)
+      }
+
+      this.shadowRenderTexture.draw(tempSprite, drawX + fixedOffsetX, drawY + fixedOffsetY)
+      tempSprite.destroy()
+    })
   }
 
   sortBuildings() {
