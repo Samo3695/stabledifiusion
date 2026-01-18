@@ -48,6 +48,7 @@ const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', '
 const gameContainer = ref(null)
 let game = null
 let mainScene = null
+const showPerson = ref(true) // Či zobrazovať pohyblivú osobu
 
 // Dáta pre uložené obrázky
 let cellImages = {}
@@ -83,11 +84,18 @@ class IsoScene extends Phaser.Scene {
     this.roadStartCell = null // Začiatočný bod cesty
     this.roadPath = [] // Aktuálna cesta (pole bunk)
     this.roadPathGraphics = null // Grafika pre preview cesty
+    
+    // Pohyblivé osoby (pole pre viaceré osoby)
+    this.persons = [] // Pole objektov { sprite, shadow, currentCell, targetCell, moveTween, moveTimer }
+    this.personCount = 20 // Počet osôb
   }
 
   preload() {
     // Vytvoríme placeholder textúru pre tiene
     this.createShadowTexture()
+    
+    // Načítame sprite osoby
+    this.load.image('person', '/templates/roads/sprites/person.png')
   }
 
   create() {
@@ -126,6 +134,255 @@ class IsoScene extends Phaser.Scene {
     
     // Pravé tlačidlo pre dragging
     this.input.mouse.disableContextMenu()
+  }
+
+  createPerson() {
+    // Ak už osoby existujú, len ich aktualizujeme
+    if (this.persons.length > 0) {
+      this.updateAllPersonsPosition()
+      return
+    }
+    
+    // Nájdeme všetky road tiles
+    const allRoadTiles = this.getAllRoadTiles()
+    if (allRoadTiles.length === 0) {
+      console.log('🚶 Žiadne road tiles, osoby sa nevytvoria')
+      return
+    }
+    
+    // Vytvoríme viaceré osoby
+    for (let i = 0; i < this.personCount; i++) {
+      // Náhodný road tile pre každú osobu
+      const randomTile = Phaser.Utils.Array.GetRandom(allRoadTiles)
+      
+      // Vytvoríme sprite pre osobu
+      const personSprite = this.add.sprite(0, 0, 'person')
+      personSprite.setScale(0.25)
+      personSprite.setOrigin(0.5, 1)
+      personSprite.setDepth(1000 + i) // Každá osoba má vlastný depth
+      
+      // Vytvoríme tieň
+      const personShadow = this.add.sprite(0, 0, 'person')
+      personShadow.setDepth(0.6)
+      personShadow.setOrigin(0.5, 1)
+      personShadow.setTint(0x000000)
+      personShadow.setAlpha(0.35)
+      personShadow.setAngle(-90)
+      personShadow.setScale(0.25 * 0.7, 0.25 * 0.4)
+      
+      const { x, y } = this.gridToIso(randomTile.row, randomTile.col)
+      personSprite.setPosition(x, y + TILE_HEIGHT / 2)
+      personSprite.setVisible(true)
+      
+      // Aktualizujeme pozíciu tieňa
+      const shadowOffsetX = 4
+      const shadowOffsetY = 2
+      personShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
+      personShadow.setVisible(true)
+      
+      // Uložíme do poľa
+      const person = {
+        sprite: personSprite,
+        shadow: personShadow,
+        currentCell: { row: randomTile.row, col: randomTile.col },
+        targetCell: null,
+        moveTween: null,
+        moveTimer: null
+      }
+      
+      this.persons.push(person)
+      
+      // Spustíme náhodný pohyb s náhodným delayom
+      const initialDelay = Phaser.Math.Between(0, 4000)
+      this.time.delayedCall(initialDelay, () => {
+        this.startPersonMovement(person)
+      })
+    }
+    
+    console.log(`🚶 Vytvorených ${this.persons.length} osôb`)
+  }
+  
+  createPersonShadow(x, y) {
+    // Vytvoríme sprite pre tieň osoby (rovnaká textúra ako osoba)
+    if (!this.personShadow) {
+      this.personShadow = this.add.sprite(0, 0, 'person')
+      this.personShadow.setDepth(0.6) // Nad cestami (0.5) ale pod budovami
+      this.personShadow.setOrigin(0.5, 1) // Spodný stred
+      this.personShadow.setTint(0x000000) // Čierna farba
+      this.personShadow.setAlpha(0.35) // Priehľadnosť
+      this.personShadow.setAngle(-90) // Rotácia na bok
+      this.personShadow.setScale(0.25 * 0.7, 0.25 * 0.4) // Zmenšený a zploštený
+    }
+    
+    this.updatePersonShadow(x, y)
+  }
+  
+  updatePersonShadow(x, y) {
+    if (!this.personShadow) return
+    
+    // Offset pre tieň (bližšie k osobe)
+    const shadowOffsetX = 4
+    const shadowOffsetY = 2
+    
+    this.personShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
+  }
+  
+  updateAllPersonsPosition() {
+    // Aktualizujeme pozíciu všetkých osôb ak už existujú
+    if (this.persons.length === 0) return
+    
+    const allRoadTiles = this.getAllRoadTiles()
+    if (allRoadTiles.length === 0) {
+      // Ak už nie sú žiadne road tiles, skryjeme všetky osoby
+      this.persons.forEach(person => {
+        person.sprite.setVisible(false)
+        person.shadow.setVisible(false)
+        this.stopPersonMovement(person)
+      })
+      return
+    }
+    
+    // Ukážeme osoby ak sú skryté
+    this.persons.forEach(person => {
+      if (!person.sprite.visible) {
+        const randomTile = Phaser.Utils.Array.GetRandom(allRoadTiles)
+        person.currentCell = { row: randomTile.row, col: randomTile.col }
+        const { x, y } = this.gridToIso(randomTile.row, randomTile.col)
+        person.sprite.setPosition(x, y + TILE_HEIGHT / 2)
+        person.sprite.setVisible(true)
+        person.shadow.setVisible(true)
+        this.startPersonMovement(person)
+      }
+    })
+  }
+  
+  findFirstRoadTile() {
+    // Nájdeme prvý road tile v cellImages
+    for (const key in cellImages) {
+      const img = cellImages[key]
+      if (img.isRoadTile) {
+        const [row, col] = key.split('-').map(Number)
+        return { row, col }
+      }
+    }
+    return null
+  }
+  
+  getAllRoadTiles() {
+    // Vrátime všetky road tiles
+    const roadTiles = []
+    for (const key in cellImages) {
+      const img = cellImages[key]
+      if (img.isRoadTile) {
+        const [row, col] = key.split('-').map(Number)
+        roadTiles.push({ row, col })
+      }
+    }
+    return roadTiles
+  }
+  
+  findAdjacentRoadTiles(row, col) {
+    // Nájdeme susedné road tiles (hore, dole, vľavo, vpravo)
+    const adjacent = []
+    const directions = [
+      { row: -1, col: 0 }, // hore
+      { row: 1, col: 0 },  // dole
+      { row: 0, col: -1 }, // vľavo
+      { row: 0, col: 1 }   // vpravo
+    ]
+    
+    for (const dir of directions) {
+      const newRow = row + dir.row
+      const newCol = col + dir.col
+      const key = `${newRow}-${newCol}`
+      
+      if (cellImages[key] && cellImages[key].isRoadTile) {
+        adjacent.push({ row: newRow, col: newCol })
+      }
+    }
+    
+    return adjacent
+  }
+  
+  startPersonMovement(person) {
+    if (!person || !person.sprite || !person.currentCell) return
+    
+    // Okamžite začneme pohyb bez delay
+    this.movePersonToNextTile(person)
+  }
+  
+  movePersonToNextTile(person) {
+    if (!person || !person.sprite || !person.currentCell) return
+    
+    // Nájdeme susedné road tiles
+    const adjacent = this.findAdjacentRoadTiles(person.currentCell.row, person.currentCell.col)
+    
+    if (adjacent.length === 0) {
+      // Žiadne susedné road tiles - skúsime nájsť iný náhodný
+      const allRoads = this.getAllRoadTiles()
+      if (allRoads.length > 0) {
+        const randomRoad = Phaser.Utils.Array.GetRandom(allRoads)
+        person.currentCell = randomRoad
+        const { x, y } = this.gridToIso(randomRoad.row, randomRoad.col)
+        person.sprite.setPosition(x, y + TILE_HEIGHT / 2)
+        person.shadow.setPosition(x + 4, y + 2)
+      }
+      this.startPersonMovement(person)
+      return
+    }
+    
+    // Vyberieme náhodný susedný tile
+    const target = Phaser.Utils.Array.GetRandom(adjacent)
+    const { x: targetX, y: targetY } = this.gridToIso(target.row, target.col)
+    
+    // Animujeme pohyb - pomalšie pre pokojnejší pohyb
+    const duration = 1200 // 1.2 sekundy
+    person.moveTween = this.tweens.add({
+      targets: person.sprite,
+      x: targetX,
+      y: targetY + TILE_HEIGHT / 2,
+      duration: duration,
+      ease: 'Linear',
+      onUpdate: () => {
+        // Aktualizujeme pozíciu tieňa počas pohybu
+        const shadowOffsetX = 4
+        const shadowOffsetY = 2
+        person.shadow.setPosition(person.sprite.x + shadowOffsetX, person.sprite.y + shadowOffsetY)
+      },
+      onComplete: () => {
+        person.currentCell = target
+        // Okamžite pokračujeme ďalším pohybom
+        this.movePersonToNextTile(person)
+      }
+    })
+  }
+  
+  stopPersonMovement(person) {
+    if (person.moveTimer) {
+      person.moveTimer.remove()
+      person.moveTimer = null
+    }
+    if (person.moveTween) {
+      person.moveTween.stop()
+      person.moveTween = null
+    }
+  }
+  
+  togglePerson(visible) {
+    this.persons.forEach(person => {
+      if (visible) {
+        person.sprite.setVisible(true)
+        person.shadow.setVisible(true)
+        // Reštartujeme pohyb ak bol zastavený
+        if (!person.moveTimer) {
+          this.startPersonMovement(person)
+        }
+      } else {
+        person.sprite.setVisible(false)
+        person.shadow.setVisible(false)
+        this.stopPersonMovement(person)
+      }
+    })
   }
 
   createShadowTexture() {
@@ -1210,9 +1467,17 @@ defineExpose({
       tileMetadata: isRoadTile && tileName ? { name: tileName } : null
     }
     mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap)
+    
+    // Ak sme pridali road tile a osoby ešte neexistujú, vytvoríme ich
+    if (isRoadTile && mainScene && mainScene.persons.length === 0) {
+      mainScene.createPerson()
+    }
   },
   clearRoadBuilding: () => {
     mainScene?.clearRoadBuilding()
+  },
+  togglePerson: (visible) => {
+    mainScene?.togglePerson(visible)
   }
 })
 
@@ -1223,6 +1488,11 @@ watch(() => props.showGrid, () => {
 
 watch(() => props.showNumbering, () => {
   mainScene?.refreshGrid()
+})
+
+// Watch pre zobrazenie osoby
+watch(showPerson, (newVal) => {
+  mainScene?.togglePerson(newVal)
 })
 
 // Watch pre road building mode - vyčisti stav keď sa vypne
@@ -1299,6 +1569,13 @@ onUnmounted(() => {
           @change="$emit('toggle-grid', $event.target.checked)"
         />
         <span>☰ Mriežka</span>
+      </label>
+      <label class="checkbox-label">
+        <input 
+          type="checkbox" 
+          v-model="showPerson"
+        />
+        <span>🚶 Osoba</span>
       </label>
     </div>
   </div>
