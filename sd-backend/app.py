@@ -9,7 +9,7 @@ import numpy as np
 import os
 from pathlib import Path
 from remove_background import remove_black_background
-from color_transform import shift_hue, adjust_saturation
+from color_transform import shift_hue, adjust_saturation, apply_color_tint
 
 app = Flask(__name__)
 CORS(app)
@@ -224,6 +224,7 @@ def generate():
         prompt = data.get('prompt', '')
         negative_prompt = data.get('negative_prompt', '')
         input_image = data.get('input_image', '')  # Base64 obrázok
+        target_color = data.get('target_color', '')  # Hexadecimálna farba (napr. #FF0000)
         
         # LoRA podpora
         lora_name = data.get('lora', '')  # Názov LoRA (bez prípony)
@@ -343,6 +344,11 @@ def generate():
                     height=height,
                     generator=generator,
                 ).images[0]
+        
+        # Aplikuj farebný tint ak je zadaný
+        if target_color:
+            print(f"🎨 Aplikujem farebný tint: {target_color}")
+            image = apply_color_tint(image, target_color, intensity=0.5)
         
         buffer = io.BytesIO()
         image.save(buffer, format='PNG')
