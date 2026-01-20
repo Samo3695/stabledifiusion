@@ -298,8 +298,9 @@ class IsoScene extends Phaser.Scene {
     const hasTexture = this.backgroundTileKey && this.textures.exists(this.backgroundTileKey)
     
     if (hasTexture) {
-      // Veľkosť bloku textúry (5x5 políčka)
-      const blockSize = 5
+      // Veľkosť bloku textúry - použi uloženú hodnotu alebo default 5
+      const blockSize = this.backgroundTileSize || 5
+      console.log('🎨 drawGridWithTexture: blockSize =', blockSize)
       
       // Vytvor RenderTexture pre textúrované políčka
       this.groundRenderTexture = this.add.renderTexture(0, 0, 4000, 4000)
@@ -1287,6 +1288,9 @@ const setBackgroundTiles = (tiles, tileSize = 1) => {
     console.log('⚠️ PhaserCanvas: Žiadne tiles alebo scéna neexistuje')
     return
   }
+  
+  // Uložíme veľkosť tile-u do scény
+  mainScene.backgroundTileSize = tileSize
   
   // Načítaj tile textúry a prekresli grid
   const tileKey = 'background_tile_0'

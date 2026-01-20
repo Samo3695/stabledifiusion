@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 
-const emit = defineEmits(['apply-texture', 'color-change'])
+const emit = defineEmits(['apply-texture', 'color-change', 'tiles-change'])
 
 const props = defineProps({
   texturePath: {
@@ -15,12 +15,17 @@ const props = defineProps({
   initialColors: {
     type: Object,
     default: () => ({ hue: 0, saturation: 100, brightness: 100 })
+  },
+  initialTilesPerImage: {
+    type: Number,
+    default: 1
   }
 })
 
 const hueRotation = ref(0)
 const saturation = ref(100)
 const brightness = ref(100)
+const tilesPerImage = ref(1)
 
 // Inicializuj farby z props
 onMounted(() => {
@@ -29,6 +34,7 @@ onMounted(() => {
     saturation.value = props.initialColors.saturation || 100
     brightness.value = props.initialColors.brightness || 100
   }
+  tilesPerImage.value = props.initialTilesPerImage || 1
 })
 
 // Watch na zmenu initialColors (pri načítaní projektu)
@@ -66,7 +72,7 @@ const applyColorAdjustments = (imageSrc) => {
 
 const applyTexture = async () => {
   const adjustedImage = await applyColorAdjustments(props.texturePath)
-  emit('apply-texture', adjustedImage)
+  emit('apply-texture', adjustedImage, tilesPerImage.value)
 }
 
 const resetColors = () => {
@@ -83,6 +89,14 @@ watch([hueRotation, saturation, brightness], () => {
     brightness: brightness.value
   })
 }, { immediate: true })
+
+// Emituj zmenu počtu políčok a automaticky aplikuj textúru
+watch(tilesPerImage, async (newValue) => {
+  emit('tiles-change', newValue)
+  // Automaticky aplikuj textúru na canvas pri zmene
+  const adjustedImage = await applyColorAdjustments(props.texturePath)
+  emit('apply-texture', adjustedImage, newValue)
+})
 </script>
 
 <template>
@@ -131,6 +145,18 @@ watch([hueRotation, saturation, brightness], () => {
           v-model.number="brightness"
           min="0"
           max="200"
+          step="1"
+          :disabled="disabled"
+        />
+      </div>
+      
+      <div class="color-slider">
+        <label>🔲 Veľkosť textúry: {{ tilesPerImage }}x{{ tilesPerImage }} políčok</label>
+        <input
+          type="range"
+          v-model.number="tilesPerImage"
+          min="1"
+          max="30"
           step="1"
           :disabled="disabled"
         />

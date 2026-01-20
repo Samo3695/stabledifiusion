@@ -12,7 +12,9 @@ const props = defineProps({
 const emit = defineEmits(['environment-generated', 'tiles-generated', 'color-change'])
 
 const fileInput = ref(null)
+const textureFileInput = ref(null)
 const uploadedImages = ref([]) // Nahrané obrázky
+const customTexture = ref(null) // Nahratá vlastná textúra
 const prompt = ref('')
 const negativePrompt = ref('blurry, low quality, distorted, text, watermark, signature, frame, border, person, character')
 
@@ -194,6 +196,26 @@ const handleFileUpload = (event) => {
   })
 }
 
+// Nahratie vlastnej textúry
+const handleTextureUpload = (event) => {
+  const file = event.target.files?.[0]
+  if (!file || !file.type.startsWith('image/')) return
+  
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    customTexture.value = e.target.result
+  }
+  reader.readAsDataURL(file)
+}
+
+// Vymazať nahratú textúru
+const clearCustomTexture = () => {
+  customTexture.value = null
+  if (textureFileInput.value) {
+    textureFileInput.value.value = ''
+  }
+}
+
 // Aplikovať nahrané obrázky ako textúry
 const applyUploadedTextures = () => {
   if (uploadedImages.value.length === 0) {
@@ -218,10 +240,10 @@ const clearUploadedImages = () => {
 }
 
 // Handler pre TextureColorPicker
-const handleTextureApply = (adjustedImage) => {
+const handleTextureApply = (adjustedImage, tiles) => {
   emit('tiles-generated', {
     tiles: [adjustedImage],
-    tilesPerImage: tilesPerImage.value,
+    tilesPerImage: tiles || tilesPerImage.value,
     prompt: 'Predvolená textúra',
     timestamp: new Date()
   })
@@ -232,6 +254,11 @@ const handleColorChange = (colors) => {
   textureColors.value = colors
   // Emituj zmenu farieb do App.vue pre ukladanie projektu
   emit('color-change', colors)
+}
+
+// Handler pre zmenu počtu políčok z TextureColorPicker
+const handleTilesChange = (tiles) => {
+  tilesPerImage.value = tiles
 }
 
 // Inicializuj farby z props pri načítaní
@@ -276,13 +303,40 @@ const applyColorAdjustments = (imageSrc) => {
       <h3>🌍 Environment Generator</h3>
       
       <!-- Predvolená textúra s farebnými úpravami -->
-      <TextureColorPicker 
-        texture-path="/enviroment/grass.jpg"
-        :disabled="isGenerating"
-        :initial-colors="textureColors"
-        @apply-texture="handleTextureApply"
-        @color-change="handleColorChange"
-      />
+      <div class="texture-section">
+        <label>🎨 Základná textúra</label>
+        
+        <div class="texture-upload">
+          <input
+            ref="textureFileInput"
+            type="file"
+            accept="image/*"
+            @change="handleTextureUpload"
+            class="file-input"
+            :disabled="isGenerating"
+          />
+          <div v-if="customTexture" class="upload-info">
+            <span>✅ Vlastná textúra nahratá</span>
+            <button 
+              @click="clearCustomTexture" 
+              class="btn-clear"
+              :disabled="isGenerating"
+            >
+              🗑️
+            </button>
+          </div>
+        </div>
+        
+        <TextureColorPicker 
+          :texture-path="customTexture || '/enviroment/grass.jpg'"
+          :disabled="isGenerating"
+          :initial-colors="textureColors"
+          :initial-tiles-per-image="tilesPerImage"
+          @apply-texture="handleTextureApply"
+          @color-change="handleColorChange"
+          @tiles-change="handleTilesChange"
+        />
+      </div>
 
       <div class="divider"><span>generovať prvky prostredia</span></div>
 
@@ -755,6 +809,24 @@ input[type="number"]:focus {
 
 .divider span {
   padding: 0 1rem;
+}
+
+.texture-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.texture-section > label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.texture-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 textarea {
