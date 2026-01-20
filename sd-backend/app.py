@@ -11,15 +11,6 @@ from pathlib import Path
 from remove_background import remove_black_background
 from color_transform import shift_hue, adjust_saturation
 
-# Skús importovať rembg (pre AI odstránenie pozadia)
-try:
-    from rembg import remove as rembg_remove
-    REMBG_AVAILABLE = True
-    print("✅ rembg knižnica načítaná")
-except ImportError:
-    REMBG_AVAILABLE = False
-    print("⚠️ rembg knižnica nie je dostupná, použije sa fallback")
-
 app = Flask(__name__)
 CORS(app)
 
@@ -370,12 +361,11 @@ def generate():
 
 @app.route('/remove-background', methods=['POST'])
 def remove_background_endpoint():
-    """Odstráni pozadie z obrázka pomocou AI (rembg) alebo fallback metódou"""
+    """Odstráni pozadie z obrázka pomocou remove_black_background metódy"""
     try:
         data = request.json
         image_data = data.get('image')
-        use_ai = data.get('use_ai', True)  # Použiť AI (rembg) alebo starú metódu
-        threshold = data.get('threshold', 30)  # Pre fallback metódu
+        threshold = data.get('threshold', 30)  # Pre remove_black_background metódu
         
         if not image_data:
             return jsonify({'error': 'Chýba obrázok'}), 400
@@ -395,13 +385,8 @@ def remove_background_endpoint():
         elif image.mode != 'RGB':
             image = image.convert('RGB')
         
-        if use_ai and REMBG_AVAILABLE:
-            print("🤖 Odstraňujem pozadie pomocou AI (rembg)...")
-            # Použij rembg pre AI odstránenie pozadia
-            result_image = rembg_remove(image)
-        else:
-            print(f"🔄 Odstraňujem čierne pozadie (prah: {threshold})...")
-            result_image = remove_black_background(image, threshold=threshold)
+        print(f"🔄 Odstraňujem čierne pozadie (prah: {threshold})...")
+        result_image = remove_black_background(image, threshold=threshold)
         
         # Konvertuj späť na base64
         buffer = io.BytesIO()

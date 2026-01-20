@@ -235,8 +235,7 @@ const generateImage = async () => {
     console.log('   CellsX x CellsY:', templateCellsX.value, 'x', templateCellsY.value)
     emit('image-generated', generatedImage, templateCellsX.value, templateCellsY.value)
     console.log('✨ ImageGenerator: Event image-generated emitovaný!')
-    // Ponecháme prompt tak ako je (používateľ môže upraviť a znova generovať)
-    negativePrompt.value = ''
+    // Ponecháme všetky nastavenia tak ako sú (používateľ môže upraviť a znova generovať)
     console.log('📸 ImageGenerator: Šablóna zostáva vybraná, inputImage:', inputImage.value ? 'ÁNO' : 'NIE')
     console.log('   inputImagePreview:', inputImagePreview.value ? 'ÁNO' : 'NIE')
   // Keep the uploaded input image by default so the user can re-run
@@ -383,8 +382,7 @@ const generateDemo = () => {
     timestamp: new Date(),
   }
   emit('image-generated', demoImage, templateCellsX.value, templateCellsY.value)
-  prompt.value = ''
-  negativePrompt.value = ''
+  // Ponecháme všetky nastavenia tak ako sú
 }
 
 // Funkcia pre automatické spustenie generovania (volaná z App.vue)
