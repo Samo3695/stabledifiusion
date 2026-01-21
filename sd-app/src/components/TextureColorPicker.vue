@@ -198,7 +198,7 @@ watch(tileResolution, async (newValue) => {
           type="range"
           v-model.number="tileResolution"
           min="256"
-          max="2048"
+          max="4096"
           step="256"
           :disabled="disabled"
         />
