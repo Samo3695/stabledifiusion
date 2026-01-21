@@ -26,6 +26,10 @@ const props = defineProps({
     type: Object,
     default: () => ({ hue: 0, saturation: 100, brightness: 100 })
   },
+  textureSettings: {
+    type: Object,
+    default: () => ({ tilesPerImage: 1, tileResolution: 512, customTexture: null })
+  },
   personSpawnSettings: {
     type: Object,
     default: () => ({ enabled: false, count: 3 })
@@ -97,7 +101,7 @@ const saveProject = () => {
 
     // Priprav dáta pre export
     const projectData = {
-      version: '1.4',  // Nová verzia s deduplikáciou
+      version: '1.5',  // Nová verzia s textúrovými nastaveniami
       timestamp: new Date().toISOString(),
       imageCount: props.images.length,
       placedImageCount: Object.keys(placedImages).length,
@@ -115,7 +119,12 @@ const saveProject = () => {
       imageLibrary,  // Unikátne obrázky pre placedImages
       placedImages,
       environmentColors: props.environmentColors,
-      backgroundTiles: backgroundTiles
+      backgroundTiles: backgroundTiles,
+      textureSettings: {
+        tilesPerImage: props.textureSettings?.tilesPerImage || 1,
+        tileResolution: props.textureSettings?.tileResolution || 512,
+        customTexture: props.textureSettings?.customTexture || null
+      }
     }
 
     // Konvertuj na JSON string
@@ -200,7 +209,8 @@ const handleFileUpload = async (event) => {
       images: projectData.images,
       placedImages: processedPlacedImages,
       environmentColors: projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 },
-      backgroundTiles: projectData.backgroundTiles || []
+      backgroundTiles: projectData.backgroundTiles || [],
+      textureSettings: projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null }
     })
 
     // Resetuj file input

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 
-const emit = defineEmits(['apply-texture', 'color-change', 'tiles-change'])
+const emit = defineEmits(['apply-texture', 'color-change', 'tiles-change', 'resolution-change'])
 
 const props = defineProps({
   texturePath: {
@@ -19,6 +19,10 @@ const props = defineProps({
   initialTilesPerImage: {
     type: Number,
     default: 1
+  },
+  initialTileResolution: {
+    type: Number,
+    default: 512
   }
 })
 
@@ -26,6 +30,7 @@ const hueRotation = ref(0)
 const saturation = ref(100)
 const brightness = ref(100)
 const tilesPerImage = ref(1)
+const tileResolution = ref(512)
 
 // Inicializuj farby z props
 onMounted(() => {
@@ -35,6 +40,7 @@ onMounted(() => {
     brightness.value = props.initialColors.brightness || 100
   }
   tilesPerImage.value = props.initialTilesPerImage || 1
+  tileResolution.value = props.initialTileResolution || 512
 })
 
 // Watch na zmenu initialColors (pri načítaní projektu)
@@ -45,6 +51,22 @@ watch(() => props.initialColors, (newColors) => {
     brightness.value = newColors.brightness || 100
   }
 }, { deep: true })
+
+// Watch na zmenu initialTilesPerImage (pri načítaní projektu)
+watch(() => props.initialTilesPerImage, (newValue) => {
+  if (newValue !== undefined) {
+    tilesPerImage.value = newValue
+    console.log('📐 TextureColorPicker: tilesPerImage načítané:', newValue)
+  }
+})
+
+// Watch na zmenu initialTileResolution (pri načítaní projektu)
+watch(() => props.initialTileResolution, (newValue) => {
+  if (newValue !== undefined) {
+    tileResolution.value = newValue
+    console.log('📐 TextureColorPicker: tileResolution načítané:', newValue)
+  }
+})
 
 const filterStyle = computed(() => ({
   filter: `hue-rotate(${hueRotation.value}deg) saturate(${saturation.value}%) brightness(${brightness.value}%)`
@@ -57,12 +79,12 @@ const applyColorAdjustments = (imageSrc) => {
     img.crossOrigin = 'anonymous'
     img.onload = () => {
       const canvas = document.createElement('canvas')
-      canvas.width = img.width
-      canvas.height = img.height
+      canvas.width = tileResolution.value
+      canvas.height = tileResolution.value
       const ctx = canvas.getContext('2d')
       
       ctx.filter = `hue-rotate(${hueRotation.value}deg) saturate(${saturation.value}%) brightness(${brightness.value}%)`
-      ctx.drawImage(img, 0, 0)
+      ctx.drawImage(img, 0, 0, tileResolution.value, tileResolution.value)
       
       resolve(canvas.toDataURL('image/jpeg', 0.9))
     }
@@ -96,6 +118,14 @@ watch(tilesPerImage, async (newValue) => {
   // Automaticky aplikuj textúru na canvas pri zmene
   const adjustedImage = await applyColorAdjustments(props.texturePath)
   emit('apply-texture', adjustedImage, newValue)
+})
+
+// Emituj zmenu rozlíšenia a automaticky aplikuj textúru
+watch(tileResolution, async (newValue) => {
+  console.log('🎨 Tile rozlíšenie zmenené na:', newValue)
+  emit('resolution-change', newValue)
+  const adjustedImage = await applyColorAdjustments(props.texturePath)
+  emit('apply-texture', adjustedImage, tilesPerImage.value)
 })
 </script>
 
@@ -158,6 +188,18 @@ watch(tilesPerImage, async (newValue) => {
           min="1"
           max="30"
           step="1"
+          :disabled="disabled"
+        />
+      </div>
+      
+      <div class="color-slider">
+        <label>📐 Rozlíšenie tile: {{ tileResolution }}x{{ tileResolution }}px</label>
+        <input
+          type="range"
+          v-model.number="tileResolution"
+          min="256"
+          max="2048"
+          step="256"
           :disabled="disabled"
         />
       </div>

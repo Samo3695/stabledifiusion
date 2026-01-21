@@ -6,10 +6,14 @@ const props = defineProps({
   initialColors: {
     type: Object,
     default: () => ({ hue: 0, saturation: 100, brightness: 100 })
+  },
+  initialTextureSettings: {
+    type: Object,
+    default: () => ({ tilesPerImage: 1, tileResolution: 512, customTexture: null })
   }
 })
 
-const emit = defineEmits(['environment-generated', 'tiles-generated', 'color-change'])
+const emit = defineEmits(['environment-generated', 'tiles-generated', 'color-change', 'texture-settings-change'])
 
 const fileInput = ref(null)
 const textureFileInput = ref(null)
@@ -31,6 +35,7 @@ const showModal = ref(false)
 const modalImage = ref('')
 const tileCount = ref(4) // Počet tile-ov na generovanie
 const tilesPerImage = ref(1) // Cez koľko políčok pôjde jeden obrázok
+const tileResolution = ref(512) // Rozlíšenie tile
 const useSameSeed = ref(false) // Pre textúry lepšie rôzne seed-y = variácie
 const baseSeed = ref(Math.floor(Math.random() * 999999999))
 const removeBackground = ref(true) // Odstrániť pozadie (PNG)
@@ -204,6 +209,7 @@ const handleTextureUpload = (event) => {
   const reader = new FileReader()
   reader.onload = (e) => {
     customTexture.value = e.target.result
+    emitTextureSettings()
   }
   reader.readAsDataURL(file)
 }
@@ -213,8 +219,7 @@ const clearCustomTexture = () => {
   customTexture.value = null
   if (textureFileInput.value) {
     textureFileInput.value.value = ''
-  }
-}
+  }  emitTextureSettings()}
 
 // Aplikovať nahrané obrázky ako textúry
 const applyUploadedTextures = () => {
@@ -259,6 +264,27 @@ const handleColorChange = (colors) => {
 // Handler pre zmenu počtu políčok z TextureColorPicker
 const handleTilesChange = (tiles) => {
   tilesPerImage.value = tiles
+  emitTextureSettings()
+}
+
+// Handler pre zmenu rozlíšenia z TextureColorPicker
+const handleResolutionChange = (resolution) => {
+  tileResolution.value = resolution
+  emitTextureSettings()
+}
+
+// Handler pre zmenu textúry
+const handleTextureUploadChange = () => {
+  emitTextureSettings()
+}
+
+// Emituj textúrové nastavenia
+const emitTextureSettings = () => {
+  emit('texture-settings-change', {
+    tilesPerImage: tilesPerImage.value,
+    tileResolution: tileResolution.value,
+    customTexture: customTexture.value
+  })
 }
 
 // Inicializuj farby z props pri načítaní
@@ -266,12 +292,30 @@ onMounted(() => {
   if (props.initialColors) {
     textureColors.value = { ...props.initialColors }
   }
+  if (props.initialTextureSettings) {
+    tilesPerImage.value = props.initialTextureSettings.tilesPerImage || 1
+    tileResolution.value = props.initialTextureSettings.tileResolution || 512
+    if (props.initialTextureSettings.customTexture) {
+      customTexture.value = props.initialTextureSettings.customTexture
+    }
+  }
 })
 
 // Watch na zmenu initialColors (pri načítaní projektu)
 watch(() => props.initialColors, (newColors) => {
   if (newColors) {
     textureColors.value = { ...newColors }
+  }
+}, { deep: true })
+
+// Watch na zmenu initialTextureSettings (pri načítaní projektu)
+watch(() => props.initialTextureSettings, (newSettings) => {
+  if (newSettings) {
+    tilesPerImage.value = newSettings.tilesPerImage || 1
+    tileResolution.value = newSettings.tileResolution || 512
+    if (newSettings.customTexture) {
+      customTexture.value = newSettings.customTexture
+    }
   }
 }, { deep: true })
 
@@ -332,9 +376,11 @@ const applyColorAdjustments = (imageSrc) => {
           :disabled="isGenerating"
           :initial-colors="textureColors"
           :initial-tiles-per-image="tilesPerImage"
+          :initial-tile-resolution="tileResolution"
           @apply-texture="handleTextureApply"
           @color-change="handleColorChange"
           @tiles-change="handleTilesChange"
+          @resolution-change="handleResolutionChange"
         />
       </div>
 

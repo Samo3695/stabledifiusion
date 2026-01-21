@@ -23,6 +23,7 @@ const showGrid = ref(true)
 const activeGenerator = ref('building') // 'building', 'environment' alebo 'character'
 const deleteMode = ref(false) // Režim mazania buildingov
 const environmentColors = ref({ hue: 0, saturation: 100, brightness: 100 }) // Farby prostredia
+const textureSettings = ref({ tilesPerImage: 1, tileResolution: 512, customTexture: null }) // Textúrové nastavenia
 const roadBuildingMode = ref(false) // Režim stavby ciest
 const roadTiles = ref([]) // Road tiles z ImageGallery
 const imageGalleryRef = ref(null) // Referencia na ImageGallery
@@ -137,6 +138,11 @@ watch(roadTiles, (newTiles, oldTiles) => {
 const handleRoadOpacityChanged = (newOpacity) => {
   // Tento handler už nie je potrebný, watch na roadTiles to zvládne
   console.log(`🎨 App.vue: Road opacity event prijatý: ${newOpacity}%`)
+}
+
+const handleTextureSettingsChange = (settings) => {
+  textureSettings.value = settings
+  console.log('📐 App.vue: Textúrové nastavenia zmenené:', settings)
 }
 
 const handleRoadPlaced = ({ path }) => {
@@ -320,10 +326,15 @@ const handleLoadProject = (projectData) => {
   const placedImages = projectData.placedImages || {}
   const loadedColors = projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 }
   const loadedTiles = projectData.backgroundTiles || []
+  const loadedTextureSettings = projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null }
   
   // Obnov farby prostredia
   environmentColors.value = loadedColors
   console.log('🎨 App.vue: Farby prostredia načítané:', loadedColors)
+  
+  // Obnov textúrové nastavenia
+  textureSettings.value = loadedTextureSettings
+  console.log('📐 App.vue: Textúrové nastavenia načítané:', loadedTextureSettings)
   
   // Aplikuj background tiles na šachovnicu
   if (loadedTiles.length > 0 && canvasRef.value && canvasRef.value.setBackgroundTiles) {
@@ -508,6 +519,7 @@ const handleLoadProject = (projectData) => {
         :showGrid="showGrid"
         :canvasRef="canvasRef"
         :environmentColors="environmentColors"
+        :textureSettings="textureSettings"
       :personSpawnSettings="{ enabled: personSpawnEnabled, count: personSpawnCount }"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
@@ -555,9 +567,11 @@ const handleLoadProject = (projectData) => {
       <EnvironmentGenerator
         v-if="activeGenerator === 'environment'"
         :initialColors="environmentColors"
+        :initialTextureSettings="textureSettings"
         @environment-generated="handleEnvironmentGenerated"
         @tiles-generated="handleTilesGenerated"
         @color-change="environmentColors = $event"
+        @texture-settings-change="handleTextureSettingsChange"
       />
       
       <!-- Character Generator -->
