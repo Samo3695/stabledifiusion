@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 
-const emit = defineEmits(['apply-texture', 'color-change', 'tiles-change', 'resolution-change'])
+const emit = defineEmits(['apply-texture', 'color-change', 'tiles-change', 'resolution-change', 'perspective-change'])
 
 const props = defineProps({
   texturePath: {
@@ -23,6 +23,10 @@ const props = defineProps({
   initialTileResolution: {
     type: Number,
     default: 512
+  },
+  initialPerspective: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -31,6 +35,7 @@ const saturation = ref(100)
 const brightness = ref(100)
 const tilesPerImage = ref(1)
 const tileResolution = ref(512)
+const perspective = ref(0)
 
 // Inicializuj farby z props
 onMounted(() => {
@@ -41,6 +46,7 @@ onMounted(() => {
   }
   tilesPerImage.value = props.initialTilesPerImage || 1
   tileResolution.value = props.initialTileResolution || 512
+  perspective.value = props.initialPerspective || 0
 })
 
 // Watch na zmenu initialColors (pri načítaní projektu)
@@ -68,6 +74,14 @@ watch(() => props.initialTileResolution, (newValue) => {
   }
 })
 
+// Watch na zmenu initialPerspective (pri načítaní projektu)
+watch(() => props.initialPerspective, (newValue) => {
+  if (newValue !== undefined) {
+    perspective.value = newValue
+    console.log('🔭 TextureColorPicker: perspective načítané:', newValue)
+  }
+})
+
 const filterStyle = computed(() => ({
   filter: `hue-rotate(${hueRotation.value}deg) saturate(${saturation.value}%) brightness(${brightness.value}%)`
 }))
@@ -79,12 +93,14 @@ const applyColorAdjustments = (imageSrc) => {
     img.crossOrigin = 'anonymous'
     img.onload = () => {
       const canvas = document.createElement('canvas')
-      canvas.width = tileResolution.value
+      // Perspective mení šírku, ale zachováva výšku
+      const widthMultiplier = 1 + (perspective.value / 100)
+      canvas.width = tileResolution.value * widthMultiplier
       canvas.height = tileResolution.value
       const ctx = canvas.getContext('2d')
       
       ctx.filter = `hue-rotate(${hueRotation.value}deg) saturate(${saturation.value}%) brightness(${brightness.value}%)`
-      ctx.drawImage(img, 0, 0, tileResolution.value, tileResolution.value)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
       
       resolve(canvas.toDataURL('image/jpeg', 0.9))
     }
@@ -124,6 +140,14 @@ watch(tilesPerImage, async (newValue) => {
 watch(tileResolution, async (newValue) => {
   console.log('🎨 Tile rozlíšenie zmenené na:', newValue)
   emit('resolution-change', newValue)
+  const adjustedImage = await applyColorAdjustments(props.texturePath)
+  emit('apply-texture', adjustedImage, tilesPerImage.value)
+})
+
+// Emituj zmenu perspektívy a automaticky aplikuj textúru
+watch(perspective, async (newValue) => {
+  console.log('🔭 Perspektíva zmenená na:', newValue)
+  emit('perspective-change', newValue)
   const adjustedImage = await applyColorAdjustments(props.texturePath)
   emit('apply-texture', adjustedImage, tilesPerImage.value)
 })
@@ -200,6 +224,18 @@ watch(tileResolution, async (newValue) => {
           min="256"
           max="4096"
           step="256"
+          :disabled="disabled"
+        />
+      </div>
+      
+      <div class="color-slider">
+        <label>🔭 Perspektíva: {{ perspective }}% (roztiahnutie)</label>
+        <input
+          type="range"
+          v-model.number="perspective"
+          min="0"
+          max="200"
+          step="5"
           :disabled="disabled"
         />
       </div>

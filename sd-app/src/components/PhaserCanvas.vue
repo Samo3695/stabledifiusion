@@ -303,6 +303,10 @@ class IsoScene extends Phaser.Scene {
       const texture = this.textures.get(this.backgroundTileKey)
       const frame = texture.get()
       
+      // Vypočítame aspect ratio textúry (môže byť roztiahnutá perspektívou)
+      const textureAspectRatio = frame.width / frame.height
+      console.log(`🎨 Textúra aspect ratio: ${textureAspectRatio.toFixed(2)} (${frame.width}x${frame.height})`)
+      
       // Vytvoríme samostatné sprite-y pre každý blok (podobne ako road tiles)
       for (let blockRow = 0; blockRow < GRID_SIZE; blockRow += blockSize) {
         for (let blockCol = 0; blockCol < GRID_SIZE; blockCol += blockSize) {
@@ -317,7 +321,10 @@ class IsoScene extends Phaser.Scene {
           
           // Vytvoríme sprite pre tento blok
           const tileSprite = this.add.sprite(center.x, center.y, this.backgroundTileKey)
-          tileSprite.setDisplaySize(blockWidthIso, blockHeightIso)
+          
+          // Zohľadnime aspect ratio textúry pri nastavení veľkosti
+          // Ak je textúra roztiahnutá (aspect ratio > 1), rozšírime šírku
+          tileSprite.setDisplaySize(blockWidthIso * textureAspectRatio, blockHeightIso)
           tileSprite.setOrigin(0.5, 0.5)
           // Background textúra je najnižšie - pod všetkým
           tileSprite.setDepth(-1)
