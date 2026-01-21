@@ -267,107 +267,88 @@ class IsoScene extends Phaser.Scene {
       this.gridGraphics.destroy()
     }
     
-    // Vyčistíme existujúce tile sprite-y
-    if (this.tileSprites && this.tileSprites.length > 0) {
-      this.tileSprites.forEach(sprite => sprite.destroy())
-      this.tileSprites = []
-    }
-    
-    // Vyčistíme groundRenderTexture
-    if (this.groundRenderTexture) {
-      this.groundRenderTexture.destroy()
-      this.groundRenderTexture = null
-    }
-    
-    // Vyčistíme masku
-    if (this.groundMask) {
-      this.groundMask.destroy()
-      this.groundMask = null
-    }
-    if (this.groundMaskGraphics) {
-      this.groundMaskGraphics.destroy()
-      this.groundMaskGraphics = null
-    }
-    
+    // Vyčistíme čísla
     this.numberTexts.forEach(t => t.destroy())
     this.numberTexts = []
-    
-    if (!props.showGrid) return
     
     // Skontroluj či máme textúru
     const hasTexture = this.backgroundTileKey && this.textures.exists(this.backgroundTileKey)
     
-    if (hasTexture) {
+    // Ak nemáme textúru a grid je vypnutý, skonči
+    if (!hasTexture && !props.showGrid) return
+    
+    // Ak máme textúru ale ešte nie sú vytvorené sprite-y, vytvor ich
+    if (hasTexture && (!this.tileSprites || this.tileSprites.length === 0)) {
+      // Vyčistíme groundRenderTexture
+      if (this.groundRenderTexture) {
+        this.groundRenderTexture.destroy()
+        this.groundRenderTexture = null
+      }
+      
+      // Vyčistíme masku
+      if (this.groundMask) {
+        this.groundMask.destroy()
+        this.groundMask = null
+      }
+      if (this.groundMaskGraphics) {
+        this.groundMaskGraphics.destroy()
+        this.groundMaskGraphics = null
+      }
+      
       // Veľkosť bloku textúry - použi uloženú hodnotu alebo default 5
       const blockSize = this.backgroundTileSize || 5
       console.log('🎨 drawGridWithTexture: blockSize =', blockSize)
-      
-      // Vytvor RenderTexture pre textúrované políčka
-      this.groundRenderTexture = this.add.renderTexture(0, 0, 4000, 4000)
-      this.groundRenderTexture.setOrigin(0.5, 0.5)
-      this.groundRenderTexture.setPosition(0, GRID_SIZE * TILE_HEIGHT / 2)
-      this.groundRenderTexture.setDepth(0)
-      
-      // Offset pre RenderTexture
-      const rtOffsetX = 2000
-      const rtOffsetY = 2000 - GRID_SIZE * TILE_HEIGHT / 2
       
       // Získame textúru
       const texture = this.textures.get(this.backgroundTileKey)
       const frame = texture.get()
       
-      // Kreslíme textúru po blokoch 5x5
+      // Vytvoríme samostatné sprite-y pre každý blok (podobne ako road tiles)
       for (let blockRow = 0; blockRow < GRID_SIZE; blockRow += blockSize) {
         for (let blockCol = 0; blockCol < GRID_SIZE; blockCol += blockSize) {
-          // Pozícia ľavého horného rohu bloku
-          const { x: startX, y: startY } = this.gridToIso(blockRow, blockCol)
+          // Vypočítame stred bloku
+          const centerRow = blockRow + Math.floor(blockSize / 2)
+          const centerCol = blockCol + Math.floor(blockSize / 2)
+          const center = this.gridToIso(centerRow, centerCol)
           
-          // Vytvoríme dočasný sprite s textúrou
-          const tempSprite = this.make.sprite({
-            key: this.backgroundTileKey,
-            add: false
-          })
+          // Vypočítame rozmery bloku v izometrii
+          const blockWidthIso = blockSize * TILE_WIDTH
+          const blockHeightIso = blockSize * TILE_HEIGHT
           
-          // Scale aby pokryl 5x5 políčok
-          const scaleX = (TILE_WIDTH * blockSize) / frame.width
-          const scaleY = (TILE_HEIGHT * blockSize) / frame.height
-          tempSprite.setScale(scaleX, scaleY)
-          tempSprite.setOrigin(0.5, 0)
+          // Vytvoríme sprite pre tento blok
+          const tileSprite = this.add.sprite(center.x, center.y, this.backgroundTileKey)
+          tileSprite.setDisplaySize(blockWidthIso, blockHeightIso)
+          tileSprite.setOrigin(0.5, 0.5)
+          // Background textúra je najnižšie - pod všetkým
+          tileSprite.setDepth(-1)
           
-          // Pozícia stredu bloku
-          const centerX = startX
-          const centerY = startY
+          // Nepridávame do ground containera - pridávame priamo aby depth fungoval správne
+          this.tileSprites.push(tileSprite)
           
-          // Nakreslíme do RenderTexture
-          this.groundRenderTexture.draw(tempSprite, centerX + rtOffsetX, centerY + rtOffsetY)
-          
-          tempSprite.destroy()
+          // Uložíme do cellImages ako background tiles
+          for (let r = 0; r < blockSize; r++) {
+            for (let c = 0; c < blockSize; c++) {
+              const row = blockRow + r
+              const col = blockCol + c
+              if (row < GRID_SIZE && col < GRID_SIZE) {
+                const key = `${row}-${col}`
+                if (!cellImages[key] || cellImages[key].isBackground) {
+                  cellImages[key] = {
+                    isBackground: true,
+                    cellsX: 1,
+                    cellsY: 1,
+                    url: this.backgroundTileKey
+                  }
+                }
+              }
+            }
+          }
         }
       }
-      
-      // Vytvoríme masku v tvare izometrického diamantu
-      this.groundMaskGraphics = this.make.graphics()
-      
-      // Vypočítame rohy izometrickej plochy
-      const topCorner = this.gridToIso(0, 0)           // Horný roh
-      const rightCorner = this.gridToIso(0, GRID_SIZE) // Pravý roh
-      const bottomCorner = this.gridToIso(GRID_SIZE, GRID_SIZE) // Spodný roh
-      const leftCorner = this.gridToIso(GRID_SIZE, 0)  // Ľavý roh
-      
-      // Nakreslíme diamantový tvar pre masku
-      this.groundMaskGraphics.fillStyle(0xffffff)
-      this.groundMaskGraphics.beginPath()
-      this.groundMaskGraphics.moveTo(topCorner.x, topCorner.y)
-      this.groundMaskGraphics.lineTo(rightCorner.x, rightCorner.y)
-      this.groundMaskGraphics.lineTo(bottomCorner.x, bottomCorner.y)
-      this.groundMaskGraphics.lineTo(leftCorner.x, leftCorner.y)
-      this.groundMaskGraphics.closePath()
-      this.groundMaskGraphics.fillPath()
-      
-      // Aplikujeme masku na groundRenderTexture
-      this.groundMask = this.groundMaskGraphics.createGeometryMask()
-      this.groundRenderTexture.setMask(this.groundMask)
-      
+    }
+    
+    // Nakresli čiary a čísla len ak je showGrid zapnuté
+    if (props.showGrid) {
       // Pridáme okraje a číslovanie pomocou Graphics
       this.gridGraphics = this.add.graphics()
       this.groundContainer.add(this.gridGraphics)
@@ -399,8 +380,10 @@ class IsoScene extends Phaser.Scene {
           }
         }
       }
-    } else {
-      // Fallback na pôvodné kreslenie bez textúry
+    }
+    
+    // Fallback na pôvodné kreslenie bez textúry (len ak showGrid je true)
+    if (!hasTexture && props.showGrid) {
       this.drawGrid()
     }
   }
@@ -1293,11 +1276,20 @@ const setBackgroundTiles = (tiles, tileSize = 1) => {
   mainScene.backgroundTileSize = tileSize
   
   // Načítaj tile textúry a prekresli grid
-  const tileKey = 'background_tile_0'
+  // Použijeme timestamp pre unikátny kľúč aby sme predišli konfliktom
+  const tileKey = `background_tile_${Date.now()}`
   
-  // Ak už existuje stará textúra, odstrániť
-  if (mainScene.textures.exists(tileKey)) {
-    mainScene.textures.remove(tileKey)
+  // Ak existujú staré sprite-y s textúrou, odstránime ich pred načítaním novej
+  if (mainScene.tileSprites && mainScene.tileSprites.length > 0) {
+    console.log('🧹 Odstraňujem staré background sprite-y pred načítaním novej textúry')
+    mainScene.tileSprites.forEach(sprite => sprite.destroy())
+    mainScene.tileSprites = []
+  }
+  
+  // Odstránime starú textúru ak existuje
+  if (mainScene.backgroundTileKey && mainScene.textures.exists(mainScene.backgroundTileKey)) {
+    console.log('🗑️ Odstraňujem starú textúru:', mainScene.backgroundTileKey)
+    mainScene.textures.remove(mainScene.backgroundTileKey)
   }
   
   // Načítame prvý tile ako textúru

@@ -137,7 +137,9 @@ export function buildRoad(canvas, roadTiles, path) {
   const existingImages = canvas.cellImages ? canvas.cellImages() : {}
   for (const cell of path) {
     const key = `${cell.row}-${cell.col}`
-    if (existingImages[key] && !isRoadTile(existingImages[key].url)) {
+    const imageData = existingImages[key]
+    // Ignoruj background tiles a road tiles - len budovy blokujú
+    if (imageData && !imageData.isBackground && !isRoadTile(imageData.url)) {
       console.error(`❌ Budova na políčku [${cell.row}, ${cell.col}] - cesta sa nemôže položiť!`)
       return false
     }

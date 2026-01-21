@@ -50,7 +50,6 @@ const saveProject = () => {
   try {
     // Získaj umiestnené obrázky zo šachovnice
     const placedImages = {}
-    let backgroundTiles = []
     
     // Mapa pre deduplikáciu obrázkov - url -> id
     const uniqueImages = new Map()
@@ -60,6 +59,11 @@ const saveProject = () => {
       const cellImagesData = props.canvasRef.cellImages()
       
       Object.entries(cellImagesData).forEach(([key, imageData]) => {
+        // Preskočíme background tiles - tie sa ukladajú samostatne cez backgroundTiles
+        if (imageData.isBackground) {
+          return
+        }
+        
         const [row, col] = key.split('-').map(Number)
         const url = imageData.url
         
@@ -80,17 +84,12 @@ const saveProject = () => {
           imageId,  // referencia namiesto url
           cellsX: imageData.cellsX || 1,
           cellsY: imageData.cellsY || 1,
-          isBackground: imageData.isBackground || false,
+          isBackground: false,  // Tieto nie sú background
           isRoadTile: imageData.isRoadTile || false,
           templateName: imageData.templateName || '',
           tileMetadata: imageData.tileMetadata || null
         }
       })
-    }
-    
-    // Získaj background tiles zo šachovnice
-    if (props.canvasRef && typeof props.canvasRef.backgroundTiles === 'function') {
-      backgroundTiles = props.canvasRef.backgroundTiles() || []
     }
     
     // Konvertuj uniqueImages mapu na pole objektov
@@ -101,7 +100,7 @@ const saveProject = () => {
 
     // Priprav dáta pre export
     const projectData = {
-      version: '1.5',  // Nová verzia s textúrovými nastaveniami
+      version: '1.6',  // Nová verzia s textúrou ako sprite-y
       timestamp: new Date().toISOString(),
       imageCount: props.images.length,
       placedImageCount: Object.keys(placedImages).length,
@@ -119,7 +118,6 @@ const saveProject = () => {
       imageLibrary,  // Unikátne obrázky pre placedImages
       placedImages,
       environmentColors: props.environmentColors,
-      backgroundTiles: backgroundTiles,
       textureSettings: {
         tilesPerImage: props.textureSettings?.tilesPerImage || 1,
         tileResolution: props.textureSettings?.tileResolution || 512,
@@ -209,7 +207,6 @@ const handleFileUpload = async (event) => {
       images: projectData.images,
       placedImages: processedPlacedImages,
       environmentColors: projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 },
-      backgroundTiles: projectData.backgroundTiles || [],
       textureSettings: projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null }
     })
 
