@@ -271,19 +271,6 @@ const handleToggleGrid = (value) => {
   console.log(`App.vue: Mriežka prepnutá z canvas: ${value ? 'zobrazená' : 'skrytá'}`)
 }
 
-const handleEnvironmentGenerated = (envData) => {
-  console.log('🌍 App.vue: Prijaté environment-generated event')
-  console.log('   Počet obrázkov:', envData.images.length)
-  console.log('   Počet prvkov na rozmiestniť:', envData.count)
-  console.log('   Canvas ref existuje?', canvasRef.value ? 'ÁNO' : 'NIE')
-  
-  // Náhodne rozmiestni prvky na šachovnici
-  if (canvasRef.value && canvasRef.value.placeEnvironmentElements) {
-    canvasRef.value.placeEnvironmentElements(envData.images, envData.count)
-    console.log('✅ Prvky prostredia rozmiestnené')
-  }
-}
-
 const handleTilesGenerated = (tilesData) => {
   console.log('🎨 App.vue: Prijaté tiles-generated event')
   console.log('   Počet tile-ov:', tilesData.tiles.length)
@@ -568,7 +555,6 @@ const handleLoadProject = (projectData) => {
         v-if="activeGenerator === 'environment'"
         :initialColors="environmentColors"
         :initialTextureSettings="textureSettings"
-        @environment-generated="handleEnvironmentGenerated"
         @tiles-generated="handleTilesGenerated"
         @color-change="environmentColors = $event"
         @texture-settings-change="handleTextureSettingsChange"

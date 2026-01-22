@@ -1309,12 +1309,6 @@ const setBackgroundTiles = (tiles, tileSize = 1) => {
   mainScene.load.start()
 }
 
-// Funkcia na náhodné rozmiestnenie prvkov
-const placeEnvironmentElements = (images, count = 10, gridSize = 50) => {
-  console.log('🌲 PhaserCanvas.placeEnvironmentElements()')
-  // TODO: Implementovať
-}
-
 // Funkcia na vymazanie obrázka
 const deleteImageAtCell = (row, col) => {
   const key = `${row}-${col}`
@@ -1366,7 +1360,6 @@ let isBatchLoading = false // Flag pre batch loading
 defineExpose({
   placeImageAtSelectedCell,
   setBackgroundTiles,
-  placeEnvironmentElements,
   deleteImageAtCell,
   cellImages: () => cellImages,
   backgroundTiles: () => backgroundTiles,
