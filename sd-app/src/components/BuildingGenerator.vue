@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import TemplateSelector from './TemplateSelector.vue'
 
 const emit = defineEmits(['image-generated', 'template-selected', 'tab-changed', 'numbering-changed', 'road-sprite-selected'])
@@ -75,6 +75,7 @@ const handleTemplateSelected = ({ dataUrl, templateName, width, height, cellsX, 
 const availableLoras = ref([])
 const selectedLora = ref('')
 const loraScale = ref(0.9) // Sila LoRA (0.0 - 1.0)
+const showAllLoras = ref(false) // Či zobraziť všetky LoRA alebo len isometric
 
 // Rozmery obrázka - fixné rozmery
 const imageDimensions = ref('400x400') // '200x200', '200x300', '400x400', '400x600'
@@ -87,6 +88,16 @@ const getImageDimensions = () => {
 
 // RGB farebné kanály (1.0 = normálne, 0.0 = bez farby, 2.0 = zdvojnásobenie)
 
+// Computed property pre filtrované LoRA modely
+const filteredLoras = computed(() => {
+  if (showAllLoras.value) {
+    return availableLoras.value
+  }
+  // Filtruj len modely začínajúce na "iso" (case-insensitive)
+  return availableLoras.value.filter(lora => 
+    lora.toLowerCase().startsWith('iso')
+  )
+})
 
 // Konfigurácia pre Python backend z environment premenných
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
@@ -203,9 +214,33 @@ const generateImage = async () => {
     // Zistíme či je to pozadie (šablóna 0.png) - ignoruje kolíziu
     const isBackgroundTemplate = currentTemplateName.value === '0.png'
     
+    // Vytvor bitmap pre rýchlejšie renderovanie na canvas
+    let bitmap = null
+    try {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      await new Promise((resolve, reject) => {
+        img.onload = async () => {
+          try {
+            bitmap = await createImageBitmap(img)
+            console.log('✅ Bitmap vytvorená pre budovu')
+            resolve()
+          } catch (e) {
+            console.warn('createImageBitmap zlyhalo:', e)
+            resolve()
+          }
+        }
+        img.onerror = reject
+        img.src = data.image
+      })
+    } catch (e) {
+      console.warn('Chyba pri vytváraní bitmap:', e)
+    }
+    
     const generatedImage = {
       id: Date.now().toString(),
       url: data.image,
+      bitmap, // Optimalizovaná bitmap pre rýchle kreslenie
       prompt: prompt.value,
       negativePrompt: negativePrompt.value,
       timestamp: new Date(),
@@ -224,6 +259,28 @@ const generateImage = async () => {
         const bgRemovedImage = await removeBackgroundFromImage(data.image)
         generatedImage.url = bgRemovedImage
         lastGeneratedImage.value = bgRemovedImage
+        
+        // Aktualizuj bitmap s novým obrázkom (bez pozadia)
+        try {
+          const img = new Image()
+          img.crossOrigin = 'anonymous'
+          await new Promise((resolve, reject) => {
+            img.onload = async () => {
+              try {
+                generatedImage.bitmap = await createImageBitmap(img)
+                console.log('✅ Bitmap aktualizovaná po odstránení pozadia')
+                resolve()
+              } catch (e) {
+                console.warn('createImageBitmap zlyhalo:', e)
+                resolve()
+              }
+            }
+            img.onerror = reject
+            img.src = bgRemovedImage
+          })
+        } catch (e) {
+          console.warn('Chyba pri aktualizácii bitmap:', e)
+        }
       } catch (bgError) {
         console.error('Chyba pri odstraňovaní pozadia:', bgError)
         // Ponechaj originálny obrázok
@@ -308,9 +365,32 @@ const removeBackground = async () => {
     const cleanedImage = {
       id: Date.now().toString(),
       url: data.image,
+      bitmap: null, // Bude vytvorená nižšie
       prompt: 'Odstránené čierne pozadie',
       negativePrompt: '',
       timestamp: new Date(),
+    }
+
+    // Vytvor bitmap pre optimalizované renderovanie
+    try {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      await new Promise((resolve, reject) => {
+        img.onload = async () => {
+          try {
+            cleanedImage.bitmap = await createImageBitmap(img)
+            console.log('✅ Bitmap vytvorená po odstránení pozadia')
+            resolve()
+          } catch (e) {
+            console.warn('createImageBitmap zlyhalo:', e)
+            resolve()
+          }
+        }
+        img.onerror = reject
+        img.src = data.image
+      })
+    } catch (e) {
+      console.warn('Chyba pri vytváraní bitmap:', e)
     }
 
     // Aktualizuj posledný obrázok
@@ -356,9 +436,32 @@ const adjustHue = async () => {
     const adjustedImage = {
       id: Date.now().toString(),
       url: data.image,
+      bitmap: null, // Bude vytvorená nižšie
       prompt: `Zmenený odtieň (${hueShift.value}°)`,
       negativePrompt: '',
       timestamp: new Date(),
+    }
+
+    // Vytvor bitmap pre optimalizované renderovanie
+    try {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      await new Promise((resolve, reject) => {
+        img.onload = async () => {
+          try {
+            adjustedImage.bitmap = await createImageBitmap(img)
+            console.log('✅ Bitmap vytvorená po zmene odtieňa')
+            resolve()
+          } catch (e) {
+            console.warn('createImageBitmap zlyhalo:', e)
+            resolve()
+          }
+        }
+        img.onerror = reject
+        img.src = data.image
+      })
+    } catch (e) {
+      console.warn('Chyba pri vytváraní bitmap:', e)
     }
 
     // Aktualizuj posledný obrázok
@@ -519,11 +622,25 @@ defineExpose({
           </div>
 
           <!-- LoRA výber -->
-          <div v-if="availableLoras.length > 0" class="input-group">
+          <div v-if="availableLoras.length > 0" class="input-group lora-section">
             <label for="lora-select">🎨 LoRA Model</label>
+            
+            <!-- Checkbox pre zobrazenie všetkých LoRA -->
+            <div class="lora-filter-checkbox">
+              <label class="checkbox-label-inline">
+                <input 
+                  type="checkbox" 
+                  v-model="showAllLoras"
+                  :disabled="isGenerating"
+                />
+                <span>Zobraziť všetky LoRA</span>
+              </label>
+              <span class="lora-count">({{ filteredLoras.length }} z {{ availableLoras.length }})</span>
+            </div>
+            
             <select id="lora-select" v-model="selectedLora" :disabled="isGenerating">
-              <option value="">Žiadny</option>
-              <option v-for="lora in availableLoras" :key="lora" :value="lora">
+              <option value="">🚫 Bez LoRA</option>
+              <option v-for="lora in filteredLoras" :key="lora" :value="lora">
                 {{ lora }}
               </option>
             </select>
@@ -1081,6 +1198,43 @@ button:disabled {
 
 .lora-section label {
   color: #764ba2;
+}
+
+.lora-filter-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0.75rem 0;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+}
+
+.checkbox-label-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: #764ba2;
+  user-select: none;
+}
+
+.checkbox-label-inline input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #764ba2;
+}
+
+.lora-count {
+  font-size: 0.8rem;
+  color: #764ba2;
+  font-weight: 600;
+  background: rgba(118, 75, 162, 0.1);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
 }
 
 /* Size section */
