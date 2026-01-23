@@ -166,6 +166,22 @@ watch(perspective, async (newValue) => {
       />
     </div>
     
+    <!-- Náhľad opakovanej textúry -->
+    <div class="tiled-preview-section">
+      <label class="preview-label">👁️ Náhľad súvislosti</label>
+      <div 
+        class="tiled-preview"
+        :style="{
+          backgroundImage: `url(${texturePath})`,
+          backgroundRepeat: 'repeat',
+          backgroundSize: 'auto',
+          ...filterStyle
+        }"
+      >
+      </div>
+      <p class="preview-hint">Textúra zopakovaná - skontrolujte súvislé prechody</p>
+    </div>
+    
     <div class="color-controls">
       <div class="color-slider">
         <label>🎨 Farebný tón: {{ hueRotation }}°</label>
@@ -291,6 +307,39 @@ watch(perspective, async (newValue) => {
   height: 100%;
   object-fit: cover;
   transition: filter 0.3s;
+}
+
+.tiled-preview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.preview-label {
+  font-size: 0.85rem;
+  color: #2e7d32;
+  font-weight: 600;
+  margin: 0;
+}
+
+.tiled-preview {
+  width: 100%;
+  height: 150px;
+  border: 2px solid #4caf50;
+  border-radius: 8px;
+  background-color: #f0f0f0;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.preview-hint {
+  font-size: 0.7rem;
+  color: #666;
+  margin: 0;
+  text-align: center;
+  font-style: italic;
 }
 
 .color-controls {

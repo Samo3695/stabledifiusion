@@ -1,7 +1,15 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import torch
-from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, DPMSolverMultistepScheduler, EulerAncestralDiscreteScheduler, EulerDiscreteScheduler
+from diffusers import (
+    StableDiffusionPipeline, 
+    StableDiffusionImg2ImgPipeline, 
+    StableDiffusionXLPipeline,
+    StableDiffusionXLImg2ImgPipeline,
+    DPMSolverMultistepScheduler, 
+    EulerAncestralDiscreteScheduler, 
+    EulerDiscreteScheduler
+)
 from PIL import Image
 import io
 import base64
@@ -106,6 +114,10 @@ MODEL_REGISTRY = {
         'id': 'Lykon/dreamshaper-8',
         'description': 'DreamShaper 8 - univerzálny, kvalitné detaily, mix štýlov',
     },
+    'texture': {
+        'id': 'dream-textures/texture-diffusion',
+        'description': 'Texture Diffusion - špecializovaný na seamless textúry',
+    },
     'absolutereality': {
         'id': 'Lykon/absolute-reality-1.81',
         'description': 'Absolute Reality - podobný DreamShaper, semi-realistický',
@@ -117,6 +129,11 @@ MODEL_REGISTRY = {
     'majicmix': {
         'id': 'digiplay/majicMIX_realistic_v7',
         'description': 'MajicMix Realistic - mix reality & fantasy, perfektný pre img2img',
+    },
+    'sdxl': {
+        'id': 'stabilityai/stable-diffusion-xl-base-1.0',
+        'description': 'SDXL - najvyššia kvalita, vyžaduje viac VRAM',
+        'type': 'xl'  # Mark as XL for special handling
     },
     'full': {
         'id': 'runwayml/stable-diffusion-v1-5',
@@ -136,16 +153,27 @@ def load_pipeline(key: str):
         raise ValueError(f"Unknown model key: {key}")
 
     model_id = MODEL_REGISTRY[key]['id']
+    model_type = MODEL_REGISTRY[key].get('type', 'sd15')  # default SD 1.5
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"� Načítavam model '{key}' -> {model_id} na zariadenie: {device}")
+    print(f"🚀 Načítavam model '{key}' -> {model_id} na zariadenie: {device}")
 
     try:
-        pipe = StableDiffusionPipeline.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16 if device == 'cuda' else torch.float32,
-            safety_checker=None,
-            requires_safety_checker=False,
-        )
+        # SDXL models use different pipeline classes
+        if model_type == 'xl':
+            print("🌟 Používam SDXL pipeline...")
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16 if device == 'cuda' else torch.float32,
+                use_safetensors=True,
+                variant="fp16" if device == 'cuda' else None,
+            )
+        else:
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16 if device == 'cuda' else torch.float32,
+                safety_checker=None,
+                requires_safety_checker=False,
+            )
 
         # Scheduler nastavenie - pre Realistic Vision použiť Euler
         if key == 'realistic':
@@ -169,15 +197,26 @@ def load_pipeline(key: str):
                 pass  # Staršie verzie môžu nemať tieto metódy
 
         # Create img2img pipeline sharing components
-        img2img = StableDiffusionImg2ImgPipeline(
-            vae=pipe.vae,
-            text_encoder=pipe.text_encoder,
-            tokenizer=pipe.tokenizer,
-            unet=pipe.unet,
-            scheduler=pipe.scheduler,
-            safety_checker=None,
-            feature_extractor=pipe.feature_extractor,
-        )
+        if model_type == 'xl':
+            img2img = StableDiffusionXLImg2ImgPipeline(
+                vae=pipe.vae,
+                text_encoder=pipe.text_encoder,
+                text_encoder_2=pipe.text_encoder_2,
+                tokenizer=pipe.tokenizer,
+                tokenizer_2=pipe.tokenizer_2,
+                unet=pipe.unet,
+                scheduler=pipe.scheduler,
+            )
+        else:
+            img2img = StableDiffusionImg2ImgPipeline(
+                vae=pipe.vae,
+                text_encoder=pipe.text_encoder,
+                tokenizer=pipe.tokenizer,
+                unet=pipe.unet,
+                scheduler=pipe.scheduler,
+                safety_checker=None,
+                feature_extractor=pipe.feature_extractor,
+            )
         img2img = img2img.to(device)
 
         pipelines[key] = {
@@ -238,8 +277,28 @@ def generate():
                 # Unfuse ak už nie je potrebná
                 load_lora_to_pipeline(model_entry, '', 0.0)
         except Exception as lora_err:
-            print(f"⚠️  Chyba pri načítaní LoRA: {lora_err}")
-            return jsonify({'error': f'Chyba pri načítaní LoRA: {lora_err}'}), 500
+            error_msg = str(lora_err)
+            print(f"⚠️  Chyba pri načítaní LoRA: {error_msg}")
+            
+            # Špecifická správa pre nekompatibilné target modules
+            if 'not found in the base model' in error_msg or 'Target modules' in error_msg:
+                return jsonify({
+                    'error': f'LoRA model "{lora_name}" nie je kompatibilný s modelom "{model_key}". Tento LoRA je pravdepodobne pre SDXL alebo inú architektúru. Skúste iný LoRA model alebo zmeňte základný model.'
+                }), 400
+            
+            # Size mismatch chyby - LoRA má inú architektúru než base model
+            if 'size mismatch' in error_msg:
+                # Detekuj či je to SD 1.5 LoRA s inym modelom
+                if '768' in error_msg and '1024' in error_msg:
+                    return jsonify({
+                        'error': f'LoRA model "{lora_name}" je pre SD 1.5 (text encoder 768), ale model "{model_key}" používa inú architektúru (1024). Použite tento LoRA s modelmi: lite, full, dreamshaper, realistic. Alebo vypnite LoRA pre texture model.'
+                    }), 400
+                else:
+                    return jsonify({
+                        'error': f'LoRA model "{lora_name}" nie je kompatibilný s modelom "{model_key}". Architektúra LoRA nezodpovedá základnému modelu.'
+                    }), 400
+            
+            return jsonify({'error': f'Chyba pri načítaní LoRA: {error_msg}'}), 500
         
         # Limit steps for lite by default, but allow full to use higher default
         if model_key == 'lite':

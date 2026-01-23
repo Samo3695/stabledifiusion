@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import TextureColorPicker from './TextureColorPicker.vue'
 
 const props = defineProps({
@@ -26,6 +26,64 @@ const textureColors = ref({
 })
 const tilesPerImage = ref(1) // Cez koľko políčok pôjde jeden obrázok
 const tileResolution = ref(512) // Rozlíšenie tile
+
+// AI generovanie textúr
+const generationPrompt = ref('')
+const imageSize = ref('512x512')
+const selectedLoraModel = ref('') // Žiadna LoRA pre texture model
+const selectedBaseModel = ref('texture')
+const isGenerating = ref(false)
+const generatedTexturePreview = ref(null) // Náhľad vygenerovanej textúry
+
+const imageSizeOptions = [
+  { label: '500 x 500', value: '500x500' },
+  { label: '512 x 512', value: '512x512' },
+  { label: '1000 x 1000', value: '1000x1000' },
+  { label: '1500 x 1500', value: '1500x1500' },
+  { label: '2000 x 2000', value: '2000x2000' }
+]
+
+const loraModels = [
+  { label: '❌ Žiadna LoRA', value: '' },
+  { label: 'DiffuseTexture v11 (SD 1.5)', value: 'DiffuseTexture_v11.safetensors' }
+]
+
+const baseModels = [
+  { label: 'LITE (SD v1.4) - rýchly', value: 'lite' },
+  { label: 'Full (SD v1.5) - kvalitný', value: 'full' },
+  { label: 'Texture Diffusion - 🎯 textúry', value: 'texture' },
+  { label: 'DreamShaper 8', value: 'dreamshaper' },
+  { label: 'Realistic Vision V5.1', value: 'realistic' },
+  { label: 'SDXL - 🌟 najvyššia kvalita', value: 'sdxl' },
+  { label: 'Absolute Reality 1.81', value: 'absolutereality' },
+  { label: 'Epic Realism', value: 'epicrealism' },
+  { label: 'MajicMix Realistic v7', value: 'majicmix' }
+]
+
+// Kontrola kompatibility LoRA s modelom
+const loraCompatibilityWarning = computed(() => {
+  if (!selectedLoraModel.value) return null
+  
+  const lora = selectedLoraModel.value
+  const model = selectedBaseModel.value
+  
+  // DiffuseTexture v11 je pre SD 1.5 modely
+  if (lora.includes('DiffuseTexture')) {
+    const compatibleModels = ['lite', 'full', 'dreamshaper', 'realistic', 'absolutereality', 'epicrealism', 'majicmix']
+    if (!compatibleModels.includes(model)) {
+      return `⚠️ DiffuseTexture v11 je kompatibilný len s SD 1.5 modelmi (lite, full, dreamshaper, realistic, atd.). Pre model "${model}" vypnite LoRA.`
+    }
+  }
+  
+  // Seamless Texture je pre SDXL
+  if (lora.includes('seamless')) {
+    if (model !== 'sdxl') {
+      return `⚠️ Seamless Texture je kompatibilný len s SDXL modelom. Zvoľte SDXL model alebo vypnite LoRA.`
+    }
+  }
+  
+  return null
+})
 
 // Nahratie vlastnej textúry
 const handleTextureUpload = (event) => {
@@ -85,6 +143,81 @@ const emitTextureSettings = () => {
     tileResolution: tileResolution.value,
     customTexture: customTexture.value
   })
+}
+
+// Generuj textúru pomocou AI
+const generateTexture = async () => {
+  if (!generationPrompt.value.trim()) {
+    alert('Prosím zadajte prompt pre generovanie textúry')
+    return
+  }
+
+  isGenerating.value = true
+  
+  try {
+    const [width, height] = imageSize.value.split('x').map(Number)
+    
+    const response = await fetch('http://localhost:5000/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        prompt: generationPrompt.value,
+        width: width,
+        height: height,
+        lora: selectedLoraModel.value.replace('.safetensors', ''),
+        model: selectedBaseModel.value
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const data = await response.json()
+    
+    // Kontrola chyby z backendu
+    if (data.error) {
+      alert(`❌ ${data.error}`)
+      isGenerating.value = false
+      return
+    }
+    
+    if (data.image) {
+      // Použite vygenerovaný obrázok ako vlastnú textúru
+      const imageData = data.image.includes('base64,') ? data.image : `data:image/png;base64,${data.image}`
+      customTexture.value = imageData
+      generatedTexturePreview.value = imageData // Uložiť pre náhľad
+      emitTextureSettings()
+      
+      // Emituj vygenerovanú textúru
+      emit('tiles-generated', {
+        tiles: [customTexture.value],
+        tilesPerImage: tilesPerImage.value,
+        prompt: generationPrompt.value,
+        timestamp: new Date()
+      })
+    }
+  } catch (error) {
+    console.error('Chyba pri generovaní textúry:', error)
+    alert('Chyba pri generovaní textúry. Skontrolujte či beží backend server.')
+  } finally {
+    isGenerating.value = false
+  }
+}
+
+// Stiahnuť vygenerovaný obrázok
+const downloadTexture = () => {
+  if (!generatedTexturePreview.value) return
+  
+  // Vytvor link element
+  const link = document.createElement('a')
+  link.href = generatedTexturePreview.value
+  link.download = `texture-${Date.now()}.png`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
 }
 
 // Inicializuj farby z props pri načítaní
@@ -163,6 +296,91 @@ watch(() => props.initialTextureSettings, (newSettings) => {
       <div class="info-box">
         <p><strong>💡 Texture Manager:</strong></p>
         <p>Nastavte textúru pozadia, farebné úpravy a rozlíšenie pre mapu.</p>
+      </div>
+
+      <!-- AI generovanie textúr -->
+      <div class="generation-section">
+        <h4>🤖 AI Generovanie textúr</h4>
+        
+        <div class="input-group">
+          <label>📝 Prompt pre generovanie</label>
+          <input
+            v-model="generationPrompt"
+            type="text"
+            placeholder="napr. seamless grass texture, top view, tileable..."
+            class="text-input"
+          />
+        </div>
+
+        <div class="input-group">
+          <label>📐 Veľkosť obrázka</label>
+          <select v-model="imageSize" class="select-input">
+            <option 
+              v-for="size in imageSizeOptions" 
+              :key="size.value" 
+              :value="size.value"
+            >
+              {{ size.label }}
+            </option>
+          </select>
+        </div>
+
+        <div class="input-group">
+          <label>🎨 LoRA Model</label>
+          <select v-model="selectedLoraModel" class="select-input">
+            <option 
+              v-for="lora in loraModels" 
+              :key="lora.value" 
+              :value="lora.value"
+            >
+              {{ lora.label }}
+            </option>
+          </select>
+        </div>
+
+        <div class="input-group">
+          <label>🖼️ Základný Model</label>
+          <select v-model="selectedBaseModel" class="select-input">
+            <option 
+              v-for="model in baseModels" 
+              :key="model.value" 
+              :value="model.value"
+            >
+              {{ model.label }}
+            </option>
+          </select>
+        </div>
+        <!-- Varovanie o kompatibilite LoRA -->
+        <div v-if="loraCompatibilityWarning" class="compatibility-warning">
+          {{ loraCompatibilityWarning }}
+        </div>
+        <button 
+          @click="generateTexture" 
+          :disabled="isGenerating || !generationPrompt.trim()"
+          class="btn-generate"
+        >
+          {{ isGenerating ? '⏳ Generujem...' : '✨ Vygenerovať textúru' }}
+        </button>
+
+        <!-- Náhľad vygenerovanej textúry -->
+        <div v-if="generatedTexturePreview" class="texture-preview">
+          <div class="preview-header">
+            <label>👁️ Náhľad súvislosti textúry</label>
+            <button @click="downloadTexture" class="btn-download" title="Stiahnuť obrázok">
+              💾 Stiahnuť
+            </button>
+          </div>
+          <div 
+            class="tiled-preview"
+            :style="{
+              backgroundImage: `url(${generatedTexturePreview})`,
+              backgroundRepeat: 'repeat',
+              backgroundSize: 'auto'
+            }"
+          >
+          </div>
+          <p class="preview-hint">Textúra zopakovaná 3x3 - skontrolujte súvislé prechody</p>
+        </div>
       </div>
     </div>
   </div>
@@ -364,5 +582,152 @@ button:disabled {
 
 .info-box p {
   margin: 0.25rem 0;
+}
+
+.generation-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-top: 1rem;
+  border-top: 2px solid #e0e0e0;
+  margin-top: 1rem;
+}
+
+.generation-section h4 {
+  margin: 0;
+  color: #667eea;
+  font-size: 1.1rem;
+}
+
+.text-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  transition: all 0.3s;
+  box-sizing: border-box;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: #667eea;
+  background: #f0f0ff;
+}
+
+.select-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  background: white;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-sizing: border-box;
+}
+
+.select-input:focus {
+  outline: none;
+  border-color: #667eea;
+  background: #f0f0ff;
+}
+
+.select-input:hover {
+  border-color: #667eea;
+}
+
+.btn-generate {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+  width: 100%;
+}
+
+.btn-generate:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-generate:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.compatibility-warning {
+  padding: 0.75rem;
+  background: #fff3cd;
+  border: 2px solid #ffc107;
+  border-radius: 8px;
+  color: #856404;
+  font-size: 0.85rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.texture-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  border-top: 2px solid #e0e0e0;
+  margin-top: 1rem;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.texture-preview > label,
+.preview-header > label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.btn-download {
+  background: linear-gradient(135deg, #4caf50 0%, #66bb6a 100%);
+  color: white;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s;
+  white-space: nowrap;
+}
+
+.btn-download:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+}
+
+.tiled-preview {
+  width: 100%;
+  height: 300px;
+  border: 2px solid #667eea;
+  border-radius: 8px;
+  background-color: #f0f0f0;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+.preview-hint {
+  font-size: 0.75rem;
+  color: #999;
+  margin: 0;
+  text-align: center;
 }
 </style>
