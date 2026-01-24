@@ -3,10 +3,10 @@ import { ref, watch, onMounted } from 'vue'
 
 const emit = defineEmits(['template-selected', 'tab-changed', 'road-sprite-selected'])
 
-const activeTemplateTab = ref('1size')
+const activeTemplateTab = ref('buildings')
 const templateImages = ref({
-  '1size': ['0.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'Gemini_Generated_Image_xyvbjzxyvbjzxyvb.png', 'halfsphere.png', 'hole.png', 'ihlan1.png', 'kuzel.png', 'smallvalec.png', 'sphere.png', 'tree.png', 'tree2.png', 'valec.png', 'valec2.png', 'valec3.png', 'valec4.png'],
-  '2size': ['2x1.png', '2x2-1.png', '2x2.png', '2x3-1.png', '2x3.png'],
+  'buildings': ['0-5.png', '0.png', '0x1.png', '0x2.png', '0x3.png', '1.png', '1x3.png', '4x1.png', '4x2-1.png', '4x2-2.png', '4x3-1.png', '4x3-2.png', '4x3-3.png', 'cilinder.png', 'cilnderTower.png', 'halfsphere.png', 'piramide.png', 'pog.png', 'sphere.png'],
+  'terrian': ['bush.png', 'bushes.png', 'rock.png', 'rockbig.png', 'tree1.png', 'trees.png'],
   'roads': ['basic.png', 'futureroad.png', 'presentroad.png', 'pastroad.png', 'egpyt.png']
 })
 const selectedTemplate = ref(null)
@@ -14,11 +14,7 @@ const selectedTemplate = ref(null)
 // Funkcia na emitovanie veľkosti podľa tabu
 const emitTabSize = (tab) => {
   let cellsX = 1, cellsY = 1
-  if (tab === '2size') {
-    cellsX = 1
-    cellsY = 2  // 2 políčka nad sebou
-  }
-  
+  // Všetky taby majú 1x1 políčko
   emit('tab-changed', { cellsX, cellsY })
 }
 
@@ -35,11 +31,11 @@ onMounted(() => {
 // Mapovanie tabov na priečinky
 const getTemplateFolder = (tab) => {
   const folderMap = {
-    '1size': 'all',
-    '2size': 'cubes2',
+    'buildings': 'buildings',
+    'terrian': 'terrian',
     'roads': 'roads/sprites'
   }
-  return folderMap[tab] || 'all'
+  return folderMap[tab] || 'buildings'
 }
 
 const selectTemplate = (template) => {
@@ -56,7 +52,7 @@ const selectTemplate = (template) => {
   
   // Zisti počet políčok podľa tabu (ULOŽÍME DO KONŠTANTY aby sa nezmenili)
   const currentCellsX = 1
-  const currentCellsY = activeTemplateTab.value === '2size' ? 2 : 1
+  const currentCellsY = 1
   
   console.log(`📐 TemplateSelector: Vybraná šablóna "${template}" v tabe "${activeTemplateTab.value}"`)
   console.log(`   Priečinok: ${folder}`)
@@ -138,20 +134,20 @@ const selectTemplate = (template) => {
     <!-- Tab navigácia -->
     <div class="template-tabs">
       <button 
-        @click="activeTemplateTab = '1size'" 
-        :class="{ active: activeTemplateTab === '1size' }"
+        @click="activeTemplateTab = 'buildings'" 
+        :class="{ active: activeTemplateTab === 'buildings' }"
         class="tab-btn"
         type="button"
       >
-        1size
+        🏢 Buildings
       </button>
       <button 
-        @click="activeTemplateTab = '2size'" 
-        :class="{ active: activeTemplateTab === '2size' }"
+        @click="activeTemplateTab = 'terrian'" 
+        :class="{ active: activeTemplateTab === 'terrian' }"
         class="tab-btn"
         type="button"
       >
-        2size
+        🌳 Terrian
       </button>
       <button 
         @click="activeTemplateTab = 'roads'" 

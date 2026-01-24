@@ -82,6 +82,18 @@ watch(() => props.initialPerspective, (newValue) => {
   }
 })
 
+// Watch na zmenu texturePath (pri načítaní projektu s vlastnou textúrou)
+watch(() => props.texturePath, async (newPath) => {
+  if (newPath && newPath.startsWith('data:')) {
+    console.log('🎨 TextureColorPicker: Vlastná textúra načítaná, automaticky aplikujem...')
+    // Počkaj chvíľu aby sa všetky hodnoty nastavili
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const adjustedImage = await applyColorAdjustments(newPath)
+    emit('apply-texture', adjustedImage, tilesPerImage.value)
+    console.log('✅ TextureColorPicker: Textúra automaticky aplikovaná')
+  }
+})
+
 const filterStyle = computed(() => ({
   filter: `hue-rotate(${hueRotation.value}deg) saturate(${saturation.value}%) brightness(${brightness.value}%)`
 }))

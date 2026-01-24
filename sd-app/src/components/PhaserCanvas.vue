@@ -81,6 +81,7 @@ class IsoScene extends Phaser.Scene {
     this.shadowSprites = {}
     this.batchLoading = false
     this.tileSprites = []
+    this.tileMasks = []
     this.numberTexts = []
     this.isDragging = false
     this.lastPointer = { x: 0, y: 0 }
@@ -328,6 +329,31 @@ class IsoScene extends Phaser.Scene {
           tileSprite.setOrigin(0.5, 0.5)
           // Background textúra je najnižšie - pod všetkým
           tileSprite.setDepth(-1)
+          
+          // Vytvoríme izometrickú diamantovú masku pre tento blok
+          const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false })
+          maskGraphics.fillStyle(0xffffff)
+          
+          // Vypočítame body izometrického diamantu pre celý blok
+          const halfWidth = (blockWidthIso * textureAspectRatio) / 2
+          const halfHeight = blockHeightIso / 2
+          
+          // Nakreslíme diamant (4 body izometrie)
+          maskGraphics.beginPath()
+          maskGraphics.moveTo(center.x, center.y - halfHeight) // Horný bod
+          maskGraphics.lineTo(center.x + halfWidth, center.y) // Pravý bod
+          maskGraphics.lineTo(center.x, center.y + halfHeight) // Dolný bod
+          maskGraphics.lineTo(center.x - halfWidth, center.y) // Ľavý bod
+          maskGraphics.closePath()
+          maskGraphics.fillPath()
+          
+          // Vytvoríme geometry masku z graphics
+          const mask = maskGraphics.createGeometryMask()
+          tileSprite.setMask(mask)
+          
+          // Uložíme masku aby sme ju mohli neskôr vyčistiť
+          if (!this.tileMasks) this.tileMasks = []
+          this.tileMasks.push(maskGraphics)
           
           // Nepridávame do ground containera - pridávame priamo aby depth fungoval správne
           this.tileSprites.push(tileSprite)
@@ -1291,6 +1317,13 @@ const setBackgroundTiles = (tiles, tileSize = 1) => {
     console.log('🧹 Odstraňujem staré background sprite-y pred načítaním novej textúry')
     mainScene.tileSprites.forEach(sprite => sprite.destroy())
     mainScene.tileSprites = []
+  }
+  
+  // Odstránime staré masky
+  if (mainScene.tileMasks && mainScene.tileMasks.length > 0) {
+    console.log('🧹 Odstraňujem staré masky')
+    mainScene.tileMasks.forEach(mask => mask.destroy())
+    mainScene.tileMasks = []
   }
   
   // Odstránime starú textúru ak existuje

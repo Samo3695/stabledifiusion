@@ -12,6 +12,14 @@ const props = defineProps({
   personSpawnCount: {
     type: Number,
     default: 3
+  },
+  resources: {
+    type: Array,
+    default: () => []
+  },
+  workforce: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -24,7 +32,8 @@ const emit = defineEmits([
   'road-building-mode-changed',
   'road-tiles-ready',
   'road-opacity-changed',
-  'person-spawn-settings-changed'
+  'person-spawn-settings-changed',
+  'update-building-data'
 ])
 
 const selectedImage = ref(null)
@@ -37,6 +46,9 @@ const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny sprite URL
 const spawnPersonsEnabled = ref(props.personSpawnEnabled) // Či pridať osoby pri kliknutí na road tile
 const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno umiestnenie road tile
+const isBuilding = ref(false) // Či je obrázok building
+const buildCost = ref([]) // Build cost - multiselect resources/workforce
+const production = ref([]) // Production - multiselect resources/workforce
 
 // Watch pre props - aktualizuj lokálne refs keď sa zmenia props (napr. po načítaní projektu)
 watch(() => props.personSpawnEnabled, (newVal) => {
@@ -268,7 +280,8 @@ defineExpose({
   getRoadTileByDirection,
   roadTiles,
   updateRoadSprite,
-  activeGalleryTab
+  activeGalleryTab,
+  roadSpriteUrl
 })
 
 const copyToClipboard = async (text, label = 'text') => {
@@ -295,10 +308,34 @@ watch(selectedGridSize, (newSize) => {
 
 const openModal = (image) => {
   selectedImage.value = image
+  // Načítaj building data z image objektu
+  isBuilding.value = image.isBuilding || false
+  buildCost.value = image.buildCost || []
+  production.value = image.production || []
 }
 
 const closeModal = () => {
   selectedImage.value = null
+  isBuilding.value = false
+  buildCost.value = []
+  production.value = []
+}
+
+const saveBuildingData = () => {
+  if (!selectedImage.value) return
+  
+  const buildingData = {
+    isBuilding: isBuilding.value,
+    buildCost: buildCost.value,
+    production: production.value
+  }
+  
+  emit('update-building-data', {
+    imageId: selectedImage.value.id,
+    buildingData
+  })
+  
+  console.log('💾 Building data uložené:', buildingData)
 }
 
 const downloadImage = (image) => {
@@ -526,6 +563,102 @@ const formatDate = (date) => {
             <div class="info-section">
               <h3>Vytvorené:</h3>
               <p>{{ formatDate(selectedImage.timestamp) }}</p>
+            </div>
+
+            <!-- Building section -->
+            <div class="info-section building-section">
+              <div class="building-header">
+                <label class="building-checkbox">
+                  <input 
+                    type="checkbox" 
+                    v-model="isBuilding"
+                    @change="saveBuildingData"
+                  />
+                  <span>🏗️ Building</span>
+                </label>
+              </div>
+              
+              <div v-if="isBuilding" class="building-details">
+                <!-- Build Cost Section -->
+                <div class="building-subsection">
+                  <h4>💰 Build Cost</h4>
+                  <div class="multiselect-group">
+                    <label>Resources:</label>
+                    <select 
+                      multiple 
+                      v-model="buildCost"
+                      @change="saveBuildingData"
+                      class="multiselect"
+                    >
+                      <option 
+                        v-for="resource in resources" 
+                        :key="resource.id" 
+                        :value="resource.id"
+                      >
+                        {{ resource.name }} ({{ resource.amount }})
+                      </option>
+                    </select>
+                  </div>
+                  
+                  <div class="multiselect-group">
+                    <label>Workforce:</label>
+                    <select 
+                      multiple 
+                      v-model="buildCost"
+                      @change="saveBuildingData"
+                      class="multiselect"
+                    >
+                      <option 
+                        v-for="worker in workforce" 
+                        :key="worker.id" 
+                        :value="worker.id"
+                      >
+                        {{ worker.name }} ({{ worker.count }})
+                      </option>
+                    </select>
+                  </div>
+                </div>
+                
+                <!-- Production Section -->
+                <div class="building-subsection">
+                  <h4>📦 Production</h4>
+                  <div class="multiselect-group">
+                    <label>Resources:</label>
+                    <select 
+                      multiple 
+                      v-model="production"
+                      @change="saveBuildingData"
+                      class="multiselect"
+                    >
+                      <option 
+                        v-for="resource in resources" 
+                        :key="resource.id" 
+                        :value="resource.id"
+                      >
+                        {{ resource.name }} ({{ resource.amount }})
+                      </option>
+                    </select>
+                  </div>
+                  
+                  <div class="multiselect-group">
+                    <label>Workforce:</label>
+                    <select 
+                      multiple 
+                      v-model="production"
+                      @change="saveBuildingData"
+                      class="multiselect"
+                    >
+                      <option 
+                        v-for="worker in workforce" 
+                        :key="worker.id" 
+                        :value="worker.id"
+                      >
+                        {{ worker.name }} ({{ worker.count }})
+                      </option>
+                    </select>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div class="modal-actions">
@@ -1074,5 +1207,105 @@ h2 {
   width: 20px;
   height: 20px;
   font-size: 0.8rem;
+}
+
+/* Building section styles */
+.building-section {
+  border-top: 2px solid #e0e0e0;
+  padding-top: 1.5rem !important;
+  margin-top: 1.5rem !important;
+}
+
+.building-header {
+  margin-bottom: 1rem;
+}
+
+.building-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: #333;
+  padding: 0.75rem;
+  background: #f8f9fa;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.building-checkbox:hover {
+  background: #e9ecef;
+}
+
+.building-checkbox input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #667eea;
+}
+
+.building-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 8px;
+  margin-top: 1rem;
+}
+
+.building-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  background: white;
+  border-radius: 8px;
+  border: 2px solid #e0e0e0;
+}
+
+.building-subsection h4 {
+  margin: 0;
+  color: #667eea;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.multiselect-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.multiselect-group label {
+  font-weight: 600;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.multiselect {
+  min-height: 100px;
+  padding: 0.5rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  transition: border-color 0.2s;
+  background: white;
+}
+
+.multiselect:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.multiselect option {
+  padding: 0.5rem;
+  cursor: pointer;
+}
+
+.multiselect option:checked {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
 }
 </style>

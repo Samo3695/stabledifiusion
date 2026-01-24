@@ -1,5 +1,7 @@
 <script setup>
 import { ref } from 'vue'
+import Modal from './Modal.vue'
+import ResourceManager from './ResourceManager.vue'
 
 const props = defineProps({
   images: {
@@ -33,12 +35,37 @@ const props = defineProps({
   personSpawnSettings: {
     type: Object,
     default: () => ({ enabled: false, count: 3 })
+  },
+  resources: {
+    type: Array,
+    default: () => []
+  },
+  workforce: {
+    type: Array,
+    default: () => []
+  },
+  roadSpriteUrl: {
+    type: String,
+    default: '/templates/roads/sprites/pastroad.png'
   }
 })
 
-const emit = defineEmits(['load-project', 'update:showNumbering', 'update:showGallery', 'update:showGrid'])
+const emit = defineEmits(['load-project', 'update:showNumbering', 'update:showGallery', 'update:showGrid', 'update-resources'])
 
 const fileInput = ref(null)
+const showResourceModal = ref(false)
+
+const openResourceManager = () => {
+  showResourceModal.value = true
+}
+
+const closeResourceManager = () => {
+  showResourceModal.value = false
+}
+
+const handleResourceUpdate = (data) => {
+  emit('update-resources', data)
+}
 
 // Uloží projekt do JSON súboru
 const saveProject = () => {
@@ -100,7 +127,7 @@ const saveProject = () => {
 
     // Priprav dáta pre export
     const projectData = {
-      version: '1.6',  // Nová verzia s textúrou ako sprite-y
+      version: '1.7',  // Nová verzia s resources a workforce
       timestamp: new Date().toISOString(),
       imageCount: props.images.length,
       placedImageCount: Object.keys(placedImages).length,
@@ -122,7 +149,10 @@ const saveProject = () => {
         tilesPerImage: props.textureSettings?.tilesPerImage || 1,
         tileResolution: props.textureSettings?.tileResolution || 512,
         customTexture: props.textureSettings?.customTexture || null
-      }
+      },
+      resources: props.resources || [],
+      workforce: props.workforce || [],
+      roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png'
     }
 
     // Konvertuj na JSON string
@@ -141,6 +171,10 @@ const saveProject = () => {
 
     console.log('✅ Projekt uložený:', projectData.imageCount, 'obrázkov v galérii,', projectData.placedImageCount, 'umiestnených na šachovnici')
     console.log('   📦 Unikátnych obrázkov:', imageLibrary.length, '(deduplikované z', Object.keys(placedImages).length, ')')
+    const roadSpriteInfo = props.roadSpriteUrl.startsWith('data:') 
+      ? `data URL (${Math.round(props.roadSpriteUrl.length / 1024)}KB)` 
+      : props.roadSpriteUrl
+    console.log('   🛣️ Road sprite URL:', roadSpriteInfo)
   } catch (error) {
     console.error('❌ Chyba pri ukladaní projektu:', error)
     alert('Chyba pri ukladaní projektu: ' + error.message)
@@ -207,7 +241,10 @@ const handleFileUpload = async (event) => {
       images: projectData.images,
       placedImages: processedPlacedImages,
       environmentColors: projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 },
-      textureSettings: projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null }
+      textureSettings: projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null },
+      resources: projectData.resources || [],
+      workforce: projectData.workforce || [],
+      roadSpriteUrl: projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png'
     })
 
     // Resetuj file input
@@ -246,6 +283,10 @@ const clearProject = () => {
       
       <button @click="loadProject" class="btn btn-load" title="Načítať projekt z JSON súboru">
         📂 Load
+      </button>
+      
+      <button @click="openResourceManager" class="btn btn-resources" title="Spravovať resources a workforce">
+        📊 Resources
       </button>
       
       <button @click="clearProject" class="btn btn-clear" title="Vymazať všetky obrázky">
@@ -295,6 +336,20 @@ const clearProject = () => {
       @change="handleFileUpload"
       style="display: none"
     />
+    
+    <!-- Resource Manager Modal -->
+    <Modal 
+      v-if="showResourceModal" 
+      title="Resource Manager"
+      width="800px"
+      @close="closeResourceManager"
+    >
+      <ResourceManager
+        :initialResources="resources"
+        :initialWorkforce="workforce"
+        @update="handleResourceUpdate"
+      />
+    </Modal>
   </div>
 </template>
 
@@ -379,6 +434,15 @@ const clearProject = () => {
 
 .btn-load:hover {
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+}
+
+.btn-resources {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+}
+
+.btn-resources:hover {
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
 }
 
 .btn-clear {

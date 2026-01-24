@@ -32,6 +32,9 @@ const loadingProgress = ref(0) // Loading progress (0-100)
 const loadingStatus = ref('') // Loading status text
 const personSpawnEnabled = ref(false)
 const personSpawnCount = ref(0)
+const resources = ref([]) // Resources list
+const workforce = ref([]) // Workforce list
+const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny road sprite URL
 
 const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -43,9 +46,14 @@ const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
   
   // Ak ide o road sprite, aktualizuj sprite namiesto pridania do galérie
   if (image.isRoadSprite) {
+    const spriteInfo = image.url.startsWith('data:') 
+      ? `data URL (${Math.round(image.url.length / 1024)}KB)` 
+      : image.url
     console.log('🛣️ App.vue: Detekovaný Road Sprite - aktualizujem sprite namiesto pridania do galérie')
     console.log('   Template name:', image.templateName)
-    console.log('   Image URL (prvých 100 znakov):', image.url.substring(0, 100))
+    console.log('   Sprite typ:', spriteInfo)
+    roadSpriteUrl.value = image.url // Ulož pre uloženie do projektu
+    console.log('   roadSpriteUrl.value uložené (dĺžka):', image.url.length, 'znakov')
     if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
       await imageGalleryRef.value.updateRoadSprite(image.url)
       console.log('✅ Road sprite úspešne aktualizovaný v ImageGallery')
@@ -187,6 +195,7 @@ const handleTabChanged = ({ cellsX, cellsY }) => {
 
 const handleRoadSpriteSelected = async (spriteUrl) => {
   console.log('🛣️ App.vue: Prijatý road-sprite-selected event:', spriteUrl)
+  roadSpriteUrl.value = spriteUrl // Ulož pre uloženie do projektu
   if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
     await imageGalleryRef.value.updateRoadSprite(spriteUrl)
     console.log('✅ Road sprite úspešne aktualizovaný v ImageGallery')
@@ -314,6 +323,9 @@ const handleLoadProject = (projectData) => {
   const loadedColors = projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 }
   const loadedTiles = projectData.backgroundTiles || []
   const loadedTextureSettings = projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null }
+  const loadedResources = projectData.resources || []
+  const loadedWorkforce = projectData.workforce || []
+  const loadedRoadSpriteUrl = projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png'
   
   // Obnov farby prostredia
   environmentColors.value = loadedColors
@@ -322,6 +334,54 @@ const handleLoadProject = (projectData) => {
   // Obnov textúrové nastavenia
   textureSettings.value = loadedTextureSettings
   console.log('📐 App.vue: Textúrové nastavenia načítané:', loadedTextureSettings)
+  
+  // Ak existuje vlastná textúra, automaticky ju aplikuj na canvas
+  if (loadedTextureSettings.customTexture && canvasRef.value) {
+    console.log('🎨 App.vue: Detekovaná vlastná textúra, aplikujem na canvas...')
+    // Vytvor jednoduchý canvas pre spracovanie textúry
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = async () => {
+      const canvas = document.createElement('canvas')
+      const resolution = loadedTextureSettings.tileResolution || 512
+      canvas.width = resolution
+      canvas.height = resolution
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, resolution, resolution)
+      const processedTexture = canvas.toDataURL('image/jpeg', 0.9)
+      
+      // Aplikuj na canvas
+      await canvasRef.value.setBackgroundTiles([processedTexture], loadedTextureSettings.tilesPerImage || 1)
+      console.log('✅ App.vue: Vlastná textúra automaticky aplikovaná na canvas')
+    }
+    img.src = loadedTextureSettings.customTexture
+  }
+  
+  // Obnov resources a workforce
+  resources.value = loadedResources
+  workforce.value = loadedWorkforce
+  console.log('📊 App.vue: Resources a workforce načítané:', loadedResources.length, loadedWorkforce.length)
+  
+  // Obnov road sprite URL
+  roadSpriteUrl.value = loadedRoadSpriteUrl
+  const spriteInfo = loadedRoadSpriteUrl.startsWith('data:') 
+    ? `data URL (${Math.round(loadedRoadSpriteUrl.length / 1024)}KB)` 
+    : loadedRoadSpriteUrl
+  console.log('🛣️ App.vue: Road sprite URL načítané:', spriteInfo)
+  
+  // Aplikuj road sprite asynchrónne po načítaní projektu
+  const applyRoadSprite = async () => {
+    if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
+      await imageGalleryRef.value.updateRoadSprite(loadedRoadSpriteUrl)
+      console.log('✅ Road sprite aplikovaný:', spriteInfo)
+    } else {
+      console.warn('⚠️ ImageGallery ref nie je dostupný, skúsim znova o 100ms')
+      setTimeout(applyRoadSprite, 100)
+    }
+  }
+  
+  // Spusti aplikovanie sprite asynchrónne
+  applyRoadSprite()
   
   // Aplikuj background tiles na šachovnicu
   if (loadedTiles.length > 0 && canvasRef.value && canvasRef.value.setBackgroundTiles) {
@@ -457,6 +517,22 @@ const handleLoadProject = (projectData) => {
   
   console.log('✅ Projekt načítaný, obrázky v galérii:', images.value.length)
 }
+
+const handleUpdateResources = (data) => {
+  resources.value = data.resources || []
+  workforce.value = data.workforce || []
+  console.log('📊 App.vue: Resources a workforce aktualizované:', resources.value.length, workforce.value.length)
+}
+
+const handleUpdateBuildingData = ({ imageId, buildingData }) => {
+  const image = images.value.find(img => img.id === imageId)
+  if (image) {
+    image.isBuilding = buildingData.isBuilding
+    image.buildCost = buildingData.buildCost
+    image.production = buildingData.production
+    console.log('🏗️ App.vue: Building data aktualizované pre obrázok:', imageId)
+  }
+}
 </script>
 
 <template>
@@ -507,11 +583,15 @@ const handleLoadProject = (projectData) => {
         :canvasRef="canvasRef"
         :environmentColors="environmentColors"
         :textureSettings="textureSettings"
-      :personSpawnSettings="{ enabled: personSpawnEnabled, count: personSpawnCount }"
+        :personSpawnSettings="{ enabled: personSpawnEnabled, count: personSpawnCount }"
+        :resources="resources"
+        :workforce="workforce"
+        :roadSpriteUrl="roadSpriteUrl"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"
         @update:showGrid="showGrid = $event"
+        @update-resources="handleUpdateResources"
       />
     </header>
     
@@ -575,6 +655,8 @@ const handleLoadProject = (projectData) => {
         :selectedImageId="selectedImageId"
         :personSpawnEnabled="personSpawnEnabled"
         :personSpawnCount="personSpawnCount"
+        :resources="resources"
+        :workforce="workforce"
         @delete="handleDelete" 
         @select="handleSelectImage"
         @place-on-board="handlePlaceOnBoard"
@@ -584,6 +666,7 @@ const handleLoadProject = (projectData) => {
         @road-tiles-ready="handleRoadTilesReady"
         @road-opacity-changed="handleRoadOpacityChanged"
         @person-spawn-settings-changed="handlePersonSpawnSettingsChanged"
+        @update-building-data="handleUpdateBuildingData"
       />
     </div>
   </div>
