@@ -1,11 +1,13 @@
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, computed } from 'vue'
 import BuildingGenerator from './components/BuildingGenerator.vue'
 import EnvironmentGenerator from './components/EnvironmentGenerator.vue'
 import CharacterGenerator from './components/CharacterGenerator.vue'
 import ImageGallery from './components/ImageGallery.vue'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
+import ResourceDisplay from './components/ResourceDisplay.vue'
+import Modal from './components/Modal.vue'
 import { buildRoad, regenerateRoadTilesOnCanvas } from './utils/roadBuilder.js'
 
 const images = ref([])
@@ -36,6 +38,14 @@ const resources = ref([]) // Resources list
 const workforce = ref([]) // Workforce list
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny road sprite URL
 const roadOpacity = ref(100) // Aktuálna opacity pre road tiles
+const viewMode = ref('editor') // 'editor' alebo 'gameplay'
+const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
+const showInsufficientResourcesModal = ref(false)
+const insufficientResourcesData = ref({ 
+  buildingName: '', 
+  missingBuildResources: [], 
+  missingOperationalResources: [] 
+})
 
 const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -183,6 +193,22 @@ const handleRoadPlaced = ({ path }) => {
 const handlePlaceOnBoard = (image) => {
   console.log('📌 App.vue: Prijatý place-on-board event pre obrázok:', image.id, image)
   
+  // Kontrola operational resources pre budovy - LEN V GAMEPLAY MODE
+  if (viewMode.value === 'gameplay' && image.buildingData && image.buildingData.isBuilding) {
+    const resourceCheck = checkBuildingResources(image.buildingData)
+    if (!resourceCheck.hasEnough) {
+      // Zobraz modal s chýbajúcimi resources
+      insufficientResourcesData.value = {
+        buildingName: image.buildingData.buildingName || 'Budova',
+        missingBuildResources: resourceCheck.missingBuild,
+        missingOperationalResources: resourceCheck.missingOperational
+      }
+      showInsufficientResourcesModal.value = true
+      console.log('⛔ App.vue: Nedostatok resources:', resourceCheck)
+      return // Nezakladať budovu
+    }
+  }
+  
   if (canvasRef.value && selectedCell.value.row !== -1 && selectedCell.value.col !== -1) {
     // Ak je vybraté políčko, vlož obrázok tam
     const cellsX = image.cellsX || lastImageCellsX.value
@@ -284,6 +310,22 @@ const handleCellSelected = ({ row, col }) => {
     }
     
     if (selectedImage) {
+      // Kontrola operational resources pre budovy - LEN V GAMEPLAY MODE
+      if (viewMode.value === 'gameplay' && selectedImage.buildingData && selectedImage.buildingData.isBuilding) {
+        const resourceCheck = checkBuildingResources(selectedImage.buildingData)
+        if (!resourceCheck.hasEnough) {
+          // Zobraz modal s chýbajúcimi resources
+          insufficientResourcesData.value = {
+            buildingName: selectedImage.buildingData.buildingName || 'Budova',
+            missingBuildResources: resourceCheck.missingBuild,
+            missingOperationalResources: resourceCheck.missingOperational
+          }
+          showInsufficientResourcesModal.value = true
+          console.log('⛔ App.vue: Nedostatok resources:', resourceCheck)
+          return // Nezakladať budovu
+        }
+      }
+      
       console.log(`🖼️ App.vue: Vkladám vybraný obrázok z galérie (${selectedImageId.value})`)
       // Vždy použij aktuálnu veľkosť z grid size tabs (lastImageCellsX/Y)
       console.log(`   Aktuálna veľkosť z grid tabs: ${lastImageCellsX.value}x${lastImageCellsY.value}`)
@@ -588,7 +630,8 @@ const handleLoadProject = (projectData) => {
             loadingStatus.value = 'Hotovo!'
             console.log(`✅ Načítaných ${successCount}/${totalObjects} objektov na šachovnici`)
             
-            // Po dokončení načítania, triggeruj regeneráciu road tiles s načítanou opacity
+            // Po dokončení načítania, aktualizuj canvas mapu
+            handleCanvasUpdated()
         
           }, 500)
         }, 100)
@@ -695,11 +738,179 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
     // Ulož do buildingData objektu (nie priamo do image properties)
     image.buildingData = {
       isBuilding: buildingData.isBuilding,
+      buildingName: buildingData.buildingName,
       buildCost: buildingData.buildCost,
       operationalCost: buildingData.operationalCost,
       production: buildingData.production
     }
     console.log('🏗️ App.vue: Building data aktualizované pre obrázok:', imageId, buildingData)
+  }
+}
+
+const handleModeChanged = (mode) => {
+  viewMode.value = mode
+  console.log('🔄 App.vue: Režim zmenený na:', mode)
+}
+
+// Funkcia na kontrolu dostupnosti resources pre stavbu a prevádzku
+const checkBuildingResources = (buildingData) => {
+  if (!buildingData || !buildingData.isBuilding) {
+    return { hasEnough: true, missingBuild: [], missingOperational: [] }
+  }
+  
+  const missingBuild = []
+  const missingOperational = []
+  
+  // Kontrola build cost (potrebné na stavbu)
+  const buildCost = buildingData.buildCost || []
+  buildCost.forEach(cost => {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (!resource) {
+      missingBuild.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: 0
+      })
+      return
+    }
+    
+    // Pre build cost kontrolujeme len dostupné (base amount)
+    // NEODČÍTAME produkciu ani použité, iba čisté zásoby
+    if (resource.amount < cost.amount) {
+      missingBuild.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: resource.amount
+      })
+    }
+  })
+  
+  // Kontrola operational cost (potrebné na prevádzku)
+  const operationalCost = buildingData.operationalCost || []
+  operationalCost.forEach(cost => {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (!resource) {
+      missingOperational.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: 0
+      })
+      return
+    }
+    
+    // Spočítaj dostupné (base + production - used)
+    const produced = producedResources.value[cost.resourceId] || 0
+    const used = usedResources.value[cost.resourceId] || 0
+    const available = resource.amount + produced - used
+    
+    if (available < cost.amount) {
+      missingOperational.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: available
+      })
+    }
+  })
+  
+  return {
+    hasEnough: missingBuild.length === 0 && missingOperational.length === 0,
+    missingBuild,
+    missingOperational
+  }
+}
+
+// Computed property: Spočítaj použité resources zo všetkých budov na canvase
+const usedResources = computed(() => {
+  const used = {}
+  
+  // Bezpečnostná kontrola
+  if (!canvasImagesMap.value || typeof canvasImagesMap.value !== 'object') {
+    return used
+  }
+  
+  // Prejdi všetky obrázky na canvase
+  Object.values(canvasImagesMap.value).forEach(cellData => {
+    if (!cellData) return
+    
+    const imageId = cellData.imageId
+    if (!imageId) return
+    
+    // Nájdi obrázok v images array
+    const image = images.value.find(img => img.id === imageId)
+    if (!image || !image.buildingData || !image.buildingData.isBuilding) return
+    
+    // Sčítaj operational costs (potrebné na prevádzku)
+    const operationalCost = image.buildingData.operationalCost || []
+    operationalCost.forEach(cost => {
+      if (!cost || !cost.resourceId) return
+      if (!used[cost.resourceId]) {
+        used[cost.resourceId] = 0
+      }
+      used[cost.resourceId] += cost.amount || 0
+    })
+  })
+  
+  return used
+})
+
+// Computed property: Spočítaj produkované resources zo všetkých budov na canvase
+const producedResources = computed(() => {
+  const produced = {}
+  
+  // Bezpečnostná kontrola
+  if (!canvasImagesMap.value || typeof canvasImagesMap.value !== 'object') {
+    return produced
+  }
+  
+  // Prejdi všetky obrázky na canvase
+  Object.values(canvasImagesMap.value).forEach(cellData => {
+    if (!cellData) return
+    
+    const imageId = cellData.imageId
+    if (!imageId) return
+    
+    // Nájdi obrázok v images array
+    const image = images.value.find(img => img.id === imageId)
+    if (!image || !image.buildingData || !image.buildingData.isBuilding) return
+    
+    // Sčítaj production (čo budova produkuje)
+    const production = image.buildingData.production || []
+    production.forEach(prod => {
+      if (!prod || !prod.resourceId) return
+      if (!produced[prod.resourceId]) {
+        produced[prod.resourceId] = 0
+      }
+      produced[prod.resourceId] += prod.amount || 0
+    })
+  })
+  
+  return produced
+})
+
+const handleCanvasUpdated = () => {
+  // Aktualizuj mapu budov na canvase
+  if (canvasRef.value && canvasRef.value.cellImages) {
+    const cellImages = canvasRef.value.cellImages()
+    const newMap = {}
+    
+    Object.entries(cellImages).forEach(([key, data]) => {
+      // Nájdi imageId z URL alebo templateName
+      const matchingImage = images.value.find(img => 
+        img.url === data.url || 
+        (data.templateName && img.templateName === data.templateName)
+      )
+      
+      if (matchingImage) {
+        newMap[key] = {
+          imageId: matchingImage.id,
+          url: data.url,
+          templateName: data.templateName
+        }
+      }
+    })
+    
+    canvasImagesMap.value = newMap
+    console.log('🔄 App.vue: Canvas aktualizovaný, budov na canvase:', Object.keys(newMap).length)
   }
 }
 </script>
@@ -735,7 +946,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       :personSpawnEnabled="personSpawnEnabled"
       :personSpawnCount="personSpawnCount"
       @cell-selected="handleCellSelected"
-      @image-placed="handleImagePlaced"
+      @image-placed="(data) => { handleImagePlaced(data); handleCanvasUpdated(); }"
       @toggle-numbering="handleToggleNumbering"
       @toggle-gallery="handleToggleGallery"
       @toggle-grid="handleToggleGrid"
@@ -744,7 +955,8 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
     
     <!-- Header (absolútne pozicionovaný) -->
     <header>
-      <ProjectManager 
+      <ProjectManager
+        :mode="viewMode" 
         :images="images"
         :showNumbering="showNumbering"
         :showGallery="showGallery"
@@ -762,59 +974,68 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
         @update:showGallery="showGallery = $event"
         @update:showGrid="showGrid = $event"
         @update-resources="handleUpdateResources"
+        @mode-changed="handleModeChanged"
       />
     </header>
     
-    <!-- Pravý sidebar s nástrojmi (absolútne pozicionovaný) -->
+    <!-- Pravý sidebar (absolútne pozicionovaný) -->
     <aside class="sidebar">
-      <!-- Switcher -->
-      <div class="generator-switcher">
-        <button 
-          :class="{ active: activeGenerator === 'building' }"
-          @click="activeGenerator = 'building'"
-        >
-          🏗️ Building
-        </button>
-        <button 
-          :class="{ active: activeGenerator === 'environment' }"
-          @click="activeGenerator = 'environment'"
-        >
-          🌍 Environment
-        </button>
-        <button 
-          :class="{ active: activeGenerator === 'character' }"
-          @click="activeGenerator = 'character'"
-        >
-          🎭 Character
-        </button>
-      </div>
+      <!-- Editor Mode: Generátory -->
+      <template v-if="viewMode === 'editor'">
+        <!-- Switcher -->
+        <div class="generator-switcher">
+          <button 
+            :class="{ active: activeGenerator === 'building' }"
+            @click="activeGenerator = 'building'"
+          >
+            🏗️ Building
+          </button>
+          <button 
+            :class="{ active: activeGenerator === 'environment' }"
+            @click="activeGenerator = 'environment'"
+          >
+            🌍 Environment
+          </button>
+          <button 
+            :class="{ active: activeGenerator === 'character' }"
+            @click="activeGenerator = 'character'"
+          >
+            🎭 Character
+          </button>
+        </div>
+        
+        <!-- Building Generator -->
+        <BuildingGenerator
+          v-if="activeGenerator === 'building'"
+          ref="imageGeneratorRef"
+          @image-generated="handleImageGenerated" 
+          @template-selected="handleTemplateSelected"
+          @tab-changed="handleTabChanged"
+          @numbering-changed="handleNumberingChanged"
+          @road-sprite-selected="handleRoadSpriteSelected"
+        />
+        
+        <!-- Environment Generator -->
+        <EnvironmentGenerator
+          v-if="activeGenerator === 'environment'"
+          :initialColors="environmentColors"
+          :initialTextureSettings="textureSettings"
+          @tiles-generated="handleTilesGenerated"
+          @color-change="environmentColors = $event"
+          @texture-settings-change="handleTextureSettingsChange"
+        />
+        
+        <!-- Character Generator -->
+        <CharacterGenerator
+          v-if="activeGenerator === 'character'"
+          @character-generated="handleCharacterGenerated"
+        />
+      </template>
       
-      <!-- Building Generator -->
-      <BuildingGenerator
-        v-if="activeGenerator === 'building'"
-        ref="imageGeneratorRef"
-        @image-generated="handleImageGenerated" 
-        @template-selected="handleTemplateSelected"
-        @tab-changed="handleTabChanged"
-        @numbering-changed="handleNumberingChanged"
-        @road-sprite-selected="handleRoadSpriteSelected"
-      />
-      
-      <!-- Environment Generator -->
-      <EnvironmentGenerator
-        v-if="activeGenerator === 'environment'"
-        :initialColors="environmentColors"
-        :initialTextureSettings="textureSettings"
-        @tiles-generated="handleTilesGenerated"
-        @color-change="environmentColors = $event"
-        @texture-settings-change="handleTextureSettingsChange"
-      />
-      
-      <!-- Character Generator -->
-      <CharacterGenerator
-        v-if="activeGenerator === 'character'"
-        @character-generated="handleCharacterGenerated"
-      />
+      <!-- Game Play Mode: Resources Display -->
+      <template v-else>
+        <ResourceDisplay :resources="resources" :usedResources="usedResources" :producedResources="producedResources" />
+      </template>
     </aside>
     
     <!-- Galéria dole (absolútne pozicionovaná) -->
@@ -840,6 +1061,59 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
         @update-building-data="handleUpdateBuildingData"
       />
     </div>
+    
+    <!-- Insufficient Resources Modal -->
+    <Modal 
+      v-if="showInsufficientResourcesModal" 
+      title="⚠️ Nedostatok resources"
+      @close="showInsufficientResourcesModal = false"
+    >
+      <div class="insufficient-resources-content">
+        <h3>🏗️ {{ insufficientResourcesData.buildingName }}</h3>
+        
+        <!-- Chýbajúce resources na stavbu -->
+        <div v-if="insufficientResourcesData.missingBuildResources.length > 0" class="missing-section">
+          <p class="warning-text">
+            🔨 Nemôžete postaviť túto budovu, pretože nemáte dostatok resources potrebných na stavbu:
+          </p>
+          <div class="missing-resources-list">
+            <div 
+              v-for="(resource, index) in insufficientResourcesData.missingBuildResources" 
+              :key="'build-' + index"
+              class="missing-resource-item build-cost"
+            >
+              <span class="resource-name">📦 {{ resource.name }}</span>
+              <span class="resource-amounts">
+                <span class="needed">✏️ Potrebné: {{ resource.needed }}</span>
+                <span class="available">✅ Dostupné: {{ resource.available }}</span>
+                <span class="deficit">❌ Chýba: {{ resource.needed - resource.available }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Chýbajúce resources na prevádzku -->
+        <div v-if="insufficientResourcesData.missingOperationalResources.length > 0" class="missing-section">
+          <p class="warning-text">
+            ⚙️ Nemôžete postaviť túto budovu, pretože nemáte dostatok resources potrebných na prevádzku:
+          </p>
+          <div class="missing-resources-list">
+            <div 
+              v-for="(resource, index) in insufficientResourcesData.missingOperationalResources" 
+              :key="'operational-' + index"
+              class="missing-resource-item operational-cost"
+            >
+              <span class="resource-name">📦 {{ resource.name }}</span>
+              <span class="resource-amounts">
+                <span class="needed">✏️ Potrebné: {{ resource.needed }}</span>
+                <span class="available">✅ Dostupné: {{ resource.available }}</span>
+                <span class="deficit">❌ Chýba: {{ resource.needed - resource.available }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -1001,5 +1275,82 @@ header h1 {
   background: #667eea;
   color: white;
   box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+/* Insufficient Resources Modal */
+.insufficient-resources-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.insufficient-resources-content h3 {
+  margin: 0;
+  color: #667eea;
+  font-size: 1.3rem;
+}
+
+.missing-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.warning-text {
+  margin: 0;
+  color: #d32f2f;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.missing-resources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.missing-resource-item {
+  padding: 1rem;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.missing-resource-item.build-cost {
+  background: #fff3e0;
+  border-left: 4px solid #ff9800;
+}
+
+.missing-resource-item.operational-cost {
+  background: #ffebee;
+  border-left: 4px solid #f44336;
+}
+
+.missing-resource-item .resource-name {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: #333;
+}
+
+.missing-resource-item .resource-amounts {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+.missing-resource-item .needed {
+  color: #1976d2;
+  font-weight: 600;
+}
+
+.missing-resource-item .available {
+  color: #4caf50;
+  font-weight: 600;
+}
+
+.missing-resource-item .deficit {
+  color: #d32f2f;
+  font-weight: 700;
 }
 </style>

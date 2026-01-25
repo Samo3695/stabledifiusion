@@ -48,6 +48,7 @@ const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno
 
 // Building data
 const isBuilding = ref(false)
+const buildingName = ref('') // Názov budovy
 const buildCost = ref([]) // [{resourceId, resourceName, amount}]
 const operationalCost = ref([]) // [{resourceId, resourceName, amount}]
 const production = ref([]) // [{resourceId, resourceName, amount}]
@@ -244,10 +245,11 @@ watch(spawnPersonsEnabled, () => emitPersonSettings(), { immediate: true })
 watch(personsPerPlacement, () => emitPersonSettings())
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, buildCost, operationalCost, production], () => {
+watch([isBuilding, buildingName, buildCost, operationalCost, production], () => {
   if (selectedImage.value) {
     const buildingData = {
       isBuilding: isBuilding.value,
+      buildingName: buildingName.value,
       buildCost: buildCost.value,
       operationalCost: operationalCost.value,
       production: production.value
@@ -371,11 +373,13 @@ const openModal = (image) => {
   // Načítaj building data ak existujú
   if (image.buildingData) {
     isBuilding.value = image.buildingData.isBuilding || false
+    buildingName.value = image.buildingData.buildingName || ''
     buildCost.value = image.buildingData.buildCost || []
     operationalCost.value = image.buildingData.operationalCost || []
     production.value = image.buildingData.production || []
   } else {
     isBuilding.value = false
+    buildingName.value = ''
     buildCost.value = []
     operationalCost.value = []
     production.value = []
@@ -385,6 +389,7 @@ const openModal = (image) => {
 const closeModal = () => {
   selectedImage.value = null
   isBuilding.value = false
+  buildingName.value = ''
   buildCost.value = []
   operationalCost.value = []
   production.value = []
@@ -685,6 +690,18 @@ const removeProductionResource = (index) => {
               </div>
 
               <div v-if="isBuilding" class="building-details">
+                <!-- Názov budovy -->
+                <div class="building-name-input">
+                  <label for="building-name">🏗️ Názov budovy:</label>
+                  <input 
+                    id="building-name"
+                    v-model="buildingName" 
+                    type="text" 
+                    placeholder="Napr. Dřevorubecká chatrná, Občiansky dom..."
+                    class="name-input"
+                  />
+                </div>
+
                 <!-- Need for build -->
                 <div class="building-subsection">
                   <h4>🔨 Potrebné na stavbu (Need for build)</h4>
@@ -1356,6 +1373,33 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+
+.building-name-input {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.building-name-input label {
+  font-weight: 600;
+  color: #667eea;
+  font-size: 0.95rem;
+}
+
+.name-input {
+  padding: 0.75rem;
+  border: 2px solid #d0d7de;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.name-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
 .building-subsection {

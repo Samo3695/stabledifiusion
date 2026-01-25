@@ -4,6 +4,10 @@ import Modal from './Modal.vue'
 import ResourceManager from './ResourceManager.vue'
 
 const props = defineProps({
+  mode: {
+    type: String,
+    default: 'editor'
+  },
   images: {
     type: Array,
     required: true
@@ -54,7 +58,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['load-project', 'update:showNumbering', 'update:showGallery', 'update:showGrid', 'update-resources'])
+const emit = defineEmits(['load-project', 'update:showNumbering', 'update:showGallery', 'update:showGrid', 'update-resources', 'mode-changed'])
 
 const fileInput = ref(null)
 const showResourceModal = ref(false)
@@ -339,6 +343,26 @@ const clearProject = () => {
 <template>
   <div class="project-manager">
     <div class="button-group">
+      <!-- Mode switcher -->
+      <div class="mode-switcher">
+        <button 
+          @click="$emit('mode-changed', 'editor')" 
+          :class="['mode-btn', { active: mode === 'editor' }]"
+          title="Editor režim - generovanie a úpravy"
+        >
+          🎨 Editor
+        </button>
+        <button 
+          @click="$emit('mode-changed', 'gameplay')" 
+          :class="['mode-btn', { active: mode === 'gameplay' }]"
+          title="Game Play režim - zobrazenie resources"
+        >
+          🎮 Game Play
+        </button>
+      </div>
+      
+      <div class="separator"></div>
+      
       <button @click="saveProject" class="btn btn-save" title="Uložiť projekt do JSON súboru">
         💾 Save
       </button>
@@ -429,6 +453,43 @@ const clearProject = () => {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+}
+
+.mode-switcher {
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.mode-btn {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.mode-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.mode-btn.active {
+  background: white;
+  color: #667eea;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.separator {
+  width: 1px;
+  height: 30px;
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .toggle-group {
