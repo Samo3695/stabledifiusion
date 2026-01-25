@@ -17,9 +17,9 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  workforce: {
-    type: Array,
-    default: () => []
+  roadSpriteUrl: {
+    type: String,
+    default: '/templates/roads/sprites/pastroad.png'
   }
 })
 
@@ -43,12 +43,20 @@ const roadTiles = ref([]) // Vyrezané road tiles zo sprite
 const roadTilesOriginal = ref([]) // Originálne road tiles bez opacity zmeny
 const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber tiles
 const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
-const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny sprite URL
 const spawnPersonsEnabled = ref(props.personSpawnEnabled) // Či pridať osoby pri kliknutí na road tile
 const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno umiestnenie road tile
-const isBuilding = ref(false) // Či je obrázok building
-const buildCost = ref([]) // Build cost - multiselect resources/workforce
-const production = ref([]) // Production - multiselect resources/workforce
+
+// Building data
+const isBuilding = ref(false)
+const buildCost = ref([]) // [{resourceId, resourceName, amount}]
+const operationalCost = ref([]) // [{resourceId, resourceName, amount}]
+const production = ref([]) // [{resourceId, resourceName, amount}]
+const selectedBuildResource = ref('')
+const selectedOperationalResource = ref('')
+const selectedProductionResource = ref('')
+const buildAmount = ref(1)
+const operationalAmount = ref(1)
+const productionAmount = ref(1)
 
 // Watch pre props - aktualizuj lokálne refs keď sa zmenia props (napr. po načítaní projektu)
 watch(() => props.personSpawnEnabled, (newVal) => {
@@ -62,12 +70,16 @@ watch(() => props.personSpawnCount, (newVal) => {
 })
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
-const loadRoadSprite = async () => {
-  const spritePath = roadSpriteUrl.value
+const loadRoadSprite = async (spriteUrl = null) => {
+  // Použi explicitný parameter ak je poskytnutý, inak použij prop
+  const spritePath = spriteUrl || props.roadSpriteUrl
+  console.log('🛣️ loadRoadSprite začína s cestou:', spritePath.substring(0, 50) + '...')
+  console.log('   Zdroj URL:', spriteUrl ? 'parameter' : 'props.roadSpriteUrl')
   const img = new Image()
   img.crossOrigin = 'anonymous'
   
   img.onload = async () => {
+    console.log('✅ Road sprite obrázok načítaný, veľkosť:', img.width, 'x', img.height)
     // ═══════════════════════════════════════════════════════════════════
     // MANUÁLNA DEFINÍCIA POZÍCIÍ ROAD TILES V SPRITE (presentroad.png)
     // 
@@ -151,13 +163,19 @@ const loadRoadSprite = async () => {
         url: canvas.toDataURL('image/png'),
         bitmap, // pripravené na rýchle kreslenie
         name: def.name,
-        index: i
+        tileIndex: i, // Index pre rekreáciu z metadata
+        x: def.x,
+        y: def.y,
+        width: def.width,
+        height: def.height,
+        rotation: def.rotation,
+        opacity: roadOpacity.value // Aktuálna opacity
       })
     }
     
     roadTiles.value = tiles
     roadTilesOriginal.value = JSON.parse(JSON.stringify(tiles)) // Ulož originály
-    console.log(`🛣️ Načítaných ${tiles.length} road tiles zo sprite (manuálne pozície)`)
+    console.log(`🛣️ Načítaných ${tiles.length} road tiles zo sprite s opacity ${roadOpacity.value}%`)
   }
   
   img.onerror = () => {
@@ -168,15 +186,31 @@ const loadRoadSprite = async () => {
 }
 
 // Funkcia na aktualizáciu sprite URL a reloadnutie tiles
+// POZNÁMKA: roadSpriteUrl je teraz prop, takže sa aktualizuje v parent komponente
 const updateRoadSprite = async (newSpriteUrl) => {
-  console.log('🔄 Aktualizujem road sprite na:', newSpriteUrl)
-  roadSpriteUrl.value = newSpriteUrl
-  await loadRoadSprite()
+  console.log('🔄 updateRoadSprite volaný s URL:', newSpriteUrl.substring(0, 50) + '...')
+  console.log('   Aktuálny props.roadSpriteUrl:', props.roadSpriteUrl.substring(0, 50) + '...')
+  // Použi explicitný parameter pre načítanie sprite (nie prop)
+  await loadRoadSprite(newSpriteUrl)
+  console.log('   loadRoadSprite dokončený s novým sprite')
 }
 
 // Načítaj sprite pri štarte
 onMounted(() => {
-  loadRoadSprite()
+  // Sprite sa načíta cez watch na props.roadSpriteUrl
+  // alebo cez updateRoadSprite() volanie z App.vue
+  console.log('🎬 ImageGallery mounted s roadSpriteUrl:', props.roadSpriteUrl.substring(0, 50) + '...')
+  if (props.roadSpriteUrl) {
+    loadRoadSprite(props.roadSpriteUrl)
+  }
+})
+
+// Watch na zmenu roadSpriteUrl prop - načítaj sprite pri zmene
+watch(() => props.roadSpriteUrl, (newUrl) => {
+  if (newUrl) {
+    console.log('🔄 props.roadSpriteUrl zmenené, načítavam sprite:', newUrl.substring(0, 50) + '...')
+    loadRoadSprite(newUrl)
+  }
 })
 
 // Watch pre zmenu tabu - aktivuj road building mode keď je roads tab
@@ -208,6 +242,25 @@ const emitPersonSettings = () => {
 
 watch(spawnPersonsEnabled, () => emitPersonSettings(), { immediate: true })
 watch(personsPerPlacement, () => emitPersonSettings())
+
+// Watch na building data - automaticky ukladaj pri každej zmene
+watch([isBuilding, buildCost, operationalCost, production], () => {
+  if (selectedImage.value) {
+    const buildingData = {
+      isBuilding: isBuilding.value,
+      buildCost: buildCost.value,
+      operationalCost: operationalCost.value,
+      production: production.value
+    }
+    
+    emit('update-building-data', {
+      imageId: selectedImage.value.id,
+      buildingData
+    })
+    
+    console.log('💾 Building data automaticky uložené:', buildingData)
+  }
+}, { deep: true })
 
 // Funkcia na regenerovanie road tiles s novou opacity
 const regenerateRoadTilesWithOpacity = async () => {
@@ -275,13 +328,19 @@ const getRoadTileByDirection = (direction) => {
   return roadTiles.value.find(t => t.name === tileName)
 }
 
+// Funkcia na získanie road tile podľa indexu (pre load z metadata)
+const getRoadTileByIndex = (tileIndex) => {
+  return roadTiles.value.find(t => t.tileIndex === tileIndex)
+}
+
 // Expose pre parent komponent
 defineExpose({
   getRoadTileByDirection,
+  getRoadTileByIndex,
   roadTiles,
   updateRoadSprite,
   activeGalleryTab,
-  roadSpriteUrl
+  roadOpacity // Expose roadOpacity pre načítanie z projektu
 })
 
 const copyToClipboard = async (text, label = 'text') => {
@@ -308,34 +367,30 @@ watch(selectedGridSize, (newSize) => {
 
 const openModal = (image) => {
   selectedImage.value = image
-  // Načítaj building data z image objektu
-  isBuilding.value = image.isBuilding || false
-  buildCost.value = image.buildCost || []
-  production.value = image.production || []
+  
+  // Načítaj building data ak existujú
+  if (image.buildingData) {
+    isBuilding.value = image.buildingData.isBuilding || false
+    buildCost.value = image.buildingData.buildCost || []
+    operationalCost.value = image.buildingData.operationalCost || []
+    production.value = image.buildingData.production || []
+  } else {
+    isBuilding.value = false
+    buildCost.value = []
+    operationalCost.value = []
+    production.value = []
+  }
 }
 
 const closeModal = () => {
   selectedImage.value = null
   isBuilding.value = false
   buildCost.value = []
+  operationalCost.value = []
   production.value = []
-}
-
-const saveBuildingData = () => {
-  if (!selectedImage.value) return
-  
-  const buildingData = {
-    isBuilding: isBuilding.value,
-    buildCost: buildCost.value,
-    production: production.value
-  }
-  
-  emit('update-building-data', {
-    imageId: selectedImage.value.id,
-    buildingData
-  })
-  
-  console.log('💾 Building data uložené:', buildingData)
+  selectedBuildResource.value = ''
+  selectedOperationalResource.value = ''
+  selectedProductionResource.value = ''
 }
 
 const downloadImage = (image) => {
@@ -375,6 +430,61 @@ const placeOnBoard = () => {
 
 const formatDate = (date) => {
   return new Date(date).toLocaleString('sk-SK')
+}
+
+// Building management functions
+const addBuildResource = () => {
+  if (!selectedBuildResource.value) return
+  const resource = props.resources.find(r => r.id === selectedBuildResource.value)
+  if (!resource) return
+  
+  buildCost.value.push({
+    resourceId: resource.id,
+    resourceName: resource.name,
+    amount: buildAmount.value
+  })
+  selectedBuildResource.value = ''
+  buildAmount.value = 1
+}
+
+const removeBuildResource = (index) => {
+  buildCost.value.splice(index, 1)
+}
+
+const addOperationalResource = () => {
+  if (!selectedOperationalResource.value) return
+  const resource = props.resources.find(r => r.id === selectedOperationalResource.value)
+  if (!resource) return
+  
+  operationalCost.value.push({
+    resourceId: resource.id,
+    resourceName: resource.name,
+    amount: operationalAmount.value
+  })
+  selectedOperationalResource.value = ''
+  operationalAmount.value = 1
+}
+
+const removeOperationalResource = (index) => {
+  operationalCost.value.splice(index, 1)
+}
+
+const addProductionResource = () => {
+  if (!selectedProductionResource.value) return
+  const resource = props.resources.find(r => r.id === selectedProductionResource.value)
+  if (!resource) return
+  
+  production.value.push({
+    resourceId: resource.id,
+    resourceName: resource.name,
+    amount: productionAmount.value
+  })
+  selectedProductionResource.value = ''
+  productionAmount.value = 1
+}
+
+const removeProductionResource = (index) => {
+  production.value.splice(index, 1)
 }
 </script>
 
@@ -569,93 +679,99 @@ const formatDate = (date) => {
             <div class="info-section building-section">
               <div class="building-header">
                 <label class="building-checkbox">
-                  <input 
-                    type="checkbox" 
-                    v-model="isBuilding"
-                    @change="saveBuildingData"
-                  />
-                  <span>🏗️ Building</span>
+                  <input type="checkbox" v-model="isBuilding" />
+                  <span>Je to budova?</span>
                 </label>
               </div>
-              
+
               <div v-if="isBuilding" class="building-details">
-                <!-- Build Cost Section -->
+                <!-- Need for build -->
                 <div class="building-subsection">
-                  <h4>💰 Build Cost</h4>
-                  <div class="multiselect-group">
-                    <label>Resources:</label>
-                    <select 
-                      multiple 
-                      v-model="buildCost"
-                      @change="saveBuildingData"
-                      class="multiselect"
-                    >
-                      <option 
-                        v-for="resource in resources" 
-                        :key="resource.id" 
-                        :value="resource.id"
-                      >
-                        {{ resource.name }} ({{ resource.amount }})
+                  <h4>🔨 Potrebné na stavbu (Need for build)</h4>
+                  <div class="resource-input-group">
+                    <select v-model="selectedBuildResource" class="resource-select">
+                      <option value="">Vyberte resource...</option>
+                      <option v-for="resource in resources" :key="resource.id" :value="resource.id">
+                        {{ resource.name }}
                       </option>
                     </select>
+                    <input 
+                      v-model.number="buildAmount" 
+                      type="number" 
+                      min="1" 
+                      placeholder="Počet"
+                      class="amount-input"
+                    />
+                    <button @click="addBuildResource" class="btn-add-resource" type="button">
+                      ➕
+                    </button>
                   </div>
-                  
-                  <div class="multiselect-group">
-                    <label>Workforce:</label>
-                    <select 
-                      multiple 
-                      v-model="buildCost"
-                      @change="saveBuildingData"
-                      class="multiselect"
-                    >
-                      <option 
-                        v-for="worker in workforce" 
-                        :key="worker.id" 
-                        :value="worker.id"
-                      >
-                        {{ worker.name }} ({{ worker.count }})
-                      </option>
-                    </select>
+                  <div v-if="buildCost.length > 0" class="resource-list">
+                    <div v-for="(item, index) in buildCost" :key="index" class="resource-item">
+                      <span class="resource-name">{{ item.resourceName }}</span>
+                      <span class="resource-amount">× {{ item.amount }}</span>
+                      <button @click="removeBuildResource(index)" class="btn-remove" type="button">✕</button>
+                    </div>
                   </div>
                 </div>
-                
-                <!-- Production Section -->
+
+                <!-- Need for operational -->
                 <div class="building-subsection">
-                  <h4>📦 Production</h4>
-                  <div class="multiselect-group">
-                    <label>Resources:</label>
-                    <select 
-                      multiple 
-                      v-model="production"
-                      @change="saveBuildingData"
-                      class="multiselect"
-                    >
-                      <option 
-                        v-for="resource in resources" 
-                        :key="resource.id" 
-                        :value="resource.id"
-                      >
-                        {{ resource.name }} ({{ resource.amount }})
+                  <h4>⚙️ Potrebné na prevádzku (Need for operational)</h4>
+                  <div class="resource-input-group">
+                    <select v-model="selectedOperationalResource" class="resource-select">
+                      <option value="">Vyberte resource...</option>
+                      <option v-for="resource in resources" :key="resource.id" :value="resource.id">
+                        {{ resource.name }}
                       </option>
                     </select>
+                    <input 
+                      v-model.number="operationalAmount" 
+                      type="number" 
+                      min="1" 
+                      placeholder="Počet"
+                      class="amount-input"
+                    />
+                    <button @click="addOperationalResource" class="btn-add-resource" type="button">
+                      ➕
+                    </button>
                   </div>
-                  
-                  <div class="multiselect-group">
-                    <label>Workforce:</label>
-                    <select 
-                      multiple 
-                      v-model="production"
-                      @change="saveBuildingData"
-                      class="multiselect"
-                    >
-                      <option 
-                        v-for="worker in workforce" 
-                        :key="worker.id" 
-                        :value="worker.id"
-                      >
-                        {{ worker.name }} ({{ worker.count }})
+                  <div v-if="operationalCost.length > 0" class="resource-list">
+                    <div v-for="(item, index) in operationalCost" :key="index" class="resource-item">
+                      <span class="resource-name">{{ item.resourceName }}</span>
+                      <span class="resource-amount">× {{ item.amount }}</span>
+                      <button @click="removeOperationalResource(index)" class="btn-remove" type="button">✕</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Produce -->
+                <div class="building-subsection">
+                  <h4>📦 Produkuje (Produce)</h4>
+                  <div class="resource-input-group">
+                    <select v-model="selectedProductionResource" class="resource-select">
+                      <option value="">Vyberte resource...</option>
+                      <option v-for="resource in resources" :key="resource.id" :value="resource.id">
+                        {{ resource.name }}
                       </option>
                     </select>
+                    <input 
+                      v-model.number="productionAmount" 
+                      type="number" 
+                      min="1" 
+                      placeholder="Počet"
+                      class="amount-input"
+                    />
+                    <button @click="addProductionResource" class="btn-add-resource" type="button">
+                      ➕
+                    </button>
+                  </div>
+                  <div v-if="production.length > 0" class="resource-list">
+                    <div v-for="(item, index) in production" :key="index" class="resource-item">
+                      <span class="resource-name">{{ item.resourceName }}</span>
+                      <span class="resource-amount">× {{ item.amount }}</span>
+                      <button @click="removeProductionResource(index)" class="btn-remove" type="button">✕</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1209,11 +1325,12 @@ h2 {
   font-size: 0.8rem;
 }
 
-/* Building section styles */
+/* Building section */
 .building-section {
-  border-top: 2px solid #e0e0e0;
-  padding-top: 1.5rem !important;
-  margin-top: 1.5rem !important;
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
 }
 
 .building-header {
@@ -1223,89 +1340,116 @@ h2 {
 .building-checkbox {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  cursor: pointer;
+  gap: 0.5rem;
   font-weight: 600;
+  cursor: pointer;
   font-size: 1.1rem;
-  color: #333;
-  padding: 0.75rem;
-  background: #f8f9fa;
-  border-radius: 8px;
-  transition: background 0.2s;
-}
-
-.building-checkbox:hover {
-  background: #e9ecef;
 }
 
 .building-checkbox input[type="checkbox"] {
   width: 20px;
   height: 20px;
   cursor: pointer;
-  accent-color: #667eea;
 }
 
 .building-details {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
-  padding: 1rem;
-  background: #f8f9fa;
-  border-radius: 8px;
-  margin-top: 1rem;
 }
 
 .building-subsection {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  padding: 1rem;
   background: white;
   border-radius: 8px;
-  border: 2px solid #e0e0e0;
+  padding: 1rem;
+  border: 1px solid #e0e0e0;
 }
 
 .building-subsection h4 {
-  margin: 0;
+  margin: 0 0 1rem 0;
   color: #667eea;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 0.95rem;
 }
 
-.multiselect-group {
+.resource-input-group {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.resource-select {
+  flex: 2;
+  padding: 0.5rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: white;
+}
+
+.amount-input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  max-width: 100px;
+}
+
+.btn-add-resource {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-add-resource:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.resource-list {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.multiselect-group label {
+.resource-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.resource-name {
+  flex: 1;
+  font-weight: 500;
+  color: #333;
+}
+
+.resource-amount {
+  color: #667eea;
   font-weight: 600;
-  color: #555;
-  font-size: 0.9rem;
 }
 
-.multiselect {
-  min-height: 100px;
-  padding: 0.5rem;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  transition: border-color 0.2s;
-  background: white;
-}
-
-.multiselect:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
-.multiselect option {
-  padding: 0.5rem;
+.btn-remove {
+  padding: 0.25rem 0.5rem;
+  border: none;
+  border-radius: 4px;
+  background: #fee;
+  color: #c33;
   cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
 }
 
-.multiselect option:checked {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+.btn-remove:hover {
+  background: #fdd;
 }
 </style>

@@ -47,6 +47,10 @@ const props = defineProps({
   roadSpriteUrl: {
     type: String,
     default: '/templates/roads/sprites/pastroad.png'
+  },
+  roadOpacity: {
+    type: Number,
+    default: 100
   }
 })
 
@@ -92,6 +96,23 @@ const saveProject = () => {
         }
         
         const [row, col] = key.split('-').map(Number)
+        
+        // Pre road tiles ukladáme len metadata, nie celý obrázok (optimalizácia)
+        if (imageData.isRoadTile && imageData.tileMetadata) {
+          placedImages[key] = {
+            row,
+            col,
+            cellsX: imageData.cellsX || 1,
+            cellsY: imageData.cellsY || 1,
+            isBackground: false,
+            isRoadTile: true,
+            templateName: imageData.templateName || '',
+            tileMetadata: imageData.tileMetadata // Len metadata - sprite sa rekreuje z roadSpriteUrl
+          }
+          return
+        }
+        
+        // Pre non-road obrázky pokračuj s deduplikáciou
         const url = imageData.url
         
         // Skontroluj či tento obrázok už máme
@@ -111,8 +132,8 @@ const saveProject = () => {
           imageId,  // referencia namiesto url
           cellsX: imageData.cellsX || 1,
           cellsY: imageData.cellsY || 1,
-          isBackground: false,  // Tieto nie sú background
-          isRoadTile: imageData.isRoadTile || false,
+          isBackground: false,
+          isRoadTile: false,
           templateName: imageData.templateName || '',
           tileMetadata: imageData.tileMetadata || null
         }
@@ -127,7 +148,7 @@ const saveProject = () => {
 
     // Priprav dáta pre export
     const projectData = {
-      version: '1.7',  // Nová verzia s resources a workforce
+      version: '1.8',  // Nová verzia s optimalizovaným roads (len sprite + metadata)
       timestamp: new Date().toISOString(),
       imageCount: props.images.length,
       placedImageCount: Object.keys(placedImages).length,
@@ -140,7 +161,8 @@ const saveProject = () => {
         cellsX: img.cellsX || 1,
         cellsY: img.cellsY || 1,
         view: img.view || '',
-        timestamp: img.timestamp || new Date().toISOString()
+        timestamp: img.timestamp || new Date().toISOString(),
+        buildingData: img.buildingData || null
       })),
       imageLibrary,  // Unikátne obrázky pre placedImages
       placedImages,
@@ -152,8 +174,16 @@ const saveProject = () => {
       },
       resources: props.resources || [],
       workforce: props.workforce || [],
-      roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png'
+      roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
+      roadOpacity: props.roadOpacity || 100
     }
+
+    // DEBUG logging pre road sprite a opacity
+    console.log('🔍 DEBUG saveProject:')
+    console.log('   props.roadSpriteUrl:', props.roadSpriteUrl?.substring(0, 50) + '...')
+    console.log('   props.roadOpacity:', props.roadOpacity)
+    console.log('   projectData.roadSpriteUrl:', projectData.roadSpriteUrl?.substring(0, 50) + '...')
+    console.log('   projectData.roadOpacity:', projectData.roadOpacity)
 
     // Konvertuj na JSON string
     const jsonString = JSON.stringify(projectData, null, 2)
@@ -170,11 +200,18 @@ const saveProject = () => {
     URL.revokeObjectURL(url)
 
     console.log('✅ Projekt uložený:', projectData.imageCount, 'obrázkov v galérii,', projectData.placedImageCount, 'umiestnených na šachovnici')
-    console.log('   📦 Unikátnych obrázkov:', imageLibrary.length, '(deduplikované z', Object.keys(placedImages).length, ')')
+    
+    // Počítaj road tiles a non-road obrázky
+    const roadTileCount = Object.values(placedImages).filter(img => img.isRoadTile).length
+    const nonRoadCount = Object.values(placedImages).filter(img => !img.isRoadTile && !img.isBackground).length
+    
+    console.log('   📦 Unikátnych obrázkov:', imageLibrary.length, '(deduplikované z', nonRoadCount, 'non-road obrázkov)')
+    
     const roadSpriteInfo = props.roadSpriteUrl.startsWith('data:') 
       ? `data URL (${Math.round(props.roadSpriteUrl.length / 1024)}KB)` 
       : props.roadSpriteUrl
-    console.log('   🛣️ Road sprite URL:', roadSpriteInfo)
+    console.log(`   🛣️ Road sprite: ${roadSpriteInfo}, opacity: ${props.roadOpacity}%`)
+    console.log(`   🛣️ Road tiles: ${roadTileCount} (uložené ako metadata, nie celé obrázky - OPTIMALIZOVANÉ!)`)
   } catch (error) {
     console.error('❌ Chyba pri ukladaní projektu:', error)
     alert('Chyba pri ukladaní projektu: ' + error.message)
@@ -201,9 +238,17 @@ const handleFileUpload = async (event) => {
 
     console.log('📂 Načítavam projekt:', projectData.imageCount, 'obrázkov v galérii')
     console.log('   Verzia:', projectData.version)
+    if (projectData.version >= '1.8') {
+      console.log('   🛣️ Optimalizované roads (sprite + metadata)')
+    }
     console.log('   Dátum vytvorenia:', projectData.timestamp)
     if (projectData.placedImages) {
-      console.log('   Umiestnené obrázky na šachovnici:', Object.keys(projectData.placedImages).length)
+      const totalPlaced = Object.keys(projectData.placedImages).length
+      const roadTileCount = Object.values(projectData.placedImages).filter(img => img.isRoadTile).length
+      console.log('   Umiestnené obrázky na šachovnici:', totalPlaced)
+      if (roadTileCount > 0) {
+        console.log(`   🛣️ Road tiles: ${roadTileCount} (metadata - rekreujú sa z sprite)`)
+      }
     }
     
     // Spracuj placedImages - zrekonštruuj URL z imageLibrary (verzia 1.4+)
@@ -221,16 +266,32 @@ const handleFileUpload = async (event) => {
       // Zrekonštruuj plné URL pre každý placedImage + všetky metadáta
       processedPlacedImages = {}
       Object.entries(projectData.placedImages).forEach(([key, data]) => {
-        processedPlacedImages[key] = {
-          row: data.row,
-          col: data.col,
-          url: imageMap.get(data.imageId) || data.url,  // fallback na url ak existuje
-          cellsX: data.cellsX || 1,
-          cellsY: data.cellsY || 1,
-          isBackground: data.isBackground || false,
-          isRoadTile: data.isRoadTile || false,
-          templateName: data.templateName || '',
-          tileMetadata: data.tileMetadata || null
+        // Pre road tiles (verzia 1.8+) - URL sa rekreuje z sprite, nepoužívame imageId
+        if (data.isRoadTile && data.tileMetadata) {
+          processedPlacedImages[key] = {
+            row: data.row,
+            col: data.col,
+            url: null, // Bude rekreované z roadSpriteUrl + tileMetadata
+            cellsX: data.cellsX || 1,
+            cellsY: data.cellsY || 1,
+            isBackground: false,
+            isRoadTile: true,
+            templateName: data.templateName || '',
+            tileMetadata: data.tileMetadata
+          }
+        } else {
+          // Non-road obrázky - rekonštruuj URL z imageLibrary
+          processedPlacedImages[key] = {
+            row: data.row,
+            col: data.col,
+            url: imageMap.get(data.imageId) || data.url,  // fallback na url ak existuje
+            cellsX: data.cellsX || 1,
+            cellsY: data.cellsY || 1,
+            isBackground: data.isBackground || false,
+            isRoadTile: data.isRoadTile || false,
+            templateName: data.templateName || '',
+            tileMetadata: data.tileMetadata || null
+          }
         }
       })
     }
@@ -244,7 +305,8 @@ const handleFileUpload = async (event) => {
       textureSettings: projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null },
       resources: projectData.resources || [],
       workforce: projectData.workforce || [],
-      roadSpriteUrl: projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png'
+      roadSpriteUrl: projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
+      roadOpacity: projectData.roadOpacity || 100
     })
 
     // Resetuj file input

@@ -1270,9 +1270,10 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackgro
     isBackground,
     templateName,
     isRoadTile,
-    // Ulož aj metaúdaje road tile-u
+    // Ulož aj metaúdaje road tile-u (optimalizácia - pri load sa rekreuje z sprite)
     tileMetadata: imageData && typeof imageData === 'object' ? {
       name: imageData.name,
+      tileIndex: imageData.tileIndex, // Pridaný tileIndex pre rekre\u00e1ciu
       x: imageData.x,
       y: imageData.y,
       width: imageData.width,
@@ -1412,16 +1413,11 @@ defineExpose({
       // Teraz prekresli tiene RAZ
       console.log('🌓 Prekreslenie všetkých tieňov...')
       mainScene.redrawAllShadows()
-      // Vytvor osoby ak sú road tiles
+      // Aktualizuj road tiles pre worker, ale NEVYTVÁRAJ osoby automaticky!
+      // (Osoby sa vytvárajú iba keď užívateľ pridáva road tiles v editore)
       if (mainScene.personManager) {
         mainScene.personManager.updateWorkerRoadTiles()
-        if (mainScene.personManager.getPersonCount() === 0) {
-          const hasRoadTiles = Object.values(cellImages).some(img => img.isRoadTile)
-          if (hasRoadTiles) {
-            console.log('🚶 Vytváram osoby...')
-            mainScene.createPerson()
-          }
-        }
+        console.log('🚶 Worker road tiles aktualizovaný (osoby sa nevytvárajú pri načítaní projektu)')
       }
     }
     console.log('📦 Batch loading DOKONČENÝ')
@@ -1433,7 +1429,7 @@ defineExpose({
     })
     // NEPREPISUJ cellImages = {} lebo PersonManager má referenciu na tento objekt!
   },
-  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false, bitmap = null, tileName = '') => {
+  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false, bitmap = null, tileName = '', tileMetadata = null) => {
     const key = `${row}-${col}`
     // Najprv vymaž existujúci obrázok ak tam je
     if (cellImages[key]) {
@@ -1448,7 +1444,7 @@ defineExpose({
       isRoadTile,
       bitmap,
       templateName: tileName,
-      tileMetadata: isRoadTile && tileName ? { name: tileName } : null
+      tileMetadata: tileMetadata || (isRoadTile && tileName ? { name: tileName } : null)
     }
     // Počas batch loadingu preskočíme tiene (vykonajú sa na konci)
     mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap, isBatchLoading)

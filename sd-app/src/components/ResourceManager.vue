@@ -5,21 +5,14 @@ const props = defineProps({
   initialResources: {
     type: Array,
     default: () => []
-  },
-  initialWorkforce: {
-    type: Array,
-    default: () => []
   }
 })
 
 const emit = defineEmits(['update'])
 
 const resources = ref([...props.initialResources])
-const workforce = ref([...props.initialWorkforce])
 const newResourceName = ref('')
-const newWorkforceName = ref('')
 const editingResourceId = ref(null)
-const editingWorkforceId = ref(null)
 
 const addResource = () => {
   if (!newResourceName.value.trim()) return
@@ -27,25 +20,12 @@ const addResource = () => {
   const newResource = {
     id: Date.now().toString(),
     name: newResourceName.value.trim(),
-    amount: 0
+    amount: 0,
+    icon: null // Base64 ikonka
   }
   
   resources.value.push(newResource)
   newResourceName.value = ''
-  emitUpdate()
-}
-
-const addWorkforce = () => {
-  if (!newWorkforceName.value.trim()) return
-  
-  const newWorker = {
-    id: Date.now().toString(),
-    name: newWorkforceName.value.trim(),
-    count: 0
-  }
-  
-  workforce.value.push(newWorker)
-  newWorkforceName.value = ''
   emitUpdate()
 }
 
@@ -54,17 +34,8 @@ const deleteResource = (id) => {
   emitUpdate()
 }
 
-const deleteWorkforce = (id) => {
-  workforce.value = workforce.value.filter(w => w.id !== id)
-  emitUpdate()
-}
-
 const startEditResource = (id) => {
   editingResourceId.value = id
-}
-
-const startEditWorkforce = (id) => {
-  editingWorkforceId.value = id
 }
 
 const finishEditResource = () => {
@@ -72,15 +43,9 @@ const finishEditResource = () => {
   emitUpdate()
 }
 
-const finishEditWorkforce = () => {
-  editingWorkforceId.value = null
-  emitUpdate()
-}
-
 const emitUpdate = () => {
   emit('update', {
-    resources: resources.value,
-    workforce: workforce.value
+    resources: resources.value
   })
 }
 
@@ -92,10 +57,37 @@ const updateResourceAmount = (id, amount) => {
   }
 }
 
-const updateWorkforceCount = (id, count) => {
-  const worker = workforce.value.find(w => w.id === id)
-  if (worker) {
-    worker.count = Number(count) || 0
+const handleIconUpload = async (id, event) => {
+  const file = event.target.files?.[0]
+  if (!file) return
+  
+  // Skontroluj či je to obrázok
+  if (!file.type.startsWith('image/')) {
+    alert('Prosím nahrajte obrázok (PNG, JPG, atď.)')
+    return
+  }
+  
+  // Limit 500KB
+  if (file.size > 500000) {
+    alert('Obrázok je príliš veľký. Maximum je 500KB.')
+    return
+  }
+  
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const resource = resources.value.find(r => r.id === id)
+    if (resource) {
+      resource.icon = e.target.result // Base64 string
+      emitUpdate()
+    }
+  }
+  reader.readAsDataURL(file)
+}
+
+const removeIcon = (id) => {
+  const resource = resources.value.find(r => r.id === id)
+  if (resource) {
+    resource.icon = null
     emitUpdate()
   }
 }
@@ -103,15 +95,13 @@ const updateWorkforceCount = (id, count) => {
 
 <template>
   <div class="resource-manager">
-    <div class="manager-grid">
-      <!-- Resources Section -->
-      <div class="section">
-        <div class="section-header">
-          <h3>📦 Resources</h3>
-          <span class="count">{{ resources.length }}</span>
-        </div>
-        
-        <div class="add-item">
+    <div class="section">
+      <div class="section-header">
+        <h3>📦 Resources</h3>
+        <span class="count">{{ resources.length }}</span>
+      </div>
+      
+      <div class="add-item">
           <input
             v-model="newResourceName"
             type="text"
@@ -122,119 +112,75 @@ const updateWorkforceCount = (id, count) => {
           <button @click="addResource" class="btn-add">
             ➕ Pridať
           </button>
-        </div>
-        
-        <div class="items-list">
-          <div v-if="resources.length === 0" class="empty-state">
-            <p>Zatiaľ žiadne resources</p>
-          </div>
-          
-          <div 
-            v-for="resource in resources" 
-            :key="resource.id" 
-            class="item"
-          >
-            <div class="item-content">
-              <input
-                v-if="editingResourceId === resource.id"
-                v-model="resource.name"
-                @blur="finishEditResource"
-                @keyup.enter="finishEditResource"
-                class="edit-input"
-                autofocus
-              />
-              <span 
-                v-else 
-                class="item-name"
-                @dblclick="startEditResource(resource.id)"
-              >
-                {{ resource.name }}
-              </span>
-              
-              <div class="item-controls">
-                <input
-                  type="number"
-                  :value="resource.amount"
-                  @input="updateResourceAmount(resource.id, $event.target.value)"
-                  class="amount-input"
-                  min="0"
-                />
-                <button 
-                  @click="deleteResource(resource.id)" 
-                  class="btn-delete"
-                  title="Vymazať"
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
       
-      <!-- Workforce Section -->
-      <div class="section">
-        <div class="section-header">
-          <h3>👷 Workforce</h3>
-          <span class="count">{{ workforce.length }}</span>
+      <div class="items-list">
+        <div v-if="resources.length === 0" class="empty-state">
+          <p>Zatiaľ žiadne resources</p>
         </div>
         
-        <div class="add-item">
-          <input
-            v-model="newWorkforceName"
-            type="text"
-            placeholder="Názov workforce..."
-            @keyup.enter="addWorkforce"
-            maxlength="50"
-          />
-          <button @click="addWorkforce" class="btn-add">
-            ➕ Pridať
-          </button>
-        </div>
-        
-        <div class="items-list">
-          <div v-if="workforce.length === 0" class="empty-state">
-            <p>Zatiaľ žiadna workforce</p>
-          </div>
-          
-          <div 
-            v-for="worker in workforce" 
-            :key="worker.id" 
-            class="item"
-          >
-            <div class="item-content">
-              <input
-                v-if="editingWorkforceId === worker.id"
-                v-model="worker.name"
-                @blur="finishEditWorkforce"
-                @keyup.enter="finishEditWorkforce"
-                class="edit-input"
-                autofocus
-              />
-              <span 
-                v-else 
-                class="item-name"
-                @dblclick="startEditWorkforce(worker.id)"
-              >
-                {{ worker.name }}
-              </span>
-              
-              <div class="item-controls">
-                <input
-                  type="number"
-                  :value="worker.count"
-                  @input="updateWorkforceCount(worker.id, $event.target.value)"
-                  class="amount-input"
-                  min="0"
-                />
+        <div 
+          v-for="resource in resources" 
+          :key="resource.id" 
+          class="item"
+        >
+          <div class="item-content">
+            <!-- Ikonka -->
+            <div class="icon-wrapper">
+              <div v-if="resource.icon" class="icon-preview">
+                <img :src="resource.icon" :alt="resource.name" />
                 <button 
-                  @click="deleteWorkforce(worker.id)" 
-                  class="btn-delete"
-                  title="Vymazať"
+                  @click="removeIcon(resource.id)"
+                  class="btn-remove-icon"
+                  title="Odstrániť ikonku"
                 >
-                  🗑️
+                  ✕
                 </button>
               </div>
+              <label v-else class="icon-upload" :for="'icon-' + resource.id">
+                <span>📷</span>
+                <input
+                  :id="'icon-' + resource.id"
+                  type="file"
+                  accept="image/*"
+                  @change="handleIconUpload(resource.id, $event)"
+                  class="icon-input"
+                />
+              </label>
+            </div>
+            
+            <!-- Názov -->
+            <input
+              v-if="editingResourceId === resource.id"
+              v-model="resource.name"
+              @blur="finishEditResource"
+              @keyup.enter="finishEditResource"
+              class="edit-input"
+              autofocus
+            />
+            <span 
+              v-else 
+              class="item-name"
+              @dblclick="startEditResource(resource.id)"
+            >
+              {{ resource.name }}
+            </span>
+            
+            <div class="item-controls">
+              <input
+                type="number"
+                :value="resource.amount"
+                @input="updateResourceAmount(resource.id, $event.target.value)"
+                class="amount-input"
+                min="0"
+              />
+              <button 
+                @click="deleteResource(resource.id)" 
+                class="btn-delete"
+                title="Vymazať"
+              >
+                🗑️
+              </button>
             </div>
           </div>
         </div>
@@ -246,12 +192,6 @@ const updateWorkforceCount = (id, count) => {
 <style scoped>
 .resource-manager {
   width: 100%;
-}
-
-.manager-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2rem;
 }
 
 .section {
@@ -357,6 +297,87 @@ const updateWorkforceCount = (id, count) => {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.icon-wrapper {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.icon-preview {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid #e0e0e0;
+}
+
+.icon-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.btn-remove-icon {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.icon-preview:hover .btn-remove-icon {
+  opacity: 1;
+}
+
+.btn-remove-icon:hover {
+  background: rgba(255, 0, 0, 0.8);
+}
+
+.icon-upload {
+  width: 100%;
+  height: 100%;
+  border: 2px dashed #d0d0d0;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fafafa;
+}
+
+.icon-upload:hover {
+  border-color: #667eea;
+  background: rgba(102, 126, 234, 0.05);
+}
+
+.icon-upload span {
+  font-size: 1.5rem;
+  opacity: 0.5;
+}
+
+.icon-upload:hover span {
+  opacity: 0.8;
+}
+
+.icon-input {
+  display: none;
 }
 
 .item-name {

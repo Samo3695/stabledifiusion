@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import BuildingGenerator from './components/BuildingGenerator.vue'
 import EnvironmentGenerator from './components/EnvironmentGenerator.vue'
 import CharacterGenerator from './components/CharacterGenerator.vue'
@@ -18,7 +18,7 @@ const selectedCell = ref({ row: -1, col: -1 })
 const canvasRef = ref(null)
 const imageGeneratorRef = ref(null)
 const showNumbering = ref(false)
-const showGallery = ref(false)
+const showGallery = ref(true)
 const showGrid = ref(true)
 const activeGenerator = ref('building') // 'building', 'environment' alebo 'character'
 const deleteMode = ref(false) // Režim mazania buildingov
@@ -35,6 +35,7 @@ const personSpawnCount = ref(0)
 const resources = ref([]) // Resources list
 const workforce = ref([]) // Workforce list
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny road sprite URL
+const roadOpacity = ref(100) // Aktuálna opacity pre road tiles
 
 const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
   console.log('📥 App.vue: Prijatý image-generated event')
@@ -54,9 +55,29 @@ const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
     console.log('   Sprite typ:', spriteInfo)
     roadSpriteUrl.value = image.url // Ulož pre uloženie do projektu
     console.log('   roadSpriteUrl.value uložené (dĺžka):', image.url.length, 'znakov')
+    
+    // Počkaj na Vue reactivity aby sa prop aktualizoval
+    await nextTick()
+    
     if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
       await imageGalleryRef.value.updateRoadSprite(image.url)
       console.log('✅ Road sprite úspešne aktualizovaný v ImageGallery')
+      
+      // Počkaj kým sa nové tiles načítajú a propagujú cez road-tiles-ready event
+      await new Promise(resolve => setTimeout(resolve, 400))
+      
+      // Pregeneruj všetky existujúce road tiles na canvase s novým sprite
+      // Použi tiles priamo z ImageGallery ref aby sme mali garantovane nové tiles
+      if (canvasRef.value && imageGalleryRef.value.roadTiles?.value?.length > 0) {
+        const newTiles = imageGalleryRef.value.roadTiles.value
+        console.log('🔄 Regenerujem existujúce road tiles na canvas s novým sprite...', newTiles.length, 'tiles')
+        regenerateRoadTilesOnCanvas(canvasRef.value, newTiles)
+        console.log('✅ Road tiles na canvas pregenerované s novým sprite')
+        
+        // Aktualizuj aj App.vue roadTiles (pre nové kreslenie)
+        roadTiles.value = newTiles
+        console.log('✅ App.vue roadTiles aktualizované pre nové kreslenie')
+      }
     } else {
       console.warn('⚠️ ImageGallery ref alebo updateRoadSprite funkcia nie je dostupná')
     }
@@ -144,8 +165,10 @@ watch(roadTiles, (newTiles, oldTiles) => {
 }, { deep: true })
 
 const handleRoadOpacityChanged = (newOpacity) => {
-  // Tento handler už nie je potrebný, watch na roadTiles to zvládne
+  roadOpacity.value = newOpacity // Ulož do state pre uloženie projektu
   console.log(`🎨 App.vue: Road opacity event prijatý: ${newOpacity}%`)
+  
+
 }
 
 const handleTextureSettingsChange = (settings) => {
@@ -164,8 +187,41 @@ const handlePlaceOnBoard = (image) => {
     // Ak je vybraté políčko, vlož obrázok tam
     const cellsX = image.cellsX || lastImageCellsX.value
     const cellsY = image.cellsY || lastImageCellsY.value
+    const isRoadTile = image.id?.startsWith('road_tile_')
+    
+    // Pre road tiles vytvor tileMetadata
+    const tileMetadata = isRoadTile ? {
+      name: image.name,
+      tileIndex: image.tileIndex,
+      x: image.x,
+      y: image.y,
+      width: image.width,
+      height: image.height,
+      rotation: image.rotation
+    } : null
+    
     console.log('🎯 Vkladám obrázok na políčko:', selectedCell.value, `s veľkosťou ${cellsX}x${cellsY}`)
-    canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image)
+    if (isRoadTile) {
+      console.log('   🛣️ Road tile metadata:', tileMetadata)
+    }
+    
+    // Použij placeImageAtCell pre road tiles aby sme posielali všetky parametre
+    if (isRoadTile && canvasRef.value.placeImageAtCell) {
+      canvasRef.value.placeImageAtCell(
+        selectedCell.value.row,
+        selectedCell.value.col,
+        image.url,
+        cellsX,
+        cellsY,
+        false, // isBackground
+        true, // isRoadTile
+        image.bitmap || null,
+        image.name || '',
+        tileMetadata
+      )
+    } else {
+      canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image)
+    }
   } else if (canvasRef.value) {
     // Inak vlož obrázok na prvé voľné políčko
     console.log('🎯 Vkladám obrázok na prvé voľné políčko')
@@ -238,14 +294,39 @@ const handleCellSelected = ({ row, col }) => {
       const isRoadTile = selectedImageId.value.startsWith('road_tile_')
       console.log(`   isRoadTile: ${isRoadTile}`)
       
-      canvasRef.value.placeImageAtSelectedCell(
-        selectedImage.url, 
-        lastImageCellsX.value, 
-        lastImageCellsY.value, 
-        selectedImage.isBackground || false, 
-        selectedImage.templateName || '',
-        isRoadTile
-      )
+      // Pre road tiles pošli aj tileMetadata
+      if (isRoadTile && canvasRef.value.placeImageAtCell) {
+        const tileMetadata = {
+          name: selectedImage.name,
+          tileIndex: selectedImage.tileIndex,
+          x: selectedImage.x,
+          y: selectedImage.y,
+          width: selectedImage.width,
+          height: selectedImage.height,
+          rotation: selectedImage.rotation
+        }
+        canvasRef.value.placeImageAtCell(
+          row,
+          col,
+          selectedImage.url,
+          lastImageCellsX.value,
+          lastImageCellsY.value,
+          false, // isBackground
+          true, // isRoadTile
+          selectedImage.bitmap || null,
+          selectedImage.name || '',
+          tileMetadata
+        )
+      } else {
+        canvasRef.value.placeImageAtSelectedCell(
+          selectedImage.url, 
+          lastImageCellsX.value, 
+          lastImageCellsY.value, 
+          selectedImage.isBackground || false, 
+          selectedImage.templateName || '',
+          isRoadTile
+        )
+      }
       return
     }
   }
@@ -326,6 +407,7 @@ const handleLoadProject = (projectData) => {
   const loadedResources = projectData.resources || []
   const loadedWorkforce = projectData.workforce || []
   const loadedRoadSpriteUrl = projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png'
+  const loadedRoadOpacity = projectData.roadOpacity || 100
   
   // Obnov farby prostredia
   environmentColors.value = loadedColors
@@ -362,26 +444,14 @@ const handleLoadProject = (projectData) => {
   workforce.value = loadedWorkforce
   console.log('📊 App.vue: Resources a workforce načítané:', loadedResources.length, loadedWorkforce.length)
   
-  // Obnov road sprite URL
+  // Obnov road sprite URL a opacity
   roadSpriteUrl.value = loadedRoadSpriteUrl
+  roadOpacity.value = loadedRoadOpacity
   const spriteInfo = loadedRoadSpriteUrl.startsWith('data:') 
     ? `data URL (${Math.round(loadedRoadSpriteUrl.length / 1024)}KB)` 
     : loadedRoadSpriteUrl
   console.log('🛣️ App.vue: Road sprite URL načítané:', spriteInfo)
-  
-  // Aplikuj road sprite asynchrónne po načítaní projektu
-  const applyRoadSprite = async () => {
-    if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
-      await imageGalleryRef.value.updateRoadSprite(loadedRoadSpriteUrl)
-      console.log('✅ Road sprite aplikovaný:', spriteInfo)
-    } else {
-      console.warn('⚠️ ImageGallery ref nie je dostupný, skúsim znova o 100ms')
-      setTimeout(applyRoadSprite, 100)
-    }
-  }
-  
-  // Spusti aplikovanie sprite asynchrónne
-  applyRoadSprite()
+  console.log('🎨 App.vue: Road opacity načítaná:', loadedRoadOpacity + '%')
   
   // Aplikuj background tiles na šachovnicu
   if (loadedTiles.length > 0 && canvasRef.value && canvasRef.value.setBackgroundTiles) {
@@ -412,7 +482,8 @@ const handleLoadProject = (projectData) => {
     cellsX: img.cellsX || 1,
     cellsY: img.cellsY || 1,
     view: img.view || '',
-    timestamp: img.timestamp ? new Date(img.timestamp) : new Date()
+    timestamp: img.timestamp ? new Date(img.timestamp) : new Date(),
+    buildingData: img.buildingData || null
   }))
   
   // Vyber prvý obrázok
@@ -451,25 +522,41 @@ const handleLoadProject = (projectData) => {
     let currentIndex = 0
     let successCount = 0
     
-    const loadBatch = () => {
+    const loadBatch = async () => {
       const batchEnd = Math.min(currentIndex + BATCH_SIZE, totalObjects)
       
       for (let i = currentIndex; i < batchEnd; i++) {
         const [key, imageData] = objectsToLoad[i]
         const { row, col, url, cellsX, cellsY, isBackground, isRoadTile, templateName, tileMetadata } = imageData
         
+        // Pre road tiles - rekreuj URL z aktuálneho roadTiles (už má správnu opacity)
+        let finalUrl = url
+        let finalBitmap = null
+        if (isRoadTile && tileMetadata && roadTiles.value.length > 0) {
+          // Nájdi tile podľa tileIndex z metadata
+          const tile = roadTiles.value.find(t => t.tileIndex === tileMetadata.tileIndex)
+          if (tile) {
+            finalUrl = tile.url
+            finalBitmap = tile.bitmap
+            console.log(`🛣️ Road tile rekreovaný z metadata: ${tileMetadata.name} (index ${tileMetadata.tileIndex})`)
+          } else {
+            console.warn(`⚠️ Road tile metadata nenájdený pre index ${tileMetadata.tileIndex}, použijem uložené URL`)
+          }
+        }
+        
         if (canvasRef.value && typeof canvasRef.value.placeImageAtCell === 'function') {
           try {
             canvasRef.value.placeImageAtCell(
               row, 
               col, 
-              url, 
+              finalUrl, 
               cellsX, 
               cellsY, 
               isBackground || false, 
               isRoadTile || false, 
-              null, // bitmap
-              templateName || ''
+              finalBitmap, // bitmap pre rýchle kreslenie
+              templateName || '',
+              tileMetadata || null // Pošli tileMetadata
             )
             successCount++
           } catch (error) {
@@ -500,15 +587,93 @@ const handleLoadProject = (projectData) => {
             loadingProgress.value = 100
             loadingStatus.value = 'Hotovo!'
             console.log(`✅ Načítaných ${successCount}/${totalObjects} objektov na šachovnici`)
+            
+            // Po dokončení načítania, triggeruj regeneráciu road tiles s načítanou opacity
+        
           }, 500)
         }, 100)
       }
     }
     
-    // Začni načítavanie po 500ms (aby sa canvas stihol inicializovať)
-    setTimeout(() => {
-      requestAnimationFrame(loadBatch)
-    }, 500)
+  // Aplikuj road sprite a opacity asynchrónne po načítaní projektu
+  const applyRoadSprite = async (retryCount = 0) => {
+    const MAX_RETRIES = 20 // Maximálne 20 pokusov (2 sekundy)
+    
+    if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
+      console.log('🔧 DEBUG applyRoadSprite:', {
+        loadedRoadSpriteUrl: loadedRoadSpriteUrl.substring(0, 50) + '...',
+        loadedRoadOpacity,
+        hasUpdateMethod: !!imageGalleryRef.value.updateRoadSprite
+      })
+      
+      // Najprv nastav opacity (PRED načítaním sprite!)
+      // roadOpacity je ref exposovaný z ImageGallery, pristupujeme k nemu priamo
+      if (imageGalleryRef.value.roadOpacity !== undefined) {
+        imageGalleryRef.value.roadOpacity = loadedRoadOpacity
+        console.log('🎨 Road opacity nastavená na:', loadedRoadOpacity + '%')
+      }
+      
+      // Počkaj kým sa opacity propaguje
+      await new Promise(resolve => setTimeout(resolve, 50))
+      
+      // Počkaj na Vue reactivity aby sa prop aktualizoval
+      await nextTick()
+      
+      // Potom aplikuj sprite (rekreuje tiles s novou opacity)
+      console.log('📞 Volám updateRoadSprite s URL:', loadedRoadSpriteUrl.substring(0, 50) + '...')
+      await imageGalleryRef.value.updateRoadSprite(loadedRoadSpriteUrl)
+      console.log('✅ Road sprite aplikovaný s opacity:', loadedRoadOpacity + '%', spriteInfo)
+      
+      // Počkaj kým sa tiles načítajú (dôležité!)
+      await new Promise(resolve => setTimeout(resolve, 300))
+      console.log('✅ applyRoadSprite DOKONČENÝ')
+      return true // Úspech
+      
+    } else if (retryCount < MAX_RETRIES) {
+      // Galéria možno nie je zobrazená alebo ešte nie je mounted
+      if (retryCount === 0) {
+        console.log('⏳ ImageGallery ref nie je dostupný, čakám...')
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+      return await applyRoadSprite(retryCount + 1) // Rekurzívne čakaj
+    } else {
+      console.warn('⚠️ ImageGallery ref nedostupný po', MAX_RETRIES, 'pokusoch - možno je galéria skrytá')
+      console.log('💡 Road sprite sa aplikuje automaticky keď zobrazíte galériu')
+      return false // Zlyhanie
+    }
+  }
+  
+  // Počkaj na načítanie road sprite PRED načítavaním mapy (aby tiles boli dostupné)
+  const startLoadingWithDelay = async () => {
+    // Počkaj kým sa road sprite načíta (applyRoadSprite MUSÍ byť hotový!)
+    console.log('⏳ Čakám na načítanie road sprite...')
+    const spriteLoaded = await applyRoadSprite()
+    
+    if (spriteLoaded) {
+      console.log('✅ Road sprite úspešne načítaný, začínam načítavať mapu...')
+      
+      // Počkaj kým sa roadTiles.value aktualizuje (emitované cez road-tiles-ready event)
+      let waitCount = 0
+      while (roadTiles.value.length === 0 && waitCount < 20) {
+        console.log('⏳ Čakám na roadTiles.value...', waitCount)
+        await new Promise(resolve => setTimeout(resolve, 100))
+        waitCount++
+      }
+      
+      if (roadTiles.value.length > 0) {
+        console.log('✅ roadTiles.value pripravené:', roadTiles.value.length, 'tiles')
+      } else {
+        console.warn('⚠️ roadTiles.value stále prázdne po 2 sekundách čakania!')
+      }
+    } else {
+      console.warn('⚠️ Road sprite sa nepodarilo načítať, mapu načítavam aj tak...')
+    }
+    
+    // Spusti načítavanie mapy
+    requestAnimationFrame(loadBatch)
+  }
+  
+  startLoadingWithDelay()
   } else if (Object.keys(placedImages).length === 0) {
     console.log('ℹ️ Žiadne umiestnené obrázky v projekte')
   } else {
@@ -527,10 +692,14 @@ const handleUpdateResources = (data) => {
 const handleUpdateBuildingData = ({ imageId, buildingData }) => {
   const image = images.value.find(img => img.id === imageId)
   if (image) {
-    image.isBuilding = buildingData.isBuilding
-    image.buildCost = buildingData.buildCost
-    image.production = buildingData.production
-    console.log('🏗️ App.vue: Building data aktualizované pre obrázok:', imageId)
+    // Ulož do buildingData objektu (nie priamo do image properties)
+    image.buildingData = {
+      isBuilding: buildingData.isBuilding,
+      buildCost: buildingData.buildCost,
+      operationalCost: buildingData.operationalCost,
+      production: buildingData.production
+    }
+    console.log('🏗️ App.vue: Building data aktualizované pre obrázok:', imageId, buildingData)
   }
 }
 </script>
@@ -587,6 +756,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
         :resources="resources"
         :workforce="workforce"
         :roadSpriteUrl="roadSpriteUrl"
+        :roadOpacity="roadOpacity"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"
@@ -657,6 +827,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
         :personSpawnCount="personSpawnCount"
         :resources="resources"
         :workforce="workforce"
+        :roadSpriteUrl="roadSpriteUrl"
         @delete="handleDelete" 
         @select="handleSelectImage"
         @place-on-board="handlePlaceOnBoard"

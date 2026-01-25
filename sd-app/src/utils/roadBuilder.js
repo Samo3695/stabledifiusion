@@ -101,7 +101,16 @@ export function regenerateRoadTilesOnCanvas(canvas, roadTiles) {
         canvas.deleteImageAtCell(row, col)
         
         // Umiestni nový tile s novou opacity
-        canvas.placeImageAtCell(row, col, newTile.url, 1, 1, false, true, newTile.bitmap, newTile.name)
+        const tileMetadata = {
+          name: newTile.name,
+          tileIndex: newTile.tileIndex,
+          x: newTile.x,
+          y: newTile.y,
+          width: newTile.width,
+          height: newTile.height,
+          rotation: newTile.rotation
+        }
+        canvas.placeImageAtCell(row, col, newTile.url, 1, 1, false, true, newTile.bitmap, newTile.name, tileMetadata)
         regeneratedCount++
       } else {
         console.warn(`⚠️ Nepodarilo sa nájsť tile pre ${tileName}`)
@@ -199,7 +208,16 @@ export function buildRoad(canvas, roadTiles, path) {
     }
     
     // Umiestni tile
-    canvas.placeImageAtCell(cell.row, cell.col, tile.url, 1, 1, false, true, tile.bitmap, tile.name)
+    const tileMetadata = {
+      name: tile.name,
+      tileIndex: tile.tileIndex,
+      x: tile.x,
+      y: tile.y,
+      width: tile.width,
+      height: tile.height,
+      rotation: tile.rotation
+    }
+    canvas.placeImageAtCell(cell.row, cell.col, tile.url, 1, 1, false, true, tile.bitmap, tile.name, tileMetadata)
     console.log(`   └─ [${cell.row}, ${cell.col}] - ${tile.name} (${direction})`)
   }
   
@@ -252,7 +270,16 @@ export function buildRoad(canvas, roadTiles, path) {
       
       if (newTile) {
         console.log(`   🔄 Prekreslím road tile na [${neighbor.row}, ${neighbor.col}] na ${newTile.name}`)
-        canvas.placeImageAtCell(neighbor.row, neighbor.col, newTile.url, 1, 1, false, true, newTile.bitmap, newTile.name)
+        const tileMetadata = {
+          name: newTile.name,
+          tileIndex: newTile.tileIndex,
+          x: newTile.x,
+          y: newTile.y,
+          width: newTile.width,
+          height: newTile.height,
+          rotation: newTile.rotation
+        }
+        canvas.placeImageAtCell(neighbor.row, neighbor.col, newTile.url, 1, 1, false, true, newTile.bitmap, newTile.name, tileMetadata)
       }
     }
   }
