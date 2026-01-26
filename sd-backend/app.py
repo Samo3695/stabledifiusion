@@ -314,17 +314,18 @@ def generate():
         
         # Seed pre reprodukovateľnosť
         seed = data.get('seed', None)
+        if seed is None:
+            # Vygeneruj náhodný seed ak nie je zadaný
+            seed = torch.randint(0, 2**32, (1,)).item()
         
         # Zaokrúhli na násobok 8 (požiadavka SD)
         width = int(width // 8 * 8)
         height = int(height // 8 * 8)
         
-        # Nastav generator ak máme seed
-        generator = None
-        if seed is not None:
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            generator = torch.Generator(device=device).manual_seed(int(seed))
-            print(f"🎲 Seed: {seed}")
+        # Nastav generator so seed
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        generator = torch.Generator(device=device).manual_seed(int(seed))
+        print(f"🎲 Seed: {seed}")
         
         if not prompt:
             return jsonify({'error': 'Prompt je povinný'}), 400
@@ -417,7 +418,8 @@ def generate():
         
         return jsonify({
             'image': f'data:image/png;base64,{img_base64}',
-            'prompt': prompt
+            'prompt': prompt,
+            'seed': int(seed)  # Vráť použitý seed
         })
         
     except Exception as e:

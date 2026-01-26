@@ -7,6 +7,7 @@ const characterPrompt = ref('')
 const referenceImage = ref(null)
 const referenceImageUrl = ref(null)
 const isGenerating = ref(false)
+const seed = ref('') // Seed pre reprodukovateľnosť
 
 const handleImageUpload = (event) => {
   const file = event.target.files[0]
@@ -44,6 +45,22 @@ const generateCharacter = async () => {
       model: 'dreamshaper', // Alebo 'realistic', 'majicmix'
       width: 512,
       height: 512
+    }
+    
+    // Pridaj seed ak je zadaný
+    if (seed.value && seed.value.trim()) {
+      const seedNum = parseInt(seed.value.trim())
+      if (!isNaN(seedNum)) {
+        requestData.seed = seedNum
+      }
+    }
+    
+    // Pridaj seed ak je zadaný
+    if (seed.value && seed.value.trim()) {
+      const seedNum = parseInt(seed.value.trim())
+      if (!isNaN(seedNum)) {
+        requestData.seed = seedNum
+      }
     }
     
     // Ak je nahraný referenčný obrázok, pridaj ho
@@ -140,6 +157,19 @@ const generateCharacter = async () => {
       </div>
     </div>
     
+    <!-- Seed -->
+    <div class="form-group">
+      <label>🎲 Seed (reprodukovateľnosť)</label>
+      <input
+        type="text"
+        v-model="seed"
+        placeholder="Prázdne = náhodný seed"
+        :disabled="isGenerating"
+        class="seed-input"
+      />
+      <small class="hint">Rovnaký seed + prompt = rovnaké postavy vo všetkých smeroch</small>
+    </div>
+    
     <!-- Tlačidlo generovať -->
     <button 
       @click="generateCharacter" 
@@ -205,6 +235,26 @@ textarea:focus {
 }
 
 textarea:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.seed-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  transition: border-color 0.2s;
+}
+
+.seed-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.seed-input:disabled {
   background: #f5f5f5;
   cursor: not-allowed;
 }

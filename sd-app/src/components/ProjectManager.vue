@@ -166,7 +166,8 @@ const saveProject = () => {
         cellsY: img.cellsY || 1,
         view: img.view || '',
         timestamp: img.timestamp || new Date().toISOString(),
-        buildingData: img.buildingData || null
+        buildingData: img.buildingData || null,
+        seed: img.seed || null
       })),
       imageLibrary,  // Unikátne obrázky pre placedImages
       placedImages,

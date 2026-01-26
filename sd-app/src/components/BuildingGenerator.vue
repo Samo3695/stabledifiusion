@@ -23,6 +23,7 @@ const templateCellsX = ref(1) // Počet políčok do šírky pre šablónu
 const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
 const currentTemplateName = ref('') // Názov aktuálnej šablóny
 const isRoadSprite = ref(false) // Či je aktuálna šablóna road sprite
+const seed = ref('') // Seed pre reprodukovateľnosť generovania (prázdne = náhodný)
 
 // Sleduj zmeny showNumbering a oznám App.vue
 watch(showNumbering, (newValue) => {
@@ -180,7 +181,13 @@ const generateImage = async () => {
       height: dimensions.height,
     }
 
-    // Seed sa už neposiela – necháme backend použiť implicitné správanie
+    // Pridaj seed ak je zadaný (inak backend použije náhodný)
+    if (seed.value && seed.value.trim()) {
+      const seedNum = parseInt(seed.value.trim())
+      if (!isNaN(seedNum)) {
+        requestBody.seed = seedNum
+      }
+    }
     
     // Pridaj LoRA ak je vybraná
     if (selectedLora.value) {
@@ -209,7 +216,7 @@ const generateImage = async () => {
 
     const data = await response.json()
     console.log('✅ ImageGenerator: Obrázok úspešne vygenerovaný!')
-    // Seed sa už nepoužíva ani nezobrazuje
+    console.log('🎲 Použitý seed:', data.seed || 'N/A')
 
     // Zistíme či je to pozadie (šablóna 0.png) - ignoruje kolíziu
     const isBackgroundTemplate = currentTemplateName.value === '0.png'
@@ -247,6 +254,7 @@ const generateImage = async () => {
       isBackground: isBackgroundTemplate, // Flag pre ignorovanie kolízie
       templateName: currentTemplateName.value, // Názov šablóny pre tieň
       isRoadSprite: isRoadSprite.value, // Či je to road sprite
+      seed: data.seed || null, // Seed z backendu (vždy je nastavený)
     }
 
     // Ulož posledný vygenerovaný obrázok
@@ -671,6 +679,21 @@ defineExpose({
               rows="2"
               :disabled="isGenerating"
             />
+          </div>
+
+          <!-- Seed -->
+          <div class="input-group">
+            <label for="seed">🎲 Seed (reprodukovateľnosť)</label>
+            <input
+              id="seed"
+              type="text"
+              v-model="seed"
+              placeholder="Prázdne = náhodný seed"
+              :disabled="isGenerating"
+            />
+            <small style="color: #666; font-size: 0.85rem; margin-top: 0.25rem; display: block;">
+              Rovnaký seed + prompt = rovnaký výsledok
+            </small>
           </div>
 
           <!-- Checkbox automatické odstránenie pozadia -->

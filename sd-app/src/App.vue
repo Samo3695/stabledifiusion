@@ -294,6 +294,8 @@ const handleCellSelected = ({ row, col }) => {
   if (deleteMode.value && canvasRef.value) {
     console.log(`🗑️ App.vue: Režim mazania - vymazanie buildingu na [${row}, ${col}]`)
     canvasRef.value.deleteImageAtCell(row, col)
+    // Aktualizuj canvasImagesMap aby sa prepočítali použité resources
+    handleCanvasUpdated()
     // Vyčisti výber obrázku aby sa nestal náhodne vložený na ďalšie políčko
     selectedImageId.value = null
     selectedImageData.value = null
@@ -525,7 +527,8 @@ const handleLoadProject = (projectData) => {
     cellsY: img.cellsY || 1,
     view: img.view || '',
     timestamp: img.timestamp ? new Date(img.timestamp) : new Date(),
-    buildingData: img.buildingData || null
+    buildingData: img.buildingData || null,
+    seed: img.seed || null // Seed pre reprodukovateľnosť
   }))
   
   // Vyber prvý obrázok
@@ -774,13 +777,17 @@ const checkBuildingResources = (buildingData) => {
       return
     }
     
-    // Pre build cost kontrolujeme len dostupné (base amount)
-    // NEODČÍTAME produkciu ani použité, iba čisté zásoby
-    if (resource.amount < cost.amount) {
+    // Pre build cost kontrolujeme dostupné (base + production - used)
+    // Rovnaká logika ako pre operational cost
+    const produced = producedResources.value[cost.resourceId] || 0
+    const used = usedResources.value[cost.resourceId] || 0
+    const available = resource.amount + produced - used
+    
+    if (available < cost.amount) {
       missingBuild.push({
         name: cost.resourceName,
         needed: cost.amount,
-        available: resource.amount
+        available: available
       })
     }
   })

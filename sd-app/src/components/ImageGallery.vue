@@ -675,6 +675,20 @@ const removeProductionResource = (index) => {
               <p>{{ selectedImage.negativePrompt }}</p>
             </div>
             
+            <div v-if="selectedImage.seed !== null && selectedImage.seed !== undefined" class="info-section">
+              <div class="info-header">
+                <h3>🎲 Seed:</h3>
+                <button 
+                  class="copy-btn"
+                  @click="copyToClipboard(String(selectedImage.seed), 'seed')"
+                  type="button"
+                >
+                  Copy
+                </button>
+              </div>
+              <p>{{ selectedImage.seed }}</p>
+            </div>
+            
             <div class="info-section">
               <h3>Vytvorené:</h3>
               <p>{{ formatDate(selectedImage.timestamp) }}</p>
