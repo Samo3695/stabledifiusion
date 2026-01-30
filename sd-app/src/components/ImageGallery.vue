@@ -53,6 +53,7 @@ const isBuilding = ref(false)
 const isCommandCenter = ref(false) // Či je budova command center
 const buildingName = ref('') // Názov budovy
 const buildingSize = ref('default') // Veľkosť budovy
+const dontDropShadow = ref(false) // Či nezobrazovať tieň
 const buildCost = ref([]) // [{resourceId, resourceName, amount}]
 const operationalCost = ref([]) // [{resourceId, resourceName, amount}]
 const production = ref([]) // [{resourceId, resourceName, amount}]
@@ -260,6 +261,7 @@ const saveBuildingData = () => {
       isCommandCenter: isCommandCenter.value,
       buildingName: buildingName.value,
       buildingSize: buildingSize.value,
+      dontDropShadow: dontDropShadow.value,
       buildCost: buildCost.value,
       operationalCost: operationalCost.value,
       production: production.value
@@ -270,12 +272,12 @@ const saveBuildingData = () => {
       buildingData
     })
     
-    console.log('💾 Building data automaticky uložené:', buildingData)
+    console.log('💾 Building data automaticky uložené (dontDropShadow:', dontDropShadow.value, '):', buildingData)
   }
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, buildingName, buildingSize, buildCost, operationalCost, production], () => {
+watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -367,13 +369,16 @@ const openModal = (image) => {
     isCommandCenter.value = image.buildingData.isCommandCenter || false
     buildingName.value = image.buildingData.buildingName || ''
     buildingSize.value = image.buildingData.buildingSize || 'default'
+    dontDropShadow.value = image.buildingData.dontDropShadow === true // Explicitná kontrola pre boolean
     buildCost.value = image.buildingData.buildCost || []
     operationalCost.value = image.buildingData.operationalCost || []
     production.value = image.buildingData.production || []
+    console.log('🔍 Loading building data, dontDropShadow:', image.buildingData.dontDropShadow, '→', dontDropShadow.value)
   } else {
     isBuilding.value = false
     buildingName.value = ''
     buildingSize.value = 'default'
+    dontDropShadow.value = false
     buildCost.value = []
     operationalCost.value = []
     production.value = []
@@ -384,6 +389,7 @@ const closeModal = () => {
   selectedImage.value = null
   isBuilding.value = false
   isCommandCenter.value = false
+  dontDropShadow.value = false
   buildingName.value = ''
   buildingSize.value = 'default'
   buildCost.value = []
@@ -700,6 +706,13 @@ const removeProductionResource = (index) => {
                 <option value="4x4">4x4</option>
                 <option value="5x5">5x5</option>
               </select>
+            </div>
+
+            <div class="info-section">
+              <label class="shadow-checkbox">
+                <input type="checkbox" v-model="dontDropShadow" />
+                <span>🚫 Don't drop shadow</span>
+              </label>
             </div>
 
             <!-- Building section -->
@@ -1539,6 +1552,27 @@ h2 {
 
 .building-size-select:focus {
   outline: none;
+
+/* Shadow checkbox */
+.shadow-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.shadow-checkbox input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+}
+
+.shadow-checkbox span {
+  color: #333;
+}
   border-color: #667eea;
   box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }

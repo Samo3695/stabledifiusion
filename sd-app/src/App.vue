@@ -744,6 +744,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       isCommandCenter: buildingData.isCommandCenter,
       buildingName: buildingData.buildingName,
       buildingSize: buildingData.buildingSize,
+      dontDropShadow: buildingData.dontDropShadow,
       buildCost: buildingData.buildCost,
       operationalCost: buildingData.operationalCost,
       production: buildingData.production
