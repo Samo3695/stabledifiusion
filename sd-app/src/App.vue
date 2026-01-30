@@ -107,7 +107,7 @@ const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
     console.log('   URL:', image.url.substring(0, 50) + '...')
     console.log('   isBackground:', image.isBackground || false)
     console.log('   templateName:', image.templateName || '')
-    const result = canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image.isBackground || false, image.templateName || '')
+    const result = canvasRef.value.placeImageAtSelectedCell(image.url, cellsX, cellsY, image)
     console.log('   Výsledok vloženia:', result ? 'ÚSPECH' : 'ZLYHALO')
   } else {
     console.log('⚠️ App.vue: Nevkladám obrázok - políčko nie je vybrané alebo canvas neexistuje')
@@ -366,9 +366,7 @@ const handleCellSelected = ({ row, col }) => {
           selectedImage.url, 
           lastImageCellsX.value, 
           lastImageCellsY.value, 
-          selectedImage.isBackground || false, 
-          selectedImage.templateName || '',
-          isRoadTile
+          selectedImage // Pošli celý objekt s buildingData
         )
       }
       return

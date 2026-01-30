@@ -139,7 +139,7 @@ class IsoScene extends Phaser.Scene {
     this.shadowRenderTexture.setOrigin(0.5, 0.5)
     this.shadowRenderTexture.setPosition(0, GRID_SIZE * TILE_HEIGHT / 2)
     this.shadowRenderTexture.setAlpha(0.35) // Celková priehľadnosť tieňa
-    this.shadowRenderTexture.setDepth(1)
+    this.shadowRenderTexture.setDepth(999) // Najvyšší depth - tiene sú nad všetkým
     
     this.buildingContainer = this.add.container(0, 0)
     this.buildingContainer.setDepth(2)
@@ -949,7 +949,8 @@ class IsoScene extends Phaser.Scene {
   }
 
   // Pridanie obrázka s tieňom
-  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false, bitmap = null, skipShadows = false) {
+  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false, bitmap = null, skipShadows = false, dontDropShadow = false) {
+    console.log('🏗️ addBuildingWithShadow called with dontDropShadow:', dontDropShadow)
     // Pre road tiles - jednoduchá logika bez cache
     if (isRoadTile) {
       // Unikátny kľúč s timestampom aby sa vždy načítala nová textúra
@@ -1044,20 +1045,26 @@ class IsoScene extends Phaser.Scene {
         // Zistíme či je to tree šablóna z názvu šablóny
         const isTreeTemplate = templateName.toLowerCase().includes('tree')
         
-        const shadowInfo = {
-          textureKey,
-          x: x + offsetX,
-          y: y + TILE_HEIGHT + offsetY,
-          scale,
-          cellsX, // Veľkosť pre výber správneho offsetu
-          isTree: isTreeTemplate, // Špeciálny flag pre stromy
-          offsetX: -baseShadowOffset,
-          offsetY: baseShadowOffset * 0.375
+        // Vytvor shadowInfo len ak nemá dontDropShadow flag
+        if (!dontDropShadow) {
+          console.log('✅ Vytváram tieň pre budovu', key)
+          const shadowInfo = {
+            textureKey,
+            x: x + offsetX,
+            y: y + TILE_HEIGHT + offsetY,
+            scale,
+            cellsX, // Veľkosť pre výber správneho offsetu
+            isTree: isTreeTemplate, // Špeciálny flag pre stromy
+            offsetX: -baseShadowOffset,
+            offsetY: baseShadowOffset * 0.375
+          }
+          this.shadowSprites[key] = shadowInfo // Uložíme info pre RenderTexture
+        } else {
+          console.log('🚫 Preskakujem tieň pre budovu (dontDropShadow=true)', key)
         }
         
         // Uložíme referencie
         this.buildingSprites[key] = buildingSprite
-        this.shadowSprites[key] = shadowInfo // Uložíme info pre RenderTexture
         
         // Zoradíme budovy podľa depth (row + col)
         this.sortBuildings()
@@ -1392,8 +1399,16 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackgro
     }
   }
   
-  // Pridaj budovu s tieňom
-  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName, isRoadTile, imageBitmap)
+  // Pridaj budovu s tieňom (alebo bez tieňa ak má dontDropShadow)
+  const dontDropShadow = cellData.buildingData?.dontDropShadow || false
+  console.log('🔍 dontDropShadow check:', {
+    hasBuildingData: !!cellData.buildingData,
+    dontDropShadow: cellData.buildingData?.dontDropShadow,
+    finalValue: dontDropShadow,
+    imageData: imageData,
+    buildingData: imageData?.buildingData
+  })
+  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName, isRoadTile, imageBitmap, false, dontDropShadow)
   
   // Vyčisti výber
   mainScene.clearSelection()
@@ -1627,7 +1642,8 @@ defineExpose({
     }
     
     // Počas batch loadingu preskočíme tiene (vykonajú sa na konci)
-    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap, isBatchLoading)
+    const dontDropShadow = cellData.buildingData?.dontDropShadow || false
+    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap, isBatchLoading, dontDropShadow)
     
     // Počas batch loadingu preskočíme vytváranie osôb a aktualizciu workera
     if (!isBatchLoading) {
