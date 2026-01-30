@@ -741,13 +741,27 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
     // Ulož do buildingData objektu (nie priamo do image properties)
     image.buildingData = {
       isBuilding: buildingData.isBuilding,
+      isCommandCenter: buildingData.isCommandCenter,
       buildingName: buildingData.buildingName,
+      buildingSize: buildingData.buildingSize,
       buildCost: buildingData.buildCost,
       operationalCost: buildingData.operationalCost,
       production: buildingData.production
     }
     console.log('🏗️ App.vue: Building data aktualizované pre obrázok:', imageId, buildingData)
   }
+}
+
+// Handler pre command center selection - command center môže byť len jeden
+const handleCommandCenterSelected = (selectedImageId) => {
+  // Prejdi všetky obrázky a zruš command center na všetkých okrem aktuálneho
+  images.value.forEach(img => {
+    if (img.id !== selectedImageId && img.buildingData?.isCommandCenter) {
+      img.buildingData.isCommandCenter = false
+      console.log('❌ Command center zrušený na obrázku:', img.id)
+    }
+  })
+  console.log('🏛️ App.vue: Command center nastavený na:', selectedImageId)
 }
 
 const handleModeChanged = (mode) => {
@@ -1066,6 +1080,7 @@ const handleCanvasUpdated = () => {
         @road-opacity-changed="handleRoadOpacityChanged"
         @person-spawn-settings-changed="handlePersonSpawnSettingsChanged"
         @update-building-data="handleUpdateBuildingData"
+        @command-center-selected="handleCommandCenterSelected"
       />
     </div>
     
@@ -1359,5 +1374,32 @@ header h1 {
 .missing-resource-item .deficit {
   color: #d32f2f;
   font-weight: 700;
+}
+
+/* Header navigation */
+.header-nav {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+}
+
+.nav-button {
+  padding: 0.5rem 1rem;
+  background: white;
+  color: #667eea;
+  text-decoration: none;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: all 0.2s;
+  display: inline-block;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.nav-button:hover {
+  background: #f0f0f0;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 </style>

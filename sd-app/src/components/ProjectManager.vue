@@ -1,7 +1,11 @@
 <script setup>
 import { ref } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import Modal from './Modal.vue'
 import ResourceManager from './ResourceManager.vue'
+
+const router = useRouter()
+const route = useRoute()
 
 const props = defineProps({
   mode: {
@@ -75,6 +79,58 @@ const handleResourceUpdate = (data) => {
   emit('update-resources', data)
 }
 
+// Pomocná funkcia na škálovanie obrázka
+const resizeImage = async (imageUrl, buildingSize) => {
+  // Ak je 'default', vráť originálny obrázok bez zmeny
+  if (buildingSize === 'default') {
+    console.log('   ⏩ Building size: default - zachováva originálnu veľkosť')
+    return imageUrl
+  }
+  
+  // Mapy buildingSize na šírku
+  const widthMap = {
+    '1x1': 200,
+    '2x2': 400,
+    '3x3': 600,
+    '4x4': 800,
+    '5x5': 1000
+  }
+  
+  const targetWidth = widthMap[buildingSize] || 200 // Default 200px šírka
+  
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    
+    img.onload = () => {
+      // Vypočítaj výšku aby sa zachoval aspect ratio
+      const aspectRatio = img.height / img.width
+      const targetHeight = Math.round(targetWidth * aspectRatio)
+      
+      // Vytvor canvas s vypočítanou veľkosťou
+      const canvas = document.createElement('canvas')
+      canvas.width = targetWidth
+      canvas.height = targetHeight
+      const ctx = canvas.getContext('2d')
+      
+      // Nakresli zmenšený obrázok (zachová aspect ratio)
+      ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
+      
+      // Konvertuj na base64
+      resolve(canvas.toDataURL('image/png'))
+      
+      console.log(`   ✅ Zmenšené: ${img.width}×${img.height} → ${targetWidth}×${targetHeight}`)
+    }
+    
+    img.onerror = () => {
+      console.warn('Nepodarilo sa načítať obrázok pre resize, použijem originál')
+      resolve(imageUrl) // Fallback na originál
+    }
+    
+    img.src = imageUrl
+  })
+}
+
 // Uloží projekt do JSON súboru
 const saveProject = () => {
   if (props.images.length === 0) {
@@ -99,6 +155,11 @@ const saveProject = () => {
           return
         }
         
+        // Preskočíme sekundárne bunky multi-cell budov - ukladáme len origin
+        if (imageData.isSecondary) {
+          return
+        }
+        
         const [row, col] = key.split('-').map(Number)
         
         // Pre road tiles ukladáme len metadata, nie celý obrázok (optimalizácia)
@@ -111,7 +172,8 @@ const saveProject = () => {
             isBackground: false,
             isRoadTile: true,
             templateName: imageData.templateName || '',
-            tileMetadata: imageData.tileMetadata // Len metadata - sprite sa rekreuje z roadSpriteUrl
+            tileMetadata: imageData.tileMetadata, // Len metadata - sprite sa rekreuje z roadSpriteUrl
+            buildingData: imageData.buildingData || null
           }
           return
         }
@@ -139,7 +201,8 @@ const saveProject = () => {
           isBackground: false,
           isRoadTile: false,
           templateName: imageData.templateName || '',
-          tileMetadata: imageData.tileMetadata || null
+          tileMetadata: imageData.tileMetadata || null,
+          buildingData: imageData.buildingData || null
         }
       })
     }
@@ -157,18 +220,32 @@ const saveProject = () => {
       imageCount: props.images.length,
       placedImageCount: Object.keys(placedImages).length,
       uniqueImageCount: imageLibrary.length,  // Počet unikátnych obrázkov
-      images: props.images.map(img => ({
-        id: img.id,
-        url: img.url,
-        prompt: img.prompt || '',
-        negativePrompt: img.negativePrompt || '',
-        cellsX: img.cellsX || 1,
-        cellsY: img.cellsY || 1,
-        view: img.view || '',
-        timestamp: img.timestamp || new Date().toISOString(),
-        buildingData: img.buildingData || null,
-        seed: img.seed || null
-      })),
+      images: props.images.map(img => {
+        // Debug logging pre buildingData
+        if (img.buildingData) {
+          console.log(`💾 Ukladám buildingData pre obrázok ${img.id}:`, {
+            isBuilding: img.buildingData.isBuilding,
+            buildingName: img.buildingData.buildingName,
+            buildingSize: img.buildingData.buildingSize,
+            buildCost: img.buildingData.buildCost?.length || 0,
+            operationalCost: img.buildingData.operationalCost?.length || 0,
+            production: img.buildingData.production?.length || 0
+          })
+        }
+        
+        return {
+          id: img.id,
+          url: img.url,
+          prompt: img.prompt || '',
+          negativePrompt: img.negativePrompt || '',
+          cellsX: img.cellsX || 1,
+          cellsY: img.cellsY || 1,
+          view: img.view || '',
+          timestamp: img.timestamp || new Date().toISOString(),
+          buildingData: img.buildingData || null,
+          seed: img.seed || null
+        }
+      }),
       imageLibrary,  // Unikátne obrázky pre placedImages
       placedImages,
       environmentColors: props.environmentColors,
@@ -220,6 +297,144 @@ const saveProject = () => {
   } catch (error) {
     console.error('❌ Chyba pri ukladaní projektu:', error)
     alert('Chyba pri ukladaní projektu: ' + error.message)
+  }
+}
+
+// Uloží projekt do JSON súboru s optimalizovanými obrázkami pre gameplay
+const saveGameplayProject = async () => {
+  if (props.images.length === 0) {
+    alert('Žiadne obrázky na uloženie!')
+    return
+  }
+
+  try {
+    console.log('🎮 Začínam Save Gameplay - škálujem obrázky...')
+    
+    // Získaj umiestnené obrázky zo šachovnice (rovnaké ako v saveProject)
+    const placedImages = {}
+    const uniqueImages = new Map()
+    let imageIdCounter = 1
+    
+    if (props.canvasRef && typeof props.canvasRef.cellImages === 'function') {
+      const cellImagesData = props.canvasRef.cellImages()
+      
+      Object.entries(cellImagesData).forEach(([key, imageData]) => {
+        if (imageData.isBackground) return
+        
+        // Preskočíme sekundárne bunky multi-cell budov - ukladáme len origin
+        if (imageData.isSecondary) return
+        
+        const [row, col] = key.split('-').map(Number)
+        
+        if (imageData.isRoadTile && imageData.tileMetadata) {
+          placedImages[key] = {
+            row, col,
+            cellsX: imageData.cellsX || 1,
+            cellsY: imageData.cellsY || 1,
+            isBackground: false,
+            isRoadTile: true,
+            templateName: imageData.templateName || '',
+            tileMetadata: imageData.tileMetadata,
+            buildingData: imageData.buildingData || null
+          }
+          return
+        }
+        
+        const url = imageData.url
+        let imageId
+        if (uniqueImages.has(url)) {
+          imageId = uniqueImages.get(url)
+        } else {
+          imageId = `img_${imageIdCounter++}`
+          uniqueImages.set(url, imageId)
+        }
+        
+        placedImages[key] = {
+          row, col, imageId,
+          cellsX: imageData.cellsX || 1,
+          cellsY: imageData.cellsY || 1,
+          isBackground: false,
+          isRoadTile: false,
+          templateName: imageData.templateName || '',
+          tileMetadata: imageData.tileMetadata || null,
+          buildingData: imageData.buildingData || null
+        }
+      })
+    }
+    
+    const imageLibrary = []
+    uniqueImages.forEach((id, url) => {
+      imageLibrary.push({ id, url })
+    })
+
+    // Škáluj obrázky podľa buildingSize
+    const scaledImages = []
+    for (const img of props.images) {
+      let scaledUrl = img.url
+      
+      // Ak má obrázok buildingSize, zmenš ho
+      if (img.buildingData?.buildingSize) {
+        console.log(`📐 Škálujem obrázok ${img.id} z ${img.buildingData.buildingSize}...`)
+        scaledUrl = await resizeImage(img.url, img.buildingData.buildingSize)
+      }
+      
+      scaledImages.push({
+        id: img.id,
+        url: scaledUrl, // Škálovaný URL
+        prompt: img.prompt || '',
+        negativePrompt: img.negativePrompt || '',
+        cellsX: img.cellsX || 1,
+        cellsY: img.cellsY || 1,
+        view: img.view || '',
+        timestamp: img.timestamp || new Date().toISOString(),
+        buildingData: img.buildingData || null,
+        seed: img.seed || null
+      })
+    }
+
+    // Priprav dáta pre export
+    const projectData = {
+      version: '1.9', // Nová verzia s gameplay optimalizáciou
+      gameplayOptimized: true, // Flag že obrázky sú škálované
+      timestamp: new Date().toISOString(),
+      imageCount: scaledImages.length,
+      placedImageCount: Object.keys(placedImages).length,
+      uniqueImageCount: imageLibrary.length,
+      images: scaledImages,
+      imageLibrary,
+      placedImages,
+      environmentColors: props.environmentColors,
+      textureSettings: {
+        tilesPerImage: props.textureSettings?.tilesPerImage || 1,
+        tileResolution: props.textureSettings?.tileResolution || 512,
+        customTexture: props.textureSettings?.customTexture || null
+      },
+      resources: props.resources || [],
+      workforce: props.workforce || [],
+      roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
+      roadOpacity: props.roadOpacity || 100
+    }
+
+    // Konvertuj na JSON string
+    const jsonString = JSON.stringify(projectData, null, 2)
+    
+    // Vytvor blob a stiahni súbor
+    const blob = new Blob([jsonString], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `isometric-gameplay-${Date.now()}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+
+    console.log('✅ Gameplay projekt uložený s optimalizovanými obrázkami!')
+    console.log('   📦 Obrázkov:', projectData.imageCount)
+    console.log('   🎨 Škálované podľa buildingSize')
+  } catch (error) {
+    console.error('❌ Chyba pri ukladaní gameplay projektu:', error)
+    alert('Chyba pri ukladaní gameplay projektu: ' + error.message)
   }
 }
 
@@ -282,7 +497,8 @@ const handleFileUpload = async (event) => {
             isBackground: false,
             isRoadTile: true,
             templateName: data.templateName || '',
-            tileMetadata: data.tileMetadata
+            tileMetadata: data.tileMetadata,
+            buildingData: data.buildingData || null
           }
         } else {
           // Non-road obrázky - rekonštruuj URL z imageLibrary
@@ -295,7 +511,8 @@ const handleFileUpload = async (event) => {
             isBackground: data.isBackground || false,
             isRoadTile: data.isRoadTile || false,
             templateName: data.templateName || '',
-            tileMetadata: data.tileMetadata || null
+            tileMetadata: data.tileMetadata || null,
+            buildingData: data.buildingData || null
           }
         }
       })
@@ -313,6 +530,15 @@ const handleFileUpload = async (event) => {
       roadSpriteUrl: projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
       roadOpacity: projectData.roadOpacity || 100
     })
+
+    // Debug logging pre buildingData
+    const imagesWithBuildings = projectData.images.filter(img => img.buildingData?.isBuilding)
+    if (imagesWithBuildings.length > 0) {
+      console.log(`📦 Načítaných ${imagesWithBuildings.length} budov:`)
+      imagesWithBuildings.forEach(img => {
+        console.log(`   - ${img.buildingData.buildingName || 'Unnamed'} (${img.buildingData.buildingSize || '1x1'})`)
+      })
+    }
 
     // Resetuj file input
     event.target.value = ''
@@ -347,15 +573,15 @@ const clearProject = () => {
       <!-- Mode switcher -->
       <div class="mode-switcher">
         <button 
-          @click="$emit('mode-changed', 'editor')" 
-          :class="['mode-btn', { active: mode === 'editor' }]"
+          @click="router.push('/')" 
+          :class="['mode-btn', { active: route.path === '/' }]"
           title="Editor režim - generovanie a úpravy"
         >
           🎨 Editor
         </button>
         <button 
-          @click="$emit('mode-changed', 'gameplay')" 
-          :class="['mode-btn', { active: mode === 'gameplay' }]"
+          @click="router.push('/game')" 
+          :class="['mode-btn', { active: route.path === '/game' }]"
           title="Game Play režim - zobrazenie resources"
         >
           🎮 Game Play
@@ -366,6 +592,10 @@ const clearProject = () => {
       
       <button @click="saveProject" class="btn btn-save" title="Uložiť projekt do JSON súboru">
         💾 Save
+      </button>
+      
+      <button @click="saveGameplayProject" class="btn btn-save-gameplay" title="Uložiť projekt s optimalizovanými obrázkami pre gameplay">
+        🎮 Save Gameplay
       </button>
       
       <button @click="loadProject" class="btn btn-load" title="Načítať projekt z JSON súboru">
@@ -549,6 +779,15 @@ const clearProject = () => {
 
 .btn-save:hover {
   background: linear-gradient(135deg, #059669 0%, #047857 100%);
+}
+
+.btn-save-gameplay {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: white;
+}
+
+.btn-save-gameplay:hover {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
 }
 
 .btn-load {

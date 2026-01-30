@@ -65,7 +65,9 @@ const handleTemplateSelected = ({ dataUrl, templateName, width, height, cellsX, 
   
   // Automaticky nastav rozmery podľa šablóny
   if (width && height) {
-    imageDimensions.value = `${width}x${height}`
+    templateWidth.value = width
+    templateHeight.value = height
+    sizeMultiplier.value = 1 // Reset na "zo šablóny"
     console.log(`Šablóna vybraná: ${templateName}, rozmery: ${width}x${height}, políčka: ${cellsX}x${cellsY}`)
   } else {
     console.log('Šablóna vybraná:', templateName)
@@ -78,13 +80,17 @@ const selectedLora = ref('')
 const loraScale = ref(0.9) // Sila LoRA (0.0 - 1.0)
 const showAllLoras = ref(false) // Či zobraziť všetky LoRA alebo len isometric
 
-// Rozmery obrázka - fixné rozmery
-const imageDimensions = ref('400x400') // '200x200', '200x300', '400x400', '400x600'
+// Rozmery obrázka - dynamické podľa šablóny
+const templateWidth = ref(400) // Šírka šablóny
+const templateHeight = ref(400) // Výška šablóny
+const sizeMultiplier = ref(1) // 1 = zo šablóny, 2 = zo šablóny x2
 
-// Funkcia na získanie šírky a výšky z reťazca
+// Funkcia na získanie šírky a výšky podľa šablóny a multiplikátora
 const getImageDimensions = () => {
-  const [width, height] = imageDimensions.value.split('x').map(Number)
-  return { width, height }
+  return {
+    width: templateWidth.value * sizeMultiplier.value,
+    height: templateHeight.value * sizeMultiplier.value
+  }
 }
 
 // RGB farebné kanály (1.0 = normálne, 0.0 = bez farby, 2.0 = zdvojnásobenie)
@@ -615,17 +621,9 @@ defineExpose({
           <!-- Rozmery obrázka -->
           <div class="input-group">
             <label for="image-dimensions">📏 Rozmery obrázka</label>
-            <select id="image-dimensions" v-model="imageDimensions" :disabled="isGenerating">
-              <option value="200x200">200×200 px</option>
-              <option value="200x300">200×300 px</option>
-              <option value="400x400">400×400 px</option>
-              <option value="400x600">400×600 px</option>
-              <option 
-                v-if="imageDimensions && !['200x200', '200x300', '400x400', '400x600'].includes(imageDimensions)" 
-                :value="imageDimensions"
-              >
-                {{ imageDimensions.replace('x', '×') }} px (zo šablóny)
-              </option>
+            <select id="image-dimensions" v-model.number="sizeMultiplier" :disabled="isGenerating">
+              <option :value="1">zo šablóny ({{ templateWidth }}×{{ templateHeight }} px)</option>
+              <option :value="2">zo šablóny x2 ({{ templateWidth * 2 }}×{{ templateHeight * 2 }} px)</option>
             </select>
           </div>
 

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import Phaser from 'phaser'
 import { PersonManager } from '../utils/personManager.js'
 
@@ -38,6 +38,10 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  roadDeleteMode: {
+    type: Boolean,
+    default: false
+  },
   roadTiles: {
     type: Array,
     default: () => []
@@ -52,12 +56,20 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked'])
 
 const gameContainer = ref(null)
 let game = null
 let mainScene = null
 const showPerson = ref(true) // Či zobrazovať pohyblivú osobu
+
+// Computed pre CSS triedu kurzora
+const cursorClass = computed(() => {
+  if (props.roadDeleteMode || props.deleteMode) return 'delete-mode'
+  if (props.roadBuildingMode) return 'road-mode'
+  if (props.selectedImageId) return 'has-selection'
+  return ''
+})
 
 // Dáta pre uložené obrázky
 let cellImages = {}
@@ -220,7 +232,11 @@ class IsoScene extends Phaser.Scene {
     this.numberTexts.forEach(t => t.destroy())
     this.numberTexts = []
     
-    if (!props.showGrid) return
+    // Mriežka sa zobrazí len ak:
+    // 1. showGrid je true (globálne nastavenie)
+    // 2. Je vybraná budova (selectedImageId) alebo aktívny road building mode
+    const shouldShowGrid = props.showGrid && (props.selectedImageId || props.roadBuildingMode)
+    if (!shouldShowGrid) return
     
     this.gridGraphics = this.add.graphics()
     this.groundContainer.add(this.gridGraphics)
@@ -561,6 +577,9 @@ class IsoScene extends Phaser.Scene {
       const existing = cellImages[key]
       if (existing.isBackground) continue
       
+      // Preskočíme sekundárne bunky multi-cell budov
+      if (existing.isSecondary) continue
+      
       // Políčka s cestou (road tiles) sú vždy blokované na stavanie
       if (existing.isRoadTile) {
         const [existingRow, existingCol] = key.split('-').map(Number)
@@ -809,6 +828,73 @@ class IsoScene extends Phaser.Scene {
       const cell = this.isoToGrid(worldPoint.x, worldPoint.y)
       
       if (cell.row >= 0 && cell.row < GRID_SIZE && cell.col >= 0 && cell.col < GRID_SIZE) {
+        
+        // Ak nie je žiadny špeciálny mód, skontroluj či sa kliklo na existujúcu budovu
+        if (!props.roadDeleteMode && !props.roadBuildingMode && !props.deleteMode && !props.selectedImageId) {
+          const key = `${cell.row}-${cell.col}`
+          const buildingData = cellImages[key]
+          
+          if (buildingData && !buildingData.isRoadTile) {
+            console.log('🏗️ Kliknuté na budovu:', buildingData)
+            emit('building-clicked', { row: cell.row, col: cell.col, buildingData })
+            return
+          }
+        }
+        
+        // Road delete mode (mazanie budov aj ciest)
+        if (props.roadDeleteMode) {
+          const key = `${cell.row}-${cell.col}`
+          
+          // Kontrola či tam niečo je
+          if (cellImages[key]) {
+            const imageData = cellImages[key]
+            
+            // Ak je to sekundárne políčko, použi originálnu pozíciu
+            const originRow = imageData.originRow !== undefined ? imageData.originRow : cell.row
+            const originCol = imageData.originCol !== undefined ? imageData.originCol : cell.col
+            const originKey = `${originRow}-${originCol}`
+            const originData = cellImages[originKey]
+            
+            // Mazanie road tile
+            if (imageData.isRoadTile) {
+              if (this.buildingSprites[key]) {
+                this.buildingSprites[key].destroy()
+                delete this.buildingSprites[key]
+              }
+              delete cellImages[key]
+              console.log(`🚜 Cesta zmazaná: [${cell.row}, ${cell.col}]`)
+              
+              // Aktualizuj PersonManager cache
+              if (this.personManager) {
+                this.personManager.updateWorkerRoadTiles()
+              }
+            } 
+            // Mazanie budovy
+            else {
+              const cellsX = originData?.cellsX || imageData.cellsX || 1
+              const cellsY = originData?.cellsY || imageData.cellsY || 1
+              
+              // Zmazať všetky bunky budovy od originálnej pozície
+              for (let r = originRow; r < originRow + cellsX; r++) {
+                for (let c = originCol; c < originCol + cellsY; c++) {
+                  const cellKey = `${r}-${c}`
+                  delete cellImages[cellKey]
+                }
+              }
+              
+              // Zmazať sprite z originálnej pozície
+              this.removeBuilding(originKey)
+              console.log(`🚜 Budova zmazaná: [${originRow}, ${originCol}] (${cellsX}x${cellsY})`)
+              
+              // Emit event pre aktualizáciu v GameView
+              emit('image-placed')
+            }
+          } else {
+            console.log(`⚠️ Na pozícii [${cell.row}, ${cell.col}] nie je žiadny objekt (key: ${key})`)
+            console.log(`📋 Existujúce kľúče:`, Object.keys(cellImages))
+          }
+          return
+        }
         
         // Road building mode
         if (props.roadBuildingMode) {
@@ -1261,8 +1347,8 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackgro
   const col = mainScene.selectedCell.col
   const key = `${row}-${col}`
   
-  // Ulož do cellImages s metaúdajmi
-  cellImages[key] = {
+  // Priprav dáta pre uloženie
+  const cellData = {
     url: imageUrl,
     bitmap: imageBitmap,  // Priamo bitmap pre rýchle kreslenie
     cellsX,
@@ -1270,6 +1356,8 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackgro
     isBackground,
     templateName,
     isRoadTile,
+    // Ulož building metadata ak existujú
+    buildingData: imageData?.buildingData || null,
     // Ulož aj metaúdaje road tile-u (optimalizácia - pri load sa rekreuje z sprite)
     tileMetadata: imageData && typeof imageData === 'object' ? {
       name: imageData.name,
@@ -1279,7 +1367,29 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackgro
       width: imageData.width,
       height: imageData.height,
       rotation: imageData.rotation
-    } : null
+    } : null,
+    // Ulož aj počiatočnú pozíciu (pre viacpolickovú budovu)
+    originRow: row,
+    originCol: col
+  }
+  
+  // Ulož do cellImages na hlavnej pozícii
+  cellImages[key] = cellData
+  
+  // Pre budovy väčšie ako 1x1, ulož referenciu na všetky zabraté políčka
+  if (cellsX > 1 || cellsY > 1) {
+    for (let r = 0; r < cellsX; r++) {
+      for (let c = 0; c < cellsY; c++) {
+        if (r === 0 && c === 0) continue // Hlavné políčko už je uložené
+        const cellKey = `${row + r}-${col + c}`
+        cellImages[cellKey] = {
+          ...cellData,
+          isSecondary: true, // Označenie že toto je sekundárne políčko
+          originRow: row,
+          originCol: col
+        }
+      }
+    }
   }
   
   // Pridaj budovu s tieňom
@@ -1349,16 +1459,44 @@ const deleteImageAtCell = (row, col) => {
   console.log(`🗑️ PhaserCanvas: Vymazanie obrázka na [${row}, ${col}], key=${key}`)
   
   let deleted = false
+  let originKey = key
   
-  // Najprv skús priamo podľa kľúča (pre 1x1 tiles ako roads)
-  if (cellImages[key]) {
-    console.log(`🗑️ Nájdený priamy kľúč ${key}, mažem...`)
-    mainScene.removeBuilding(key)
-    delete cellImages[key]
-    deleted = true
+  // Ak je toto sekundárna bunka, nájdi origin
+  if (cellImages[key] && cellImages[key].isSecondary) {
+    const originRow = cellImages[key].originRow
+    const originCol = cellImages[key].originCol
+    originKey = `${originRow}-${originCol}`
+    console.log(`🗑️ Toto je sekundárna bunka, origin je ${originKey}`)
   }
   
-  // Ak nie je priamy kľúč, hľadaj obrázok ktorý zaberá túto bunku
+  // Vymaž origin bunku
+  if (cellImages[originKey]) {
+    const originData = cellImages[originKey]
+    console.log(`🗑️ Nájdený origin ${originKey}, mažem...`)
+    mainScene.removeBuilding(originKey)
+    delete cellImages[originKey]
+    deleted = true
+    
+    // Vymaž všetky sekundárne bunky tejto budovy
+    const cellsX = originData.cellsX || 1
+    const cellsY = originData.cellsY || 1
+    
+    if (cellsX > 1 || cellsY > 1) {
+      const [originRow, originCol] = originKey.split('-').map(Number)
+      for (let r = 0; r < cellsY; r++) {
+        for (let c = 0; c < cellsX; c++) {
+          if (r === 0 && c === 0) continue // Skip origin
+          const secondaryKey = `${originRow + r}-${originCol + c}`
+          if (cellImages[secondaryKey] && cellImages[secondaryKey].isSecondary) {
+            console.log(`🗑️ Mažem sekundárnu bunku ${secondaryKey}`)
+            delete cellImages[secondaryKey]
+          }
+        }
+      }
+    }
+  }
+  
+  // Ak nebola nájdená origin bunka, hľadaj obrázok ktorý zaberá túto bunku
   if (!deleted) {
     for (const imgKey in cellImages) {
       const [imgRow, imgCol] = imgKey.split('-').map(Number)
@@ -1369,6 +1507,23 @@ const deleteImageAtCell = (row, col) => {
         console.log(`🗑️ Nájdený obrázok ${imgKey} zaberajúci [${row}, ${col}], mažem...`)
         mainScene.removeBuilding(imgKey)
         delete cellImages[imgKey]
+        
+        // Vymaž aj sekundárne bunky
+        const cellsX = img.cellsX || 1
+        const cellsY = img.cellsY || 1
+        if (cellsX > 1 || cellsY > 1) {
+          for (let r = 0; r < cellsY; r++) {
+            for (let c = 0; c < cellsX; c++) {
+              if (r === 0 && c === 0) continue
+              const secondaryKey = `${imgRow + r}-${imgCol + c}`
+              if (cellImages[secondaryKey] && cellImages[secondaryKey].isSecondary) {
+                console.log(`🗑️ Mažem sekundárnu bunku ${secondaryKey}`)
+                delete cellImages[secondaryKey]
+              }
+            }
+          }
+        }
+        
         deleted = true
         break
       }
@@ -1429,14 +1584,16 @@ defineExpose({
     })
     // NEPREPISUJ cellImages = {} lebo PersonManager má referenciu na tento objekt!
   },
-  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false, bitmap = null, tileName = '', tileMetadata = null) => {
+  placeImageAtCell: (row, col, url, cellsX = 1, cellsY = 1, isBackground = false, isRoadTile = false, bitmap = null, tileName = '', tileMetadata = null, buildingData = null) => {
     const key = `${row}-${col}`
     // Najprv vymaž existujúci obrázok ak tam je
     if (cellImages[key]) {
       mainScene?.removeBuilding(key)
       delete cellImages[key]
     }
-    cellImages[key] = { 
+    
+    // Priprav dáta pre uloženie
+    const cellData = { 
       url, 
       cellsX, 
       cellsY, 
@@ -1444,8 +1601,31 @@ defineExpose({
       isRoadTile,
       bitmap,
       templateName: tileName,
-      tileMetadata: tileMetadata || (isRoadTile && tileName ? { name: tileName } : null)
+      tileMetadata: tileMetadata || (isRoadTile && tileName ? { name: tileName } : null),
+      buildingData: buildingData || null,
+      originRow: row,
+      originCol: col
     }
+    
+    // Ulož na hlavnej pozícii
+    cellImages[key] = cellData
+    
+    // Pre budovy väčšie ako 1x1, ulož referenciu na všetky zabraté políčka
+    if (cellsX > 1 || cellsY > 1) {
+      for (let r = 0; r < cellsX; r++) {
+        for (let c = 0; c < cellsY; c++) {
+          if (r === 0 && c === 0) continue // Hlavné políčko už je uložené
+          const cellKey = `${row + r}-${col + c}`
+          cellImages[cellKey] = {
+            ...cellData,
+            isSecondary: true,
+            originRow: row,
+            originCol: col
+          }
+        }
+      }
+    }
+    
     // Počas batch loadingu preskočíme tiene (vykonajú sa na konci)
     mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap, isBatchLoading)
     
@@ -1532,7 +1712,7 @@ onUnmounted(() => {
 
 <template>
   <div class="phaser-container">
-    <div ref="gameContainer" class="game-container"></div>
+    <div ref="gameContainer" class="game-container" :class="cursorClass"></div>
     
     <!-- Ovládacie prvky -->
     <div class="controls-toggle">
@@ -1585,6 +1765,19 @@ onUnmounted(() => {
 .game-container {
   width: 100%;
   height: 100%;
+  cursor: default;
+}
+
+.game-container.has-selection {
+  cursor: crosshair;
+}
+
+.game-container.road-mode {
+  cursor: crosshair;
+}
+
+.game-container.delete-mode {
+  cursor: not-allowed;
 }
 
 .game-container canvas {

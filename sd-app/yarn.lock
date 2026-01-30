@@ -96,6 +96,11 @@
     "@vue/compiler-dom" "3.5.24"
     "@vue/shared" "3.5.24"
 
+"@vue/devtools-api@^6.6.4":
+  version "6.6.4"
+  resolved "https://registry.npmjs.org/@vue/devtools-api/-/devtools-api-6.6.4.tgz"
+  integrity sha512-sGhTPMuXqZ1rVOk32RylztWkfXTRhuS7vgAKv0zjqk8gbsHkJ7xfFf+jbySxt7tWObEJwyKaHMikV/WGDiQm8g==
+
 "@vue/reactivity@3.5.24":
   version "3.5.24"
   resolved "https://registry.npmjs.org/@vue/reactivity/-/reactivity-3.5.24.tgz"
@@ -287,7 +292,14 @@ tinyglobby@^0.2.15:
   optionalDependencies:
     fsevents "~2.3.3"
 
-vue@^3.2.25, vue@^3.5.24, vue@3.5.24:
+vue-router@^4.6.4:
+  version "4.6.4"
+  resolved "https://registry.npmjs.org/vue-router/-/vue-router-4.6.4.tgz"
+  integrity sha512-Hz9q5sa33Yhduglwz6g9skT8OBPii+4bFn88w6J+J4MfEo4KRRpmiNG/hHHkdbRFlLBOqxN8y8gf2Fb0MTUgVg==
+  dependencies:
+    "@vue/devtools-api" "^6.6.4"
+
+vue@^3.2.25, vue@^3.5.0, vue@^3.5.24, vue@3.5.24:
   version "3.5.24"
   resolved "https://registry.npmjs.org/vue/-/vue-3.5.24.tgz"
   integrity sha512-uTHDOpVQTMjcGgrqFPSb8iO2m1DUvo+WbGqoXQz8Y1CeBYQ0FXf2z1gLRaBtHjlRz7zZUBHxjVB5VTLzYkvftg==

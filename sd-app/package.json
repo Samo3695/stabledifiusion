@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "phaser": "^3.90.0",
-    "vue": "^3.5.24"
+    "vue": "^3.5.24",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@rollup/rollup-win32-x64-msvc": "^4.53.2",

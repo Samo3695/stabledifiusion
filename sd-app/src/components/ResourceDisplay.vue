@@ -82,7 +82,6 @@ const resourceMap = computed(() => {
 
 <style scoped>
 .resource-display {
-  height: 100%;
   display: flex;
   flex-direction: column;
   background: white;

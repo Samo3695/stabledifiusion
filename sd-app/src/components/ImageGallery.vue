@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, onMounted } from 'vue'
+import roadTileManager from '../utils/roadTileManager.js'
 
 const props = defineProps({
   images: Array,
@@ -33,14 +34,15 @@ const emit = defineEmits([
   'road-tiles-ready',
   'road-opacity-changed',
   'person-spawn-settings-changed',
-  'update-building-data'
+  'update-building-data',
+  'command-center-selected'
 ])
 
 const selectedImage = ref(null)
 const selectedGridSize = ref(1) // 1, 4, 9, 16, 25, alebo -1 pre režim mazania
 const activeGalleryTab = ref('roads') // 'gallery' alebo 'roads'
-const roadTiles = ref([]) // Vyrezané road tiles zo sprite
-const roadTilesOriginal = ref([]) // Originálne road tiles bez opacity zmeny
+const roadTiles = ref([]) // Road tiles - synchronizované s roadTileManager
+const roadTilesOriginal = ref([]) // Kópia pre referenčné účely
 const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber tiles
 const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 const spawnPersonsEnabled = ref(props.personSpawnEnabled) // Či pridať osoby pri kliknutí na road tile
@@ -48,7 +50,9 @@ const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno
 
 // Building data
 const isBuilding = ref(false)
+const isCommandCenter = ref(false) // Či je budova command center
 const buildingName = ref('') // Názov budovy
+const buildingSize = ref('default') // Veľkosť budovy
 const buildCost = ref([]) // [{resourceId, resourceName, amount}]
 const operationalCost = ref([]) // [{resourceId, resourceName, amount}]
 const production = ref([]) // [{resourceId, resourceName, amount}]
@@ -229,6 +233,10 @@ watch(roadTiles, (tiles) => {
     if (activeGalleryTab.value === 'roads') {
       emit('road-building-mode-changed', roadBuildingMode.value)
     }
+    // Synchronizuj s roadTileManager
+    if (roadTileManager.getTiles().length === 0) {
+      console.log('🔄 ImageGallery: Synchronizujem tiles s roadTileManager')
+    }
   }
 }, { immediate: true })
 
@@ -244,12 +252,14 @@ const emitPersonSettings = () => {
 watch(spawnPersonsEnabled, () => emitPersonSettings(), { immediate: true })
 watch(personsPerPlacement, () => emitPersonSettings())
 
-// Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, buildingName, buildCost, operationalCost, production], () => {
+// Funkcia na uloženie building data
+const saveBuildingData = () => {
   if (selectedImage.value) {
     const buildingData = {
       isBuilding: isBuilding.value,
+      isCommandCenter: isCommandCenter.value,
       buildingName: buildingName.value,
+      buildingSize: buildingSize.value,
       buildCost: buildCost.value,
       operationalCost: operationalCost.value,
       production: production.value
@@ -262,60 +272,43 @@ watch([isBuilding, buildingName, buildCost, operationalCost, production], () => 
     
     console.log('💾 Building data automaticky uložené:', buildingData)
   }
+}
+
+// Watch na building data - automaticky ukladaj pri každej zmene
+watch([isBuilding, isCommandCenter, buildingName, buildingSize, buildCost, operationalCost, production], () => {
+  saveBuildingData()
 }, { deep: true })
+
+// Explicitný watch na buildingSize pre okamžité uloženie
+watch(buildingSize, (newSize) => {
+  console.log('📐 Building size zmenené na:', newSize)
+  saveBuildingData()
+})
+
+// Watch na isCommandCenter - command center môže byť len jeden
+watch(isCommandCenter, (newValue) => {
+  if (newValue === true && selectedImage.value) {
+    // Notifikuj parent komponent že táto budova je teraz command center
+    emit('command-center-selected', selectedImage.value.id)
+    console.log('🏛️ Command center označený:', selectedImage.value.id)
+  }
+})
 
 // Funkcia na regenerovanie road tiles s novou opacity
 const regenerateRoadTilesWithOpacity = async () => {
-  if (roadTilesOriginal.value.length === 0) {
-    console.warn('⚠️ Originálne tiles nie sú dostupné')
-    return
-  }
+  console.log(`🎨 ImageGallery: Regenerujem tiles s novou opacity ${roadOpacity.value}%`)
   
-  const opacityValue = roadOpacity.value / 100 // Konvertuj na 0-1
-  const newTiles = []
-  
-  for (const originalTile of roadTilesOriginal.value) {
-    // Vytvor canvas z originálneho URL
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
+  try {
+    const tiles = await roadTileManager.changeOpacity(roadOpacity.value)
+    roadTiles.value = tiles
+    roadTilesOriginal.value = JSON.parse(JSON.stringify(tiles))
+    console.log(`✅ ImageGallery: Road tiles regenerované s opacity ${roadOpacity.value}%`)
     
-    await new Promise((resolve, reject) => {
-      img.onload = async () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = img.width
-        canvas.height = img.height
-        const ctx = canvas.getContext('2d')
-        
-        // Nastav opacity a nakresli obrázok
-        ctx.globalAlpha = opacityValue
-        ctx.drawImage(img, 0, 0)
-        
-        let bitmap = null
-        try {
-          bitmap = await createImageBitmap(canvas)
-        } catch (e) {
-          console.warn('createImageBitmap zlyhalo, fallback na dataURL', e)
-        }
-        
-        newTiles.push({
-          ...originalTile,
-          url: canvas.toDataURL('image/png'),
-          bitmap,
-          opacity: roadOpacity.value
-        })
-        
-        resolve()
-      }
-      img.onerror = reject
-      img.src = originalTile.url
-    })
+    // Emitni event s novou opacity pre parent komponent
+    emit('road-opacity-changed', roadOpacity.value)
+  } catch (error) {
+    console.error('❌ ImageGallery: Chyba pri regenerácii tiles:', error)
   }
-  
-  roadTiles.value = newTiles
-  console.log(`🎨 Road tiles regenerované s opacity ${roadOpacity.value}%`)
-  
-  // Emitni event s novými tiles pre parent komponent aby regeneroval canvas
-  emit('road-opacity-changed', roadOpacity.value)
 }
 
 // Watch pre zmenu opacity
@@ -325,14 +318,12 @@ watch(roadOpacity, async (newOpacity) => {
 
 // Funkcia na získanie road tile podľa smeru
 const getRoadTileByDirection = (direction) => {
-  // direction: 'horizontal' (↘) alebo 'vertical' (↙)
-  const tileName = direction === 'horizontal' ? 'Rovná ↘' : 'Rovná ↙'
-  return roadTiles.value.find(t => t.name === tileName)
+  return roadTileManager.getTileByDirection(direction)
 }
 
 // Funkcia na získanie road tile podľa indexu (pre load z metadata)
 const getRoadTileByIndex = (tileIndex) => {
-  return roadTiles.value.find(t => t.tileIndex === tileIndex)
+  return roadTileManager.getTileByIndex(tileIndex)
 }
 
 // Expose pre parent komponent
@@ -373,13 +364,16 @@ const openModal = (image) => {
   // Načítaj building data ak existujú
   if (image.buildingData) {
     isBuilding.value = image.buildingData.isBuilding || false
+    isCommandCenter.value = image.buildingData.isCommandCenter || false
     buildingName.value = image.buildingData.buildingName || ''
+    buildingSize.value = image.buildingData.buildingSize || 'default'
     buildCost.value = image.buildingData.buildCost || []
     operationalCost.value = image.buildingData.operationalCost || []
     production.value = image.buildingData.production || []
   } else {
     isBuilding.value = false
     buildingName.value = ''
+    buildingSize.value = 'default'
     buildCost.value = []
     operationalCost.value = []
     production.value = []
@@ -389,7 +383,9 @@ const openModal = (image) => {
 const closeModal = () => {
   selectedImage.value = null
   isBuilding.value = false
+  isCommandCenter.value = false
   buildingName.value = ''
+  buildingSize.value = 'default'
   buildCost.value = []
   operationalCost.value = []
   production.value = []
@@ -694,12 +690,29 @@ const removeProductionResource = (index) => {
               <p>{{ formatDate(selectedImage.timestamp) }}</p>
             </div>
 
+            <div class="info-section">
+              <h3>📐 Building size:</h3>
+              <select v-model="buildingSize" class="building-size-select">
+                <option value="default">Default (originál)</option>
+                <option value="1x1">1x1</option>
+                <option value="2x2">2x2</option>
+                <option value="3x3">3x3</option>
+                <option value="4x4">4x4</option>
+                <option value="5x5">5x5</option>
+              </select>
+            </div>
+
             <!-- Building section -->
             <div class="info-section building-section">
               <div class="building-header">
                 <label class="building-checkbox">
                   <input type="checkbox" v-model="isBuilding" />
                   <span>Je to budova?</span>
+                </label>
+                
+                <label v-if="isBuilding" class="building-checkbox" style="margin-top: 0.5rem;">
+                  <input type="checkbox" v-model="isCommandCenter" />
+                  <span>Is Command Center</span>
                 </label>
               </div>
 
@@ -1509,5 +1522,28 @@ h2 {
 
 .btn-remove:hover {
   background: #fdd;
+}
+
+/* Building size select */
+.building-size-select {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #d0d7de;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.building-size-select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.building-size-select:hover {
+  border-color: #667eea;
 }
 </style>

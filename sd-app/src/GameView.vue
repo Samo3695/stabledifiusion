@@ -1,10 +1,13 @@
 <script setup>
-import { ref, watch, nextTick } from 'vue'
-import ImageGallery from './components/ImageGallery.vue'
+import { ref, watch, nextTick, computed } from 'vue'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
 import ResourceDisplay from './components/ResourceDisplay.vue'
+import BuildingSelector from './components/BuildingSelector.vue'
+import RoadSelector from './components/RoadSelector.vue'
+import Modal from './components/Modal.vue'
 import { buildRoad, regenerateRoadTilesOnCanvas } from './utils/roadBuilder.js'
+import { loadProject } from './utils/projectLoader.js'
 
 const images = ref([])
 const lastImageCellsX = ref(1)
@@ -21,8 +24,8 @@ const deleteMode = ref(false)
 const environmentColors = ref({ hue: 0, saturation: 100, brightness: 100 })
 const textureSettings = ref({ tilesPerImage: 1, tileResolution: 512, customTexture: null })
 const roadBuildingMode = ref(false)
+const roadDeleteMode = ref(false)
 const roadTiles = ref([])
-const imageGalleryRef = ref(null)
 const isLoading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
@@ -32,6 +35,165 @@ const resources = ref([])
 const workforce = ref([])
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png')
 const roadOpacity = ref(100)
+const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
+const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
+const showBuildingModal = ref(false) // Či sa má zobraziť modal s metadátami budovy
+const clickedBuilding = ref(null) // Údaje o kliknutej budove
+const showInsufficientResourcesModal = ref(false) // Modal pre nedostatok resources
+const insufficientResourcesData = ref({ 
+  buildingName: '',
+  missingBuildResources: [],
+  missingOperationalResources: []
+})
+
+// Filtrované budovy z galérie
+const buildings = computed(() => {
+  return images.value.filter(img => img.buildingData?.isBuilding === true)
+})
+
+// Computed property: Spočítaj použité resources zo všetkých budov na canvase
+const usedResources = computed(() => {
+  const used = {}
+  
+  // Bezpečnostná kontrola
+  if (!canvasImagesMap.value || typeof canvasImagesMap.value !== 'object') {
+    return used
+  }
+  
+  // Prejdi všetky obrázky na canvase
+  Object.values(canvasImagesMap.value).forEach(cellData => {
+    if (!cellData) return
+    
+    // Preskočíme sekundárne bunky multi-cell budov
+    if (cellData.isSecondary) return
+    
+    const imageId = cellData.imageId
+    if (!imageId) return
+    
+    // Nájdi obrázok v images array
+    const image = images.value.find(img => img.id === imageId)
+    if (!image || !image.buildingData || !image.buildingData.isBuilding) return
+    
+    // Sčítaj operational costs (potrebné na prevádzku)
+    const operationalCost = image.buildingData.operationalCost || []
+    operationalCost.forEach(cost => {
+      if (!cost || !cost.resourceId) return
+      if (!used[cost.resourceId]) {
+        used[cost.resourceId] = 0
+      }
+      used[cost.resourceId] += cost.amount || 0
+    })
+  })
+  
+  return used
+})
+
+// Computed property: Spočítaj produkované resources zo všetkých budov na canvase
+const producedResources = computed(() => {
+  const produced = {}
+  
+  // Bezpečnostná kontrola
+  if (!canvasImagesMap.value || typeof canvasImagesMap.value !== 'object') {
+    return produced
+  }
+  
+  // Prejdi všetky obrázky na canvase
+  Object.values(canvasImagesMap.value).forEach(cellData => {
+    if (!cellData) return
+    
+    // Preskočíme sekundárne bunky multi-cell budov
+    if (cellData.isSecondary) return
+    
+    const imageId = cellData.imageId
+    if (!imageId) return
+    
+    // Nájdi obrázok v images array
+    const image = images.value.find(img => img.id === imageId)
+    if (!image || !image.buildingData || !image.buildingData.isBuilding) return
+    
+    // Sčítaj production (čo budova produkuje)
+    const production = image.buildingData.production || []
+    production.forEach(prod => {
+      if (!prod || !prod.resourceId) return
+      if (!produced[prod.resourceId]) {
+        produced[prod.resourceId] = 0
+      }
+      produced[prod.resourceId] += prod.amount || 0
+    })
+  })
+  
+  return produced
+})
+
+// Funkcia na kontrolu dostupnosti resources pre budovu
+const checkBuildingResources = (buildingData) => {
+  if (!buildingData || !buildingData.isBuilding) {
+    return { hasEnough: true, missingBuild: [], missingOperational: [] }
+  }
+  
+  const missingBuild = []
+  const missingOperational = []
+  
+  // Kontrola build cost (potrebné na stavbu)
+  const buildCost = buildingData.buildCost || []
+  buildCost.forEach(cost => {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (!resource) {
+      missingBuild.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: 0
+      })
+      return
+    }
+    
+    // Pre build cost kontrolujeme dostupné (base + production - used)
+    const produced = producedResources.value[cost.resourceId] || 0
+    const used = usedResources.value[cost.resourceId] || 0
+    const available = resource.amount + produced - used
+    
+    if (available < cost.amount) {
+      missingBuild.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: available
+      })
+    }
+  })
+  
+  // Kontrola operational cost (potrebné na prevádzku)
+  const operationalCost = buildingData.operationalCost || []
+  operationalCost.forEach(cost => {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (!resource) {
+      missingOperational.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: 0
+      })
+      return
+    }
+    
+    // Spočítaj dostupné (base + production - used)
+    const produced = producedResources.value[cost.resourceId] || 0
+    const used = usedResources.value[cost.resourceId] || 0
+    const available = resource.amount + produced - used
+    
+    if (available < cost.amount) {
+      missingOperational.push({
+        name: cost.resourceName,
+        needed: cost.amount,
+        available: available
+      })
+    }
+  })
+  
+  return {
+    hasEnough: missingBuild.length === 0 && missingOperational.length === 0,
+    missingBuild,
+    missingOperational
+  }
+}
 
 const handleDelete = (id) => {
   images.value = images.value.filter(img => img.id !== id)
@@ -138,6 +300,8 @@ const handleCellSelected = ({ row, col }) => {
     canvasRef.value.deleteImageAtCell(row, col)
     selectedImageId.value = null
     selectedImageData.value = null
+    // Aktualizuj canvas mapu pre prepočítanie resources
+    handleCanvasUpdated()
     return
   }
   
@@ -149,6 +313,22 @@ const handleCellSelected = ({ row, col }) => {
     }
     
     if (selectedImage) {
+      // Kontrola resources pre budovy
+      if (selectedImage.buildingData && selectedImage.buildingData.isBuilding) {
+        const resourceCheck = checkBuildingResources(selectedImage.buildingData)
+        if (!resourceCheck.hasEnough) {
+          // Zobraz modal s chýbajúcimi resources
+          insufficientResourcesData.value = {
+            buildingName: selectedImage.buildingData.buildingName || 'Budova',
+            missingBuildResources: resourceCheck.missingBuild,
+            missingOperationalResources: resourceCheck.missingOperational
+          }
+          showInsufficientResourcesModal.value = true
+          console.log('⛔ GameView: Nedostatok resources:', resourceCheck)
+          return // Nezakladať budovu
+        }
+      }
+      
       const isRoadTile = selectedImageId.value.startsWith('road_tile_')
       
       if (isRoadTile && canvasRef.value.placeImageAtCell) {
@@ -178,7 +358,7 @@ const handleCellSelected = ({ row, col }) => {
           selectedImage.url, 
           lastImageCellsX.value, 
           lastImageCellsY.value, 
-          selectedImage.isBackground || false, 
+          selectedImage, // Pošli cel\u00fd objekt aby sa ulo\u017eili buildingData
           selectedImage.templateName || '',
           isRoadTile
         )
@@ -188,8 +368,11 @@ const handleCellSelected = ({ row, col }) => {
   }
 }
 
-const handleImagePlaced = ({ row, col }) => {
-  selectedCell.value = { row: -1, col: -1 }
+const handleImagePlaced = (data) => {
+  if (data && data.row !== undefined && data.col !== undefined) {
+    selectedCell.value = { row: -1, col: -1 }
+  }
+  handleCanvasUpdated()
 }
 
 const handleToggleNumbering = (value) => {
@@ -204,189 +387,75 @@ const handleToggleGrid = (value) => {
   showGrid.value = value
 }
 
-const handleLoadProject = (projectData) => {
-  const loadedImages = projectData.images || []
-  const placedImages = projectData.placedImages || {}
-  const loadedColors = projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 }
-  const loadedTiles = projectData.backgroundTiles || []
-  const loadedTextureSettings = projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null }
-  const loadedResources = projectData.resources || []
-  const loadedWorkforce = projectData.workforce || []
-  const loadedRoadSpriteUrl = projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png'
-  const loadedRoadOpacity = projectData.roadOpacity || 100
+const handleLoadProject = async (projectData) => {
+  console.log('📂 GameView: Začínam načítavať projekt')
   
-  environmentColors.value = loadedColors
-  textureSettings.value = loadedTextureSettings
-  resources.value = loadedResources
-  workforce.value = loadedWorkforce
-  roadSpriteUrl.value = loadedRoadSpriteUrl
-  roadOpacity.value = loadedRoadOpacity
+  // Nastav loading state
+  isLoading.value = true
+  loadingProgress.value = 0
+  loadingStatus.value = 'Načítavam projekt...'
   
-  if (loadedTextureSettings.customTexture && canvasRef.value) {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = async () => {
-      const canvas = document.createElement('canvas')
-      const resolution = loadedTextureSettings.tileResolution || 512
-      canvas.width = resolution
-      canvas.height = resolution
-      const ctx = canvas.getContext('2d')
-      ctx.drawImage(img, 0, 0, resolution, resolution)
-      const processedTexture = canvas.toDataURL('image/jpeg', 0.9)
-      
-      await canvasRef.value.setBackgroundTiles([processedTexture], loadedTextureSettings.tilesPerImage || 1)
-    }
-    img.src = loadedTextureSettings.customTexture
-  }
-  
-  if (loadedTiles.length > 0 && canvasRef.value && canvasRef.value.setBackgroundTiles) {
-    canvasRef.value.setBackgroundTiles(loadedTiles, 1)
-  }
-  
-  if (loadedImages.length === 0) {
-    images.value = []
-    selectedImageId.value = null
-    if (canvasRef.value && canvasRef.value.clearAll) {
-      canvasRef.value.clearAll()
-    }
-    return
-  }
-  
-  images.value = loadedImages.map(img => ({
-    id: img.id || Date.now().toString() + Math.random(),
-    url: img.url,
-    prompt: img.prompt || '',
-    negativePrompt: img.negativePrompt || '',
-    cellsX: img.cellsX || 1,
-    cellsY: img.cellsY || 1,
-    view: img.view || '',
-    timestamp: img.timestamp ? new Date(img.timestamp) : new Date(),
-    buildingData: img.buildingData || null
-  }))
-  
-  if (images.value.length > 0) {
-    selectedImageId.value = images.value[0].id
-  } else {
-    selectedImageId.value = null
-  }
-  
-  if (canvasRef.value && Object.keys(placedImages).length > 0) {
-    if (typeof canvasRef.value.clearAll === 'function') {
-      canvasRef.value.clearAll()
-    }
-    
-    const totalObjects = Object.keys(placedImages).length
-    
-    isLoading.value = true
-    loadingProgress.value = 0
-    loadingStatus.value = `Načítavam mapu (0/${totalObjects})...`
-    
-    if (typeof canvasRef.value.startBatchLoading === 'function') {
-      canvasRef.value.startBatchLoading()
-    }
-    
-    const objectsToLoad = Object.entries(placedImages)
-    const BATCH_SIZE = 10
-    let currentIndex = 0
-    let successCount = 0
-    
-    const loadBatch = async () => {
-      const batchEnd = Math.min(currentIndex + BATCH_SIZE, totalObjects)
-      
-      for (let i = currentIndex; i < batchEnd; i++) {
-        const [key, imageData] = objectsToLoad[i]
-        const { row, col, url, cellsX, cellsY, isBackground, isRoadTile, templateName, tileMetadata } = imageData
-        
-        let finalUrl = url
-        let finalBitmap = null
-        if (isRoadTile && tileMetadata && roadTiles.value.length > 0) {
-          const tile = roadTiles.value.find(t => t.tileIndex === tileMetadata.tileIndex)
-          if (tile) {
-            finalUrl = tile.url
-            finalBitmap = tile.bitmap
-          }
-        }
-        
-        if (canvasRef.value && typeof canvasRef.value.placeImageAtCell === 'function') {
-          try {
-            canvasRef.value.placeImageAtCell(
-              row, 
-              col, 
-              finalUrl, 
-              cellsX, 
-              cellsY, 
-              isBackground || false, 
-              isRoadTile || false, 
-              finalBitmap,
-              templateName || '',
-              tileMetadata || null
-            )
-            successCount++
-          } catch (error) {
-            console.error(`❌ Chyba pri umiestnení objektu na [${row}, ${col}]:`, error)
-          }
-        }
+  try {
+    // Použiť projectLoader service
+    const loadedData = await loadProject(
+      projectData,
+      canvasRef.value,
+      (progress, status) => {
+        loadingProgress.value = progress
+        loadingStatus.value = status
       }
+    )
+    
+    // Aplikuj načítané dáta
+    roadTiles.value = loadedData.roadTiles
+    environmentColors.value = loadedData.environmentColors
+    textureSettings.value = loadedData.textureSettings
+    resources.value = loadedData.resources
+    workforce.value = loadedData.workforce
+    roadSpriteUrl.value = loadedData.roadSpriteUrl
+    roadOpacity.value = loadedData.roadOpacity
+    
+    // Načítaj images
+    const loadedImages = loadedData.images || []
+    
+    if (loadedImages.length === 0) {
+      images.value = []
+      selectedImageId.value = null
+    } else {
+      images.value = loadedImages.map(img => ({
+        id: img.id || Date.now().toString() + Math.random(),
+        url: img.url,
+        prompt: img.prompt || '',
+        negativePrompt: img.negativePrompt || '',
+        cellsX: img.cellsX || 1,
+        cellsY: img.cellsY || 1,
+        view: img.view || '',
+        timestamp: img.timestamp ? new Date(img.timestamp) : new Date(),
+        buildingData: img.buildingData || null
+      }))
       
-      currentIndex = batchEnd
-      loadingProgress.value = Math.round((currentIndex / totalObjects) * 100)
-      loadingStatus.value = `Načítavam mapu (${currentIndex}/${totalObjects})...`
-      
-      if (currentIndex < totalObjects) {
-        requestAnimationFrame(loadBatch)
-      } else {
-        loadingStatus.value = 'Finalizujem tiene a postavy...'
-        
-        setTimeout(() => {
-          if (canvasRef.value && typeof canvasRef.value.finishBatchLoading === 'function') {
-            canvasRef.value.finishBatchLoading()
-          }
-          
-          setTimeout(() => {
-            isLoading.value = false
-            loadingProgress.value = 100
-            loadingStatus.value = 'Hotovo!'
-          }, 500)
-        }, 100)
+      if (images.value.length > 0) {
+        selectedImageId.value = images.value[0].id
       }
     }
     
-    const applyRoadSprite = async (retryCount = 0) => {
-      const MAX_RETRIES = 20
+    // Aktualizuj canvas mapu
+    setTimeout(() => {
+      handleCanvasUpdated()
       
-      if (imageGalleryRef.value && imageGalleryRef.value.updateRoadSprite) {
-        if (imageGalleryRef.value.roadOpacity !== undefined) {
-          imageGalleryRef.value.roadOpacity = loadedRoadOpacity
-        }
-        
-        await new Promise(resolve => setTimeout(resolve, 50))
-        await nextTick()
-        await imageGalleryRef.value.updateRoadSprite(loadedRoadSpriteUrl)
-        await new Promise(resolve => setTimeout(resolve, 300))
-        return true
-      } else if (retryCount < MAX_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, 100))
-        return await applyRoadSprite(retryCount + 1)
-      } else {
-        return false
-      }
-    }
+      // Ukončenie loading state
+      setTimeout(() => {
+        isLoading.value = false
+        loadingProgress.value = 100
+        loadingStatus.value = 'Projekt načítaný!'
+        console.log('✅ GameView: Projekt úspešne načítaný')
+      }, 500)
+    }, 500)
     
-    const startLoadingWithDelay = async () => {
-      const spriteLoaded = await applyRoadSprite()
-      
-      if (spriteLoaded) {
-        let waitCount = 0
-        while (roadTiles.value.length === 0 && waitCount < 20) {
-          await new Promise(resolve => setTimeout(resolve, 100))
-          waitCount++
-        }
-      }
-      
-      requestAnimationFrame(loadBatch)
-    }
-    
-    startLoadingWithDelay()
+  } catch (error) {
+    console.error('❌ GameView: Chyba pri načítaní projektu:', error)
+    isLoading.value = false
+    loadingStatus.value = 'Chyba pri načítaní projektu'
   }
 }
 
@@ -400,11 +469,134 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
   if (image) {
     image.buildingData = {
       isBuilding: buildingData.isBuilding,
+      isCommandCenter: buildingData.isCommandCenter,
+      buildingName: buildingData.buildingName,
+      buildingSize: buildingData.buildingSize,
       buildCost: buildingData.buildCost,
       operationalCost: buildingData.operationalCost,
       production: buildingData.production
     }
   }
+}
+
+// Handler pre command center selection - command center môže byť len jeden
+const handleCommandCenterSelected = (selectedImageId) => {
+  // Prejdi všetky obrázky a zruš command center na všetkých okrem aktuálneho
+  images.value.forEach(img => {
+    if (img.id !== selectedImageId && img.buildingData?.isCommandCenter) {
+      img.buildingData.isCommandCenter = false
+      console.log('❌ GameView: Command center zrušený na obrázku:', img.id)
+    }
+  })
+  console.log('🏛️ GameView: Command center nastavený na:', selectedImageId)
+}
+
+// Aktualizuj mapu budov na canvase
+const handleCanvasUpdated = () => {
+  if (canvasRef.value && canvasRef.value.cellImages) {
+    const cellImages = canvasRef.value.cellImages()
+    const newMap = {}
+    
+    Object.entries(cellImages).forEach(([key, data]) => {
+      // Preskočíme sekundárne bunky multi-cell budov
+      if (data.isSecondary) {
+        return
+      }
+      
+      // Nájdi imageId z URL alebo templateName
+      const matchingImage = images.value.find(img => 
+        img.url === data.url || 
+        (data.templateName && img.templateName === data.templateName)
+      )
+      
+      if (matchingImage) {
+        newMap[key] = {
+          imageId: matchingImage.id,
+          url: data.url,
+          templateName: data.templateName,
+          isSecondary: false
+        }
+      }
+    })
+    
+    canvasImagesMap.value = newMap
+    console.log('🔄 GameView: Canvas aktualizovaný, budov na canvase:', Object.keys(newMap).length)
+  }
+}
+
+// Handler pre výber budovy z BuildingSelector
+const handleBuildingSelected = (data) => {
+  // Ak je data null, odznač budovu
+  if (data === null) {
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    selectedImageData.value = null
+    console.log('🏗️ GameView: Budova odznačená')
+    return
+  }
+  
+  const { building, cellsX, cellsY } = data
+  selectedBuildingId.value = building.id
+  selectedImageId.value = building.id
+  selectedImageData.value = building
+  lastImageCellsX.value = cellsX
+  lastImageCellsY.value = cellsY
+  
+  // Zruš road building mode a bulldozer mode pri výbere budovy
+  roadBuildingMode.value = false
+  roadDeleteMode.value = false
+  deleteMode.value = false
+  
+  console.log(`🏗️ GameView: Vybraná budova: ${building.buildingData?.buildingName} (${cellsX}x${cellsY})`)
+}
+
+// Handler pre prepnutie road building mode z RoadSelector
+const handleRoadModeToggled = (isEnabled) => {
+  roadBuildingMode.value = isEnabled
+  if (isEnabled) {
+    // Zrušiť výber budovy a delete mode pri zapnutí road mode
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    roadDeleteMode.value = false
+  }
+  console.log(`🛣️ GameView: Road building mode: ${isEnabled ? 'ON' : 'OFF'}`)
+}
+
+// Handler pre prepnutie road delete mode z RoadSelector
+const handleRoadDeleteModeToggled = (isEnabled) => {
+  roadDeleteMode.value = isEnabled
+  if (isEnabled) {
+    // Zrušiť výber budovy a building mode pri zapnutí delete mode
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    roadBuildingMode.value = false
+  }
+  console.log(`🚜 GameView: Road delete mode: ${isEnabled ? 'ON' : 'OFF'}`)
+}
+
+// Handler pre kliknutie na budovu na canvase
+const handleBuildingClicked = ({ row, col, buildingData }) => {
+  console.log('🏗️ GameView: Kliknuté na budovu na pozícii:', row, col, buildingData)
+  
+  // buildingData z canvasu už obsahuje všetky potrebné údaje vrátane buildingData
+  if (buildingData && buildingData.buildingData) {
+    clickedBuilding.value = {
+      row,
+      col,
+      ...buildingData.buildingData,
+      imageUrl: buildingData.url
+    }
+    showBuildingModal.value = true
+    console.log('📋 Zobrazujem metadata budovy:', clickedBuilding.value)
+  } else {
+    console.warn('⚠️ Budova nemá metadata:', buildingData)
+  }
+}
+
+// Zatvorenie modalu
+const closeBuildingModal = () => {
+  showBuildingModal.value = false
+  clickedBuilding.value = null
 }
 </script>
 
@@ -435,6 +627,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       :showGrid="showGrid"
       :deleteMode="deleteMode"
       :roadBuildingMode="roadBuildingMode"
+      :roadDeleteMode="roadDeleteMode"
       :roadTiles="roadTiles"
       :personSpawnEnabled="personSpawnEnabled"
       :personSpawnCount="personSpawnCount"
@@ -444,6 +637,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       @toggle-gallery="handleToggleGallery"
       @toggle-grid="handleToggleGrid"
       @road-placed="handleRoadPlaced"
+      @building-clicked="handleBuildingClicked"
     />
     
     <!-- Header -->
@@ -471,32 +665,144 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
     
     <!-- Pravý sidebar s Resources -->
     <aside class="sidebar">
-      <ResourceDisplay :resources="resources" />
+      <ResourceDisplay 
+        :resources="resources" 
+        :usedResources="usedResources" 
+        :producedResources="producedResources" 
+      />
+      <BuildingSelector 
+        :buildings="buildings"
+        :selectedBuildingId="selectedBuildingId"
+        @building-selected="handleBuildingSelected"
+      />
+      <RoadSelector 
+        :roadBuildingMode="roadBuildingMode"
+        :roadDeleteMode="roadDeleteMode"
+        @road-mode-toggled="handleRoadModeToggled"
+        @road-delete-mode-toggled="handleRoadDeleteModeToggled"
+      />
     </aside>
     
-    <!-- Galéria dole -->
-    <div v-if="showGallery" class="gallery-container">
-      <ImageGallery 
-        ref="imageGalleryRef"
-        :images="images" 
-        :selectedImageId="selectedImageId"
-        :personSpawnEnabled="personSpawnEnabled"
-        :personSpawnCount="personSpawnCount"
-        :resources="resources"
-        :workforce="workforce"
-        :roadSpriteUrl="roadSpriteUrl"
-        @delete="handleDelete" 
-        @select="handleSelectImage"
-        @place-on-board="handlePlaceOnBoard"
-        @grid-size-changed="handleGridSizeChanged"
-        @delete-mode-changed="handleDeleteModeChanged"
-        @road-building-mode-changed="handleRoadBuildingModeChanged"
-        @road-tiles-ready="handleRoadTilesReady"
-        @road-opacity-changed="handleRoadOpacityChanged"
-        @person-spawn-settings-changed="handlePersonSpawnSettingsChanged"
-        @update-building-data="handleUpdateBuildingData"
-      />
-    </div>
+    <!-- Modal s metadátami budovy -->
+    <Modal 
+      v-if="showBuildingModal && clickedBuilding"
+      :title="clickedBuilding.buildingName || 'Budova'"
+      @close="closeBuildingModal"
+    >
+      <div class="building-modal-content">
+        <!-- Obrázok budovy -->
+        <div class="building-image-preview">
+          <img :src="clickedBuilding.imageUrl" alt="Budova" />
+        </div>
+        
+        <!-- Základné info -->
+        <div class="building-info-section">
+          <h3>Základné informácie</h3>
+          <div class="info-row">
+            <span class="info-label">Názov:</span>
+            <span class="info-value">{{ clickedBuilding.buildingName || 'Bez názvu' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Veľkosť:</span>
+            <span class="info-value">{{ clickedBuilding.buildingSize || 'default' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Pozícia:</span>
+            <span class="info-value">[{{ clickedBuilding.row }}, {{ clickedBuilding.col }}]</span>
+          </div>
+          <div v-if="clickedBuilding.isCommandCenter" class="info-row">
+            <span class="info-label">Typ:</span>
+            <span class="info-value command-center-badge">🏛️ Command Center</span>
+          </div>
+        </div>
+        
+        <!-- Build Cost -->
+        <div v-if="clickedBuilding.buildCost && clickedBuilding.buildCost.length > 0" class="building-info-section">
+          <h3>💰 Náklady na stavbu</h3>
+          <div class="resource-list">
+            <div v-for="(cost, index) in clickedBuilding.buildCost" :key="index" class="resource-item">
+              <span class="resource-name">{{ cost.resourceName }}</span>
+              <span class="resource-amount">{{ cost.amount }}</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Operational Cost -->
+        <div v-if="clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0" class="building-info-section">
+          <h3>⚙️ Prevádzkové náklady</h3>
+          <div class="resource-list">
+            <div v-for="(cost, index) in clickedBuilding.operationalCost" :key="index" class="resource-item">
+              <span class="resource-name">{{ cost.resourceName }}</span>
+              <span class="resource-amount">{{ cost.amount }}</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Production -->
+        <div v-if="clickedBuilding.production && clickedBuilding.production.length > 0" class="building-info-section">
+          <h3>📦 Produkcia</h3>
+          <div class="resource-list">
+            <div v-for="(prod, index) in clickedBuilding.production" :key="index" class="resource-item production">
+              <span class="resource-name">{{ prod.resourceName }}</span>
+              <span class="resource-amount">+{{ prod.amount }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+    
+    <!-- Insufficient Resources Modal -->
+    <Modal 
+      v-if="showInsufficientResourcesModal" 
+      title="⚠️ Nedostatok resources"
+      @close="showInsufficientResourcesModal = false"
+    >
+      <div class="insufficient-resources-content">
+        <h3>🏗️ {{ insufficientResourcesData.buildingName }}</h3>
+        
+        <!-- Chýbajúce resources na stavbu -->
+        <div v-if="insufficientResourcesData.missingBuildResources.length > 0" class="missing-section">
+          <p class="warning-text">
+            🔨 Nemôžete postaviť túto budovu, pretože nemáte dostatok resources potrebných na stavbu:
+          </p>
+          <div class="missing-resources-list">
+            <div 
+              v-for="(resource, index) in insufficientResourcesData.missingBuildResources" 
+              :key="'build-' + index"
+              class="missing-resource-item build-cost"
+            >
+              <span class="resource-name">📦 {{ resource.name }}</span>
+              <span class="resource-amounts">
+                <span class="needed">✏️ Potrebné: {{ resource.needed }}</span>
+                <span class="available">✅ Dostupné: {{ resource.available }}</span>
+                <span class="deficit">❌ Chýba: {{ resource.needed - resource.available }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Chýbajúce resources na prevádzku -->
+        <div v-if="insufficientResourcesData.missingOperationalResources.length > 0" class="missing-section">
+          <p class="warning-text">
+            ⚙️ Nemôžete postaviť túto budovu, pretože nemáte dostatok resources potrebných na prevádzku:
+          </p>
+          <div class="missing-resources-list">
+            <div 
+              v-for="(resource, index) in insufficientResourcesData.missingOperationalResources" 
+              :key="'operational-' + index"
+              class="missing-resource-item operational-cost"
+            >
+              <span class="resource-name">📦 {{ resource.name }}</span>
+              <span class="resource-amounts">
+                <span class="needed">✏️ Potrebné: {{ resource.needed }}</span>
+                <span class="available">✅ Dostupné: {{ resource.available }}</span>
+                <span class="deficit">❌ Chýba: {{ resource.needed - resource.available }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -543,17 +849,6 @@ header {
   overflow-y: auto;
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
   z-index: 20;
-}
-
-.gallery-container {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 250px;
-  height: 210px;
-  z-index: 10;
-  overflow-x: auto;
-  overflow-y: hidden;
 }
 
 /* Loading overlay styles */
@@ -619,5 +914,236 @@ header {
   font-size: 1.1rem;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.9);
+}
+
+/* Header navigation */
+.header-nav {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+}
+
+.nav-button {
+  padding: 0.5rem 1rem;
+  background: white;
+  color: #667eea;
+  text-decoration: none;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: all 0.2s;
+  display: inline-block;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.nav-button:hover {
+  background: #f0f0f0;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Building modal styles */
+.building-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.building-image-preview {
+  width: 100%;
+  max-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.building-image-preview img {
+  max-width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.building-info-section {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 1.25rem;
+  border: 1px solid #e0e0e0;
+}
+
+.building-info-section h3 {
+  margin: 0 0 1rem 0;
+  color: #667eea;
+  font-size: 1.1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  font-weight: 600;
+  color: #555;
+  font-size: 0.95rem;
+}
+
+.info-value {
+  font-weight: 500;
+  color: #333;
+  font-size: 0.95rem;
+}
+
+.command-center-badge {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.resource-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.resource-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  transition: all 0.2s;
+}
+
+.resource-item:hover {
+  border-color: #667eea;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+}
+
+.resource-name {
+  font-weight: 500;
+  color: #333;
+  font-size: 0.95rem;
+}
+
+.resource-amount {
+  color: #667eea;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.25rem 0.75rem;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 12px;
+}
+
+.resource-item.production .resource-amount {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+/* Insufficient Resources Modal */
+.insufficient-resources-content {
+  padding: 1rem;
+  max-width: 600px;
+}
+
+.insufficient-resources-content h3 {
+  margin: 0 0 1.5rem 0;
+  font-size: 1.5rem;
+  color: #667eea;
+  text-align: center;
+}
+
+.missing-section {
+  margin-bottom: 2rem;
+}
+
+.missing-section:last-child {
+  margin-bottom: 0;
+}
+
+.warning-text {
+  font-size: 1rem;
+  color: #f59e0b;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 4px solid #f59e0b;
+  border-radius: 4px;
+}
+
+.missing-resources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.missing-resource-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border-left: 4px solid #ef4444;
+}
+
+.missing-resource-item.build-cost {
+  border-left-color: #f59e0b;
+}
+
+.missing-resource-item.operational-cost {
+  border-left-color: #ef4444;
+}
+
+.missing-resource-item .resource-name {
+  font-weight: 600;
+  font-size: 1rem;
+  color: #1f2937;
+}
+
+.missing-resource-item .resource-amounts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.missing-resource-item .resource-amounts span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.missing-resource-item .needed {
+  color: #6b7280;
+}
+
+.missing-resource-item .available {
+  color: #10b981;
+}
+
+.missing-resource-item .deficit {
+  color: #ef4444;
+  font-weight: 600;
 }
 </style>
