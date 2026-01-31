@@ -311,6 +311,23 @@ export class CarManager {
     
     const { x: targetX, y: targetY } = this.gridToIso(target.row, target.col)
     
+    // Vypočítaj smer pohybu pre výber správnej textúry
+    const deltaRow = target.row - car.currentCell.row
+    const deltaCol = target.col - car.currentCell.col
+    
+    // Nastav správnu textúru podľa smeru pohybu
+    // Ak sa mení row (pohyb po Y izometrickej ploche) = car1 (car-dawn-top-right.png)
+    // Ak sa mení col (pohyb po X izometrickej ploche) = car2 (car-down-top-left.png)
+    if (deltaCol !== 0 && deltaRow === 0) {
+      // Pohyb po col (X osi) - použiť car2
+      car.sprite.setTexture('car2')
+      car.shadow.setTexture('car2')
+    } else if (deltaRow !== 0 && deltaCol === 0) {
+      // Pohyb po row (Y osi) - použiť car1
+      car.sprite.setTexture('car1')
+      car.shadow.setTexture('car1')
+    }
+    
     // Animujeme pohyb
     car.moveTween = this.scene.tweens.add({
       targets: car.sprite,

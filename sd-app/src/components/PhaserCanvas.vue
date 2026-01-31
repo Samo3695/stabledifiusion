@@ -138,6 +138,7 @@ class IsoScene extends Phaser.Scene {
     
     // Načítame sprite auta
     this.load.image('car1', '/templates/roads/sprites/car-dawn-top-right.png')
+    this.load.image('car2', '/templates/roads/sprites/car-down-top-left.png')
   }
 
   create() {
