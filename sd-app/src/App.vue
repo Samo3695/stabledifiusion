@@ -34,6 +34,8 @@ const loadingProgress = ref(0) // Loading progress (0-100)
 const loadingStatus = ref('') // Loading status text
 const personSpawnEnabled = ref(false)
 const personSpawnCount = ref(0)
+const carSpawnEnabled = ref(false)
+const carSpawnCount = ref(0)
 const resources = ref([]) // Resources list
 const workforce = ref([]) // Workforce list
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny road sprite URL
@@ -158,6 +160,13 @@ const handlePersonSpawnSettingsChanged = ({ enabled, count }) => {
   const parsed = Number.isFinite(count) ? count : 0
   personSpawnCount.value = Math.max(0, Math.min(500, Math.round(parsed)))
   console.log(`🚶 App.vue: Person spawn ${personSpawnEnabled.value ? 'ON' : 'OFF'}, count=${personSpawnCount.value}`)
+}
+
+const handleCarSpawnSettingsChanged = ({ enabled, count }) => {
+  carSpawnEnabled.value = !!enabled
+  const parsed = Number.isFinite(count) ? count : 0
+  carSpawnCount.value = Math.max(0, Math.min(500, Math.round(parsed)))
+  console.log(`🚗 App.vue: Car spawn ${carSpawnEnabled.value ? 'ON' : 'OFF'}, count=${carSpawnCount.value}`)
 }
 
 // Watch pre zmenu roadTiles - keď sa zmení opacity, regeneruj canvas
@@ -965,6 +974,8 @@ const handleCanvasUpdated = () => {
       :roadTiles="roadTiles"
       :personSpawnEnabled="personSpawnEnabled"
       :personSpawnCount="personSpawnCount"
+      :carSpawnEnabled="carSpawnEnabled"
+      :carSpawnCount="carSpawnCount"
       @cell-selected="handleCellSelected"
       @image-placed="(data) => { handleImagePlaced(data); handleCanvasUpdated(); }"
       @toggle-numbering="handleToggleNumbering"
@@ -985,6 +996,7 @@ const handleCanvasUpdated = () => {
         :environmentColors="environmentColors"
         :textureSettings="textureSettings"
         :personSpawnSettings="{ enabled: personSpawnEnabled, count: personSpawnCount }"
+        :carSpawnSettings="{ enabled: carSpawnEnabled, count: carSpawnCount }"
         :resources="resources"
         :workforce="workforce"
         :roadSpriteUrl="roadSpriteUrl"
@@ -1066,6 +1078,8 @@ const handleCanvasUpdated = () => {
         :selectedImageId="selectedImageId"
         :personSpawnEnabled="personSpawnEnabled"
         :personSpawnCount="personSpawnCount"
+        :carSpawnEnabled="carSpawnEnabled"
+        :carSpawnCount="carSpawnCount"
         :resources="resources"
         :workforce="workforce"
         :roadSpriteUrl="roadSpriteUrl"
@@ -1078,6 +1092,7 @@ const handleCanvasUpdated = () => {
         @road-tiles-ready="handleRoadTilesReady"
         @road-opacity-changed="handleRoadOpacityChanged"
         @person-spawn-settings-changed="handlePersonSpawnSettingsChanged"
+        @car-spawn-settings-changed="handleCarSpawnSettingsChanged"
         @update-building-data="handleUpdateBuildingData"
         @command-center-selected="handleCommandCenterSelected"
       />

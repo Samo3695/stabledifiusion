@@ -14,6 +14,14 @@ const props = defineProps({
     type: Number,
     default: 3
   },
+  carSpawnEnabled: {
+    type: Boolean,
+    default: false
+  },
+  carSpawnCount: {
+    type: Number,
+    default: 3
+  },
   resources: {
     type: Array,
     default: () => []
@@ -34,6 +42,7 @@ const emit = defineEmits([
   'road-tiles-ready',
   'road-opacity-changed',
   'person-spawn-settings-changed',
+  'car-spawn-settings-changed',
   'update-building-data',
   'command-center-selected'
 ])
@@ -47,6 +56,8 @@ const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber 
 const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 const spawnPersonsEnabled = ref(props.personSpawnEnabled) // Či pridať osoby pri kliknutí na road tile
 const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno umiestnenie road tile
+const spawnCarsEnabled = ref(props.carSpawnEnabled) // Či pridať autá pri kliknutí na road tile
+const carsPerPlacement = ref(props.carSpawnCount) // Počet áut na jedno umiestnenie road tile
 
 // Building data
 const isBuilding = ref(false)
@@ -73,6 +84,16 @@ watch(() => props.personSpawnEnabled, (newVal) => {
 watch(() => props.personSpawnCount, (newVal) => {
   personsPerPlacement.value = Math.max(0, Math.min(500, Math.round(newVal || 0)))
   console.log('🔄 ImageGallery: personsPerPlacement updated from props:', personsPerPlacement.value)
+})
+
+watch(() => props.carSpawnEnabled, (newVal) => {
+  spawnCarsEnabled.value = newVal
+  console.log('🔄 ImageGallery: carSpawnEnabled updated from props:', newVal)
+})
+
+watch(() => props.carSpawnCount, (newVal) => {
+  carsPerPlacement.value = Math.max(0, Math.min(500, Math.round(newVal || 0)))
+  console.log('🔄 ImageGallery: carsPerPlacement updated from props:', carsPerPlacement.value)
 })
 
 // Načítaj a rozrež road sprite na 12 tiles (4 stĺpce x 3 riadky) s izometrickou maskou
@@ -250,8 +271,20 @@ const emitPersonSettings = () => {
   })
 }
 
+const emitCarSettings = () => {
+  const safeCount = Math.max(0, Math.min(500, Math.round(carsPerPlacement.value || 0)))
+  carsPerPlacement.value = safeCount
+  emit('car-spawn-settings-changed', {
+    enabled: spawnCarsEnabled.value,
+    count: safeCount
+  })
+}
+
 watch(spawnPersonsEnabled, () => emitPersonSettings(), { immediate: true })
 watch(personsPerPlacement, () => emitPersonSettings())
+
+watch(spawnCarsEnabled, () => emitCarSettings(), { immediate: true })
+watch(carsPerPlacement, () => emitCarSettings())
 
 // Funkcia na uloženie building data
 const saveBuildingData = () => {
@@ -598,6 +631,25 @@ const removeProductionResource = (index) => {
         max="500"
         step="1"
         v-model.number="personsPerPlacement"
+      />
+    </div>
+  </div>
+
+  <!-- Car spawn controls -->
+  <div v-if="activeGalleryTab === 'roads'" class="car-spawn-controls">
+    <label class="car-spawn-checkbox">
+      <input type="checkbox" v-model="spawnCarsEnabled" />
+      <span>Pridať autá pri položení road</span>
+    </label>
+    <div class="car-count-input">
+      <label for="cars-per-placement">Počet áut:</label>
+      <input
+        id="cars-per-placement"
+        type="number"
+        min="0"
+        max="500"
+        step="1"
+        v-model.number="carsPerPlacement"
       />
     </div>
   </div>
@@ -1315,6 +1367,41 @@ h2 {
 }
 
 .person-count-input input {
+  width: 80px;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+/* Car spawn controls */
+.car-spawn-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: #f0f8ff;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.car-spawn-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: #333;
+  margin: 0;
+}
+
+.car-count-input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.car-count-input input {
   width: 80px;
   padding: 0.35rem 0.5rem;
   border: 1px solid #d0d7de;

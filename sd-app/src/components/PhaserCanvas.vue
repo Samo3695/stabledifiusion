@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import Phaser from 'phaser'
 import { PersonManager } from '../utils/personManager.js'
+import { CarManager } from '../utils/carManager.js'
 
 const props = defineProps({
   images: Array,
@@ -51,6 +52,14 @@ const props = defineProps({
     default: false
   },
   personSpawnCount: {
+    type: Number,
+    default: 0
+  },
+  carSpawnEnabled: {
+    type: Boolean,
+    default: false
+  },
+  carSpawnCount: {
     type: Number,
     default: 0
   }
@@ -110,6 +119,9 @@ class IsoScene extends Phaser.Scene {
     
     // PersonManager pre správu postáv
     this.personManager = null
+    
+    // CarManager pre správu áut
+    this.carManager = null
   }
 
   preload() {
@@ -120,6 +132,12 @@ class IsoScene extends Phaser.Scene {
     this.load.image('person1', '/templates/roads/sprites/person1.png')
     this.load.image('person2', '/templates/roads/sprites/person2.png')
     this.load.image('person3', '/templates/roads/sprites/person3.png')
+    
+    // Načítame sprite auta
+    this.load.image('car1', '/templates/roads/sprites/car-dawn-top-right.png')
+    
+    // Načítame sprite auta
+    this.load.image('car1', '/templates/roads/sprites/car-dawn-top-right.png')
   }
 
   create() {
@@ -181,6 +199,15 @@ class IsoScene extends Phaser.Scene {
       moveDuration: 6000, // Výrazne spomalené pre pomalý realistický pohyb
       initialDelayRange: [0, 4000]
     })
+    
+    // Inicializujeme CarManager
+    this.carManager = new CarManager(this, cellImages, {
+      carCount: 200,
+      TILE_WIDTH,
+      TILE_HEIGHT,
+      moveDuration: 4000, // Rýchlejšie ako osoby
+      initialDelayRange: [0, 4000]
+    })
   }
 
   createPerson() {
@@ -198,6 +225,24 @@ class IsoScene extends Phaser.Scene {
   togglePerson(visible) {
     if (this.personManager) {
       this.personManager.togglePersons(visible)
+    }
+  }
+
+  createCar() {
+    if (this.carManager) {
+      this.carManager.createCars()
+    }
+  }
+
+  createCarsAt(row, col, count) {
+    if (this.carManager) {
+      this.carManager.createCarsAtTile(count, row, col)
+    }
+  }
+  
+  toggleCar(visible) {
+    if (this.carManager) {
+      this.carManager.toggleCars(visible)
     }
   }
 
@@ -867,6 +912,11 @@ class IsoScene extends Phaser.Scene {
               // Aktualizuj PersonManager cache
               if (this.personManager) {
                 this.personManager.updateWorkerRoadTiles()
+              }
+              
+              // Aktualizuj CarManager cache
+              if (this.carManager) {
+                this.carManager.updateWorkerRoadTiles()
               }
             } 
             // Mazanie budovy
@@ -1551,6 +1601,12 @@ const deleteImageAtCell = (row, col) => {
     console.log('🔄 PersonManager cache aktualizovaný po vymazaní')
   }
   
+  if (deleted && mainScene && mainScene.carManager) {
+    // Aktualizuj CarManager cache po vymazaní
+    mainScene.carManager.updateWorkerRoadTiles()
+    console.log('🔄 CarManager cache aktualizovaný po vymazaní')
+  }
+  
   if (!deleted) {
     console.log(`⚠️ Žiadny obrázok na [${row}, ${col}] nebol nájdený`)
   }
@@ -1653,9 +1709,20 @@ defineExpose({
           mainScene.createPersonsAt(row, col, spawnCount)
         }
       }
+      
+      if (isRoadTile && mainScene && mainScene.carManager && props.carSpawnEnabled) {
+        const carSpawnCount = Math.max(0, Math.min(500, Math.round(props.carSpawnCount || 0)))
+        if (carSpawnCount > 0) {
+          mainScene.createCarsAt(row, col, carSpawnCount)
+        }
+      }
 
       if (mainScene && mainScene.personManager) {
         mainScene.personManager.updateWorkerRoadTiles()
+      }
+      
+      if (mainScene && mainScene.carManager) {
+        mainScene.carManager.updateWorkerRoadTiles()
       }
     }
   },
