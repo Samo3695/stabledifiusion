@@ -1323,9 +1323,10 @@ class IsoScene extends Phaser.Scene {
       const bottomRow = row + cellsX - 1
       const bottomCol = col + cellsY - 1
       
-      // Depth je z spodného rohu - vyššia hodnota = budova je vpredu
-      // Base depth 100 aby boli nad tieňmi (depth 1) a mriežkou (depth 0)
-      const depth = 100 + (bottomRow + bottomCol)
+      // Depth je z spodného rohu - v izometrickom pohľade:
+      // Objekty s vyšším (row + col) sú vpredu, pri rovnosti uprednostníme row
+      // Formula: depth = row * GRID_SIZE + col zabezpečí správne zoradenie
+      const depth = 100 + bottomRow * GRID_SIZE + bottomCol
       this.buildingSprites[key].setDepth(depth)
       
       console.log(`🏠 Building ${key}: row=${row}, col=${col}, bottomRow=${bottomRow}, bottomCol=${bottomCol}, depth=${depth}`)
