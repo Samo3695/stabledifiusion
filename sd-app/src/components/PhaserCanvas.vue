@@ -111,6 +111,7 @@ class IsoScene extends Phaser.Scene {
     this.groundRenderTexture = null
     this.groundMask = null
     this.groundMaskGraphics = null
+    this.hoverPreviewSprite = null // Preview budovy pri hoveri
     
     // Road building mode
     this.roadStartCell = null // Začiatočný bod cesty
@@ -489,6 +490,13 @@ class IsoScene extends Phaser.Scene {
   drawHover() {
     if (this.hoverGraphics) {
       this.hoverGraphics.destroy()
+      this.hoverGraphics = null
+    }
+    
+    // Vymažeme starý preview sprite
+    if (this.hoverPreviewSprite) {
+      this.hoverPreviewSprite.destroy()
+      this.hoverPreviewSprite = null
     }
     
     // Pre road building mode zobraz hover aj keď ešte nekreslím
@@ -548,6 +556,72 @@ class IsoScene extends Phaser.Scene {
       this.hoverGraphics.lineStyle(3, hasCollision ? 0xff0000 : 0x667eea, 1)
       this.hoverGraphics.strokePath()
     }
+    
+    // Ak NIE JE kolízia a máme vybraný obrázok, zobrazíme preview budovy
+    if (!hasCollision && props.selectedImageId && !props.deleteMode) {
+      this.showBuildingPreview(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
+    }
+  }
+
+  showBuildingPreview(row, col, cellsX, cellsY) {
+    // Nájdeme vybraný obrázok
+    const selectedImage = props.images?.find(img => img.id === props.selectedImageId)
+    if (!selectedImage) return
+    
+    // Použijeme URL ako kľúč pre cachovanie textúry
+    const previewKey = `preview_${selectedImage.id}`
+    
+    // Načítame textúru ak ešte nie je načítaná
+    if (!this.textures.exists(previewKey)) {
+      this.load.image(previewKey, selectedImage.url)
+      this.load.once('complete', () => {
+        this.createPreviewSprite(previewKey, row, col, cellsX, cellsY)
+      })
+      this.load.start()
+    } else {
+      this.createPreviewSprite(previewKey, row, col, cellsX, cellsY)
+    }
+  }
+  
+  createPreviewSprite(textureKey, row, col, cellsX, cellsY) {
+    // Kontrola či sa hover nezmenil medzitým (asynchrónne načítanie)
+    if (this.hoveredCell.row !== row || this.hoveredCell.col !== col) {
+      return // Hover sa už zmenil, nechceme vytvoriť starý preview
+    }
+    
+    // Vypočítaj izometrickú pozíciu
+    const { x, y } = this.gridToIso(row, col)
+    
+    // Vyppočítame offset pre multi-cell objekty (rovnaká logika ako v addBuildingWithShadow)
+    let offsetX = 0
+    let offsetY = 0
+    
+    if (cellsX === 1 && cellsY === 2) {
+      offsetX = -TILE_WIDTH / 4
+      offsetY = TILE_HEIGHT / 2
+    } else if (cellsX === 2 && cellsY === 2) {
+      offsetY = TILE_HEIGHT
+    } else if (cellsX >= 3) {
+      offsetY = TILE_HEIGHT * (cellsX - 1)
+    }
+    
+    // Vytvoríme sprite
+    this.hoverPreviewSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
+    
+    // Nastavíme veľkosť
+    const targetWidth = TILE_WIDTH * cellsX * 0.9
+    const scale = targetWidth / this.hoverPreviewSprite.width
+    this.hoverPreviewSprite.setScale(scale)
+    this.hoverPreviewSprite.setOrigin(0.5, 1)
+    
+    // Nastavíme alpha na 0.2 pre preview efekt
+    this.hoverPreviewSprite.setAlpha(0.35)
+    
+    // Vysoký depth aby bol viditeľný
+    this.hoverPreviewSprite.setDepth(100000)
+    
+    // Pridáme do UI kontajnera
+    this.uiContainer.add(this.hoverPreviewSprite)
   }
 
   drawSelected() {
