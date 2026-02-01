@@ -73,6 +73,10 @@ const smokeSpeed = ref(1) // Rýchlosť animácie dymu (0.1 - 3)
 const smokeScale = ref(1) // Veľkosť častíc dymu (0.1 - 3)
 const smokeAlpha = ref(0.5) // Priehľadnosť dymu (0.1 - 1.0)
 const smokeTint = ref(1) // Tmavosť dymu - brightness multiplikátor (0.1 - 2.0, 1=normálne)
+const hasLightEffect = ref(false) // Či budova má blikajúce svetlo
+const lightBlinkSpeed = ref(1) // Rýchlosť blikania svetla (0.1 - 10)
+const lightColor = ref('#ffff00') // Farba svetla (hex)
+const lightSize = ref(1) // Veľkosť svetla (0.1 - 5)
 const selectedBuildResource = ref('')
 const selectedOperationalResource = ref('')
 const selectedProductionResource = ref('')
@@ -307,7 +311,11 @@ const saveBuildingData = () => {
       smokeSpeed: smokeSpeed.value,
       smokeScale: smokeScale.value,
       smokeAlpha: smokeAlpha.value,
-      smokeTint: smokeTint.value
+      smokeTint: smokeTint.value,
+      hasLightEffect: hasLightEffect.value,
+      lightBlinkSpeed: lightBlinkSpeed.value,
+      lightColor: lightColor.value,
+      lightSize: lightSize.value
     }
     
     emit('update-building-data', {
@@ -320,7 +328,7 @@ const saveBuildingData = () => {
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint], () => {
+watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, lightBlinkSpeed, lightColor, lightSize], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -421,7 +429,11 @@ const openModal = (image) => {
     smokeScale.value = image.buildingData.smokeScale || 1
     smokeAlpha.value = image.buildingData.smokeAlpha !== undefined ? image.buildingData.smokeAlpha : 0.5
     smokeTint.value = image.buildingData.smokeTint || 1
-    console.log('🔍 Loading building data (smoke):', image.buildingData)
+    hasLightEffect.value = image.buildingData.hasLightEffect === true
+    lightBlinkSpeed.value = image.buildingData.lightBlinkSpeed || 1
+    lightColor.value = image.buildingData.lightColor || '#ffff00'
+    lightSize.value = image.buildingData.lightSize || 1
+    console.log('🔍 Loading building data (smoke & light):', image.buildingData)
   } else {
     isBuilding.value = false
     buildingName.value = ''
@@ -435,6 +447,10 @@ const openModal = (image) => {
     smokeScale.value = 1
     smokeAlpha.value = 0.5
     smokeTint.value = 1
+    hasLightEffect.value = false
+    lightBlinkSpeed.value = 1
+    lightColor.value = '#ffff00'
+    lightSize.value = 1
   }
 }
 
@@ -887,6 +903,56 @@ const removeProductionResource = (index) => {
                         class="smoke-speed-slider"
                       />
                       <span class="smoke-speed-value">{{ smokeTint.toFixed(1) }}x</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Light Effect -->
+                <div class="building-subsection">
+                  <label class="smoke-checkbox-label">
+                    <input type="checkbox" v-model="hasLightEffect" />
+                    <span>💡 Blikajúce svetlo</span>
+                  </label>
+                  <div v-if="hasLightEffect" class="smoke-speed-control">
+                    <label for="light-blink-speed">⚡ Rýchlosť blikania:</label>
+                    <div class="smoke-speed-input-group">
+                      <input 
+                        id="light-blink-speed"
+                        type="range" 
+                        v-model.number="lightBlinkSpeed" 
+                        min="0.1" 
+                        max="10" 
+                        step="0.5"
+                        class="smoke-speed-slider"
+                      />
+                      <span class="smoke-speed-value">{{ lightBlinkSpeed.toFixed(1) }}x</span>
+                    </div>
+                  </div>
+                  <div v-if="hasLightEffect" class="smoke-speed-control">
+                    <label for="light-color">🌈 Farba svetla:</label>
+                    <div class="smoke-speed-input-group">
+                      <input 
+                        id="light-color"
+                        type="color" 
+                        v-model="lightColor" 
+                        class="light-color-picker"
+                      />
+                      <span class="smoke-speed-value">{{ lightColor }}</span>
+                    </div>
+                  </div>
+                  <div v-if="hasLightEffect" class="smoke-speed-control">
+                    <label for="light-size">📏 Veľkosť svetla:</label>
+                    <div class="smoke-speed-input-group">
+                      <input 
+                        id="light-size"
+                        type="range" 
+                        v-model.number="lightSize" 
+                        min="0.1" 
+                        max="5" 
+                        step="0.1"
+                        class="smoke-speed-slider"
+                      />
+                      <span class="smoke-speed-value">{{ lightSize.toFixed(1) }}x</span>
                     </div>
                   </div>
                 </div>
@@ -1819,6 +1885,30 @@ h2 {
   min-width: 45px;
   text-align: right;
   font-size: 0.9rem;
+}
+
+.light-color-picker {
+  width: 60px;
+  height: 35px;
+  border: 2px solid #667eea;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  background: none;
+}
+
+.light-color-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.light-color-picker::-webkit-color-swatch {
+  border: none;
+  border-radius: 4px;
+}
+
+.light-color-picker::-moz-color-swatch {
+  border: none;
+  border-radius: 4px;
 }
   border-color: #667eea;
   box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);

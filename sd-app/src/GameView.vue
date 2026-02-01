@@ -480,7 +480,11 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       smokeSpeed: buildingData.smokeSpeed,
       smokeScale: buildingData.smokeScale,
       smokeAlpha: buildingData.smokeAlpha,
-      smokeTint: buildingData.smokeTint
+      smokeTint: buildingData.smokeTint,
+      hasLightEffect: buildingData.hasLightEffect,
+      lightBlinkSpeed: buildingData.lightBlinkSpeed,
+      lightColor: buildingData.lightColor,
+      lightSize: buildingData.lightSize
     }
   }
 }

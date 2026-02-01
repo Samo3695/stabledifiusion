@@ -1003,7 +1003,7 @@ class IsoScene extends Phaser.Scene {
   }
 
   // Vytvorenie smoke effectu pre budovu
-  createSmokeEffect(x, y, key, speed = 1, scale = 1, alpha = 0.5, tint = 1) {
+  createSmokeEffect(x, y, key, speed = 1, scale = 1, alpha = 0.5, tint = 1, row = 0, col = 0, cellsX = 1, cellsY = 1) {
     if (!this.textures.exists('smoke')) {
       console.warn('⚠️ Smoke textúra nie je načítaná')
       return null
@@ -1050,11 +1050,75 @@ class IsoScene extends Phaser.Scene {
       tint: tintColor
     })
 
-    // Nastavíme vysoký depth aby bol dym nad budovami
-    particles.setDepth(50000)
+    // Vypočítame depth rovnaký ako má budova (podľa jej spodného rohu)
+    const bottomRow = row + cellsX - 1
+    const bottomCol = col + cellsY - 1
+    const depth = 100 + bottomRow * GRID_SIZE + bottomCol
+    particles.setDepth(depth)
     
-    console.log(`💨 Smoke effect vytvorený: speed=${speedMultiplier}x, scale=${scaleMultiplier}x, alpha=${alphaValue}, tint=${tintValue}x`)
+    console.log(`💨 Smoke effect vytvorený: speed=${speedMultiplier}x, scale=${scaleMultiplier}x, alpha=${alphaValue}, tint=${tintValue}x, depth=${depth}`)
+    
     return particles
+  }
+
+  // Vytvorenie blikajúceho svetelného efektu
+  createLightEffect(x, y, key, blinkSpeed = 1, color = 0xffff00, size = 1, row = 0, col = 0, cellsX = 1, cellsY = 1) {
+    // Parsuj farbu ak je string (hex)
+    let lightColor = color
+    if (typeof color === 'string') {
+      lightColor = parseInt(color.replace('#', ''), 16)
+    }
+    
+    // Vytvoríme grafický objekt pre svetlo (kruh s gradient efektom)
+    const lightGraphics = this.add.graphics()
+    lightGraphics.setPosition(x, y + 17) // Ešte nižšie
+    
+    // Nakreslíme svetelný kruh - veľkosť podľa parametra
+    const baseRadius = 0.5
+    const radius = baseRadius * size
+    lightGraphics.fillStyle(lightColor, 1)
+    lightGraphics.fillCircle(0, 0, radius)
+    
+    // Pridáme veľmi jemný blur efekt
+    const glowRadius = radius + (0.5 * size)
+    lightGraphics.fillStyle(lightColor, 0.5)
+    lightGraphics.fillCircle(0, 0, glowRadius)
+    
+    // Vypočítame depth rovnaký ako má budova (podľa jej spodného rohu)
+    const bottomRow = row + cellsX - 1
+    const bottomCol = col + cellsY - 1
+    const depth = 100 + bottomRow * GRID_SIZE + bottomCol
+    lightGraphics.setDepth(depth)
+    
+    // Vytvoríme blikací efekt pomocou tween animácie
+    // blinkSpeed ovláda ako rýchlo bliká (vyššie číslo = rýchlejšie)
+    const blinkDuration = Math.max(200, 1000 / blinkSpeed)
+    
+    this.tweens.add({
+      targets: lightGraphics,
+      alpha: { from: 1, to: 0.2 },
+      duration: blinkDuration,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1
+    })
+    
+    // Pridáme svetlo do smoke effects pre neskoršie odstránenie
+    if (!this.smokeEffects) {
+      this.smokeEffects = {}
+    }
+    
+    if (!this.smokeEffects[key]) {
+      this.smokeEffects[key] = []
+    } else if (!Array.isArray(this.smokeEffects[key])) {
+      // Ak je to starý formát (len particles), prekonvertuj na pole
+      this.smokeEffects[key] = [this.smokeEffects[key]]
+    }
+    
+    this.smokeEffects[key].push(lightGraphics)
+    
+    console.log(`💡 Light effect vytvorený: blinkSpeed=${blinkSpeed}, color=${color}, duration=${blinkDuration}ms`)
+    return lightGraphics
   }
 
   // Pridanie obrázka s tieňom
@@ -1188,15 +1252,57 @@ class IsoScene extends Phaser.Scene {
             smokeSpeed, 
             smokeScale, 
             smokeAlpha, 
-            smokeTint
+            smokeTint,
+            row,
+            col,
+            cellsX,
+            cellsY
           )
           if (smokeParticles) {
             // Uložíme referenciu na smoke particles
             if (!this.smokeEffects) {
               this.smokeEffects = {}
             }
-            this.smokeEffects[key] = smokeParticles
+            // Ak už existuje, pridáme do poľa, inak vytvoríme nové pole
+            if (!this.smokeEffects[key]) {
+              this.smokeEffects[key] = []
+            } else if (!Array.isArray(this.smokeEffects[key])) {
+              // Ak je to starý formát (len particles), prekonvertuj na pole
+              this.smokeEffects[key] = [this.smokeEffects[key]]
+            }
+            this.smokeEffects[key].push(smokeParticles)
             console.log('💨 Smoke effect pridaný k budove', key)
+          }
+        }
+        
+        // Vytvoríme light effect ak má budova hasLightEffect
+        if (buildingData?.hasLightEffect) {
+          const lightBlinkSpeed = buildingData.lightBlinkSpeed || 1
+          const lightColor = buildingData.lightColor || '#ffff00'
+          const lightSize = buildingData.lightSize || 1
+          const lightEffect = this.createLightEffect(
+            x + offsetX, 
+            y + TILE_HEIGHT + offsetY - buildingSprite.height * scale, 
+            key, 
+            lightBlinkSpeed,
+            lightColor,
+            lightSize,
+            row,
+            col,
+            cellsX,
+            cellsY
+          )
+          if (lightEffect) {
+            if (!this.smokeEffects) {
+              this.smokeEffects = {}
+            }
+            if (!this.smokeEffects[key]) {
+              this.smokeEffects[key] = []
+            } else if (!Array.isArray(this.smokeEffects[key])) {
+              this.smokeEffects[key] = [this.smokeEffects[key]]
+            }
+            this.smokeEffects[key].push(lightEffect)
+            console.log('💡 Light effect pridaný k budove', key)
           }
         }
         
@@ -1434,9 +1540,17 @@ class IsoScene extends Phaser.Scene {
     
     // Odstránime smoke effect ak existuje
     if (this.smokeEffects && this.smokeEffects[key]) {
-      this.smokeEffects[key].destroy()
+      const effects = Array.isArray(this.smokeEffects[key]) 
+        ? this.smokeEffects[key] 
+        : [this.smokeEffects[key]]
+      
+      effects.forEach(effect => {
+        if (effect && effect.destroy) {
+          effect.destroy()
+        }
+      })
       delete this.smokeEffects[key]
-      console.log(`💨 Smoke effect ${key} odstránený`)
+      console.log(`💨 Smoke/Light effects ${key} odstránené`)
     }
     
     // Aktualizuj PersonManager cache aby postavy vedeli o vymazaní bunky
