@@ -68,6 +68,11 @@ const dontDropShadow = ref(false) // Či nezobrazovať tieň
 const buildCost = ref([]) // [{resourceId, resourceName, amount}]
 const operationalCost = ref([]) // [{resourceId, resourceName, amount}]
 const production = ref([]) // [{resourceId, resourceName, amount}]
+const hasSmokeEffect = ref(false) // Či budova emituje dym
+const smokeSpeed = ref(1) // Rýchlosť animácie dymu (0.1 - 3)
+const smokeScale = ref(1) // Veľkosť častíc dymu (0.1 - 3)
+const smokeAlpha = ref(0.5) // Priehľadnosť dymu (0.1 - 1.0)
+const smokeTint = ref(1) // Tmavosť dymu - brightness multiplikátor (0.1 - 2.0, 1=normálne)
 const selectedBuildResource = ref('')
 const selectedOperationalResource = ref('')
 const selectedProductionResource = ref('')
@@ -297,7 +302,12 @@ const saveBuildingData = () => {
       dontDropShadow: dontDropShadow.value,
       buildCost: buildCost.value,
       operationalCost: operationalCost.value,
-      production: production.value
+      production: production.value,
+      hasSmokeEffect: hasSmokeEffect.value,
+      smokeSpeed: smokeSpeed.value,
+      smokeScale: smokeScale.value,
+      smokeAlpha: smokeAlpha.value,
+      smokeTint: smokeTint.value
     }
     
     emit('update-building-data', {
@@ -305,12 +315,12 @@ const saveBuildingData = () => {
       buildingData
     })
     
-    console.log('💾 Building data automaticky uložené (dontDropShadow:', dontDropShadow.value, '):', buildingData)
+    console.log('💾 Building data automaticky uložené (smoke effect):', buildingData)
   }
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production], () => {
+watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -406,7 +416,12 @@ const openModal = (image) => {
     buildCost.value = image.buildingData.buildCost || []
     operationalCost.value = image.buildingData.operationalCost || []
     production.value = image.buildingData.production || []
-    console.log('🔍 Loading building data, dontDropShadow:', image.buildingData.dontDropShadow, '→', dontDropShadow.value)
+    hasSmokeEffect.value = image.buildingData.hasSmokeEffect === true
+    smokeSpeed.value = image.buildingData.smokeSpeed || 1
+    smokeScale.value = image.buildingData.smokeScale || 1
+    smokeAlpha.value = image.buildingData.smokeAlpha !== undefined ? image.buildingData.smokeAlpha : 0.5
+    smokeTint.value = image.buildingData.smokeTint || 1
+    console.log('🔍 Loading building data (smoke):', image.buildingData)
   } else {
     isBuilding.value = false
     buildingName.value = ''
@@ -415,6 +430,11 @@ const openModal = (image) => {
     buildCost.value = []
     operationalCost.value = []
     production.value = []
+    hasSmokeEffect.value = false
+    smokeSpeed.value = 1
+    smokeScale.value = 1
+    smokeAlpha.value = 0.5
+    smokeTint.value = 1
   }
 }
 
@@ -428,6 +448,11 @@ const closeModal = () => {
   buildCost.value = []
   operationalCost.value = []
   production.value = []
+  hasSmokeEffect.value = false
+  smokeSpeed.value = 1
+  smokeScale.value = 1
+  smokeAlpha.value = 0.5
+  smokeTint.value = 1
   selectedBuildResource.value = ''
   selectedOperationalResource.value = ''
   selectedProductionResource.value = ''
@@ -792,6 +817,78 @@ const removeProductionResource = (index) => {
                     placeholder="Napr. Dřevorubecká chatrná, Občiansky dom..."
                     class="name-input"
                   />
+                </div>
+
+                <!-- Effects -->
+                <div class="building-subsection">
+                  <h4>✨ Efekty (Effects)</h4>
+                  <label class="shadow-checkbox">
+                    <input 
+                      type="checkbox" 
+                      v-model="hasSmokeEffect"
+                    />
+                    <span>💨 Dym (Smoke Effect)</span>
+                  </label>
+                  <div v-if="hasSmokeEffect" class="smoke-speed-control">
+                    <label for="smoke-speed">⚡ Rýchlosť dymu:</label>
+                    <div class="smoke-speed-input-group">
+                      <input 
+                        id="smoke-speed"
+                        type="range" 
+                        v-model.number="smokeSpeed" 
+                        min="0.1" 
+                        max="3" 
+                        step="0.1"
+                        class="smoke-speed-slider"
+                      />
+                      <span class="smoke-speed-value">{{ smokeSpeed.toFixed(1) }}x</span>
+                    </div>
+                  </div>
+                  <div v-if="hasSmokeEffect" class="smoke-speed-control">
+                    <label for="smoke-scale">📏 Veľkosť dymu:</label>
+                    <div class="smoke-speed-input-group">
+                      <input 
+                        id="smoke-scale"
+                        type="range" 
+                        v-model.number="smokeScale" 
+                        min="0.1" 
+                        max="3" 
+                        step="0.1"
+                        class="smoke-speed-slider"
+                      />
+                      <span class="smoke-speed-value">{{ smokeScale.toFixed(1) }}x</span>
+                    </div>
+                  </div>
+                  <div v-if="hasSmokeEffect" class="smoke-speed-control">
+                    <label for="smoke-alpha">👁️ Priehľadnosť dymu:</label>
+                    <div class="smoke-speed-input-group">
+                      <input 
+                        id="smoke-alpha"
+                        type="range" 
+                        v-model.number="smokeAlpha" 
+                        min="0.1" 
+                        max="1" 
+                        step="0.05"
+                        class="smoke-speed-slider"
+                      />
+                      <span class="smoke-speed-value">{{ (smokeAlpha * 100).toFixed(0) }}%</span>
+                    </div>
+                  </div>
+                  <div v-if="hasSmokeEffect" class="smoke-speed-control">
+                    <label for="smoke-tint">🎨 Tmavosť dymu:</label>
+                    <div class="smoke-speed-input-group">
+                      <input 
+                        id="smoke-tint"
+                        type="range" 
+                        v-model.number="smokeTint" 
+                        min="0.1" 
+                        max="2" 
+                        step="0.1"
+                        class="smoke-speed-slider"
+                      />
+                      <span class="smoke-speed-value">{{ smokeTint.toFixed(1) }}x</span>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- Need for build -->
@@ -1659,6 +1756,69 @@ h2 {
 
 .shadow-checkbox span {
   color: #333;
+}
+
+/* Smoke speed control */
+.smoke-speed-control {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+}
+
+.smoke-speed-control label {
+  display: block;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.smoke-speed-input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.smoke-speed-slider {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(to right, rgba(102, 126, 234, 0.2), rgba(102, 126, 234, 1));
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.smoke-speed-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+  border: 2px solid white;
+}
+
+.smoke-speed-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+  border: 2px solid white;
+}
+
+.smoke-speed-value {
+  font-weight: 600;
+  color: #667eea;
+  min-width: 45px;
+  text-align: right;
+  font-size: 0.9rem;
 }
   border-color: #667eea;
   box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);

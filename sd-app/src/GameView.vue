@@ -475,7 +475,12 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       dontDropShadow: buildingData.dontDropShadow,
       buildCost: buildingData.buildCost,
       operationalCost: buildingData.operationalCost,
-      production: buildingData.production
+      production: buildingData.production,
+      hasSmokeEffect: buildingData.hasSmokeEffect,
+      smokeSpeed: buildingData.smokeSpeed,
+      smokeScale: buildingData.smokeScale,
+      smokeAlpha: buildingData.smokeAlpha,
+      smokeTint: buildingData.smokeTint
     }
   }
 }

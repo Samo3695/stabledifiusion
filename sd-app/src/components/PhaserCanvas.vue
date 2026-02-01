@@ -139,6 +139,9 @@ class IsoScene extends Phaser.Scene {
     // Načítame sprite auta
     this.load.image('car1', '/templates/roads/sprites/car-dawn-top-right.png')
     this.load.image('car2', '/templates/roads/sprites/car-down-top-left.png')
+    
+    // Načítame smoke textúru pre efekt dymu
+    this.load.image('smoke', 'https://labs.phaser.io/assets/particles/white-smoke.png')
   }
 
   create() {
@@ -999,9 +1002,64 @@ class IsoScene extends Phaser.Scene {
     this.cameras.main.setZoom(newZoom)
   }
 
+  // Vytvorenie smoke effectu pre budovu
+  createSmokeEffect(x, y, key, speed = 1, scale = 1, alpha = 0.5, tint = 1) {
+    if (!this.textures.exists('smoke')) {
+      console.warn('⚠️ Smoke textúra nie je načítaná')
+      return null
+    }
+
+    // Aplikujeme multiplikátory
+    const speedMultiplier = speed || 1
+    const scaleMultiplier = scale || 1
+    const alphaValue = alpha !== undefined ? alpha : 0.5
+    const tintValue = tint || 1
+    const baseSpeedY = { min: -100, max: -200 }
+    const baseSpeedX = { min: -20, max: 20 }
+    const baseFrequency = 100
+    const baseLifespan = 3000
+    const baseScaleStart = 0.2
+    const baseScaleEnd = 1.5
+
+    // Aplikujeme tint pre tmavosť (brightness)
+    // tint < 1 = tmavší, tint > 1 = svetlejší
+    const tintColor = Phaser.Display.Color.GetColor(
+      Math.min(255, 255 * tintValue),
+      Math.min(255, 255 * tintValue),
+      Math.min(255, 255 * tintValue)
+    )
+
+    const particles = this.add.particles(x, y, 'smoke', {
+      speedY: { 
+        min: baseSpeedY.min * speedMultiplier, 
+        max: baseSpeedY.max * speedMultiplier 
+      },
+      speedX: { 
+        min: baseSpeedX.min * speedMultiplier, 
+        max: baseSpeedX.max * speedMultiplier 
+      },
+      scale: { 
+        start: baseScaleStart * scaleMultiplier, 
+        end: baseScaleEnd * scaleMultiplier 
+      },
+      alpha: { start: alphaValue, end: 0 },
+      lifespan: baseLifespan / speedMultiplier,
+      blendMode: 'SCREEN',
+      frequency: baseFrequency / speedMultiplier,
+      rotate: { min: 0, max: 360 },
+      tint: tintColor
+    })
+
+    // Nastavíme vysoký depth aby bol dym nad budovami
+    particles.setDepth(50000)
+    
+    console.log(`💨 Smoke effect vytvorený: speed=${speedMultiplier}x, scale=${scaleMultiplier}x, alpha=${alphaValue}, tint=${tintValue}x`)
+    return particles
+  }
+
   // Pridanie obrázka s tieňom
-  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false, bitmap = null, skipShadows = false, dontDropShadow = false) {
-    console.log('🏗️ addBuildingWithShadow called with dontDropShadow:', dontDropShadow)
+  addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false, bitmap = null, skipShadows = false, dontDropShadow = false, buildingData = null) {
+    console.log('🏗️ addBuildingWithShadow called with dontDropShadow:', dontDropShadow, 'buildingData:', buildingData)
     // Pre road tiles - jednoduchá logika bez cache
     if (isRoadTile) {
       // Unikátny kľúč s timestampom aby sa vždy načítala nová textúra
@@ -1116,6 +1174,31 @@ class IsoScene extends Phaser.Scene {
         
         // Uložíme referencie
         this.buildingSprites[key] = buildingSprite
+        
+        // Vytvoríme smoke effect ak má budova hasSmokeEffect
+        if (buildingData?.hasSmokeEffect) {
+          const smokeSpeed = buildingData.smokeSpeed || 1
+          const smokeScale = buildingData.smokeScale || 1
+          const smokeAlpha = buildingData.smokeAlpha !== undefined ? buildingData.smokeAlpha : 0.5
+          const smokeTint = buildingData.smokeTint || 1
+          const smokeParticles = this.createSmokeEffect(
+            x + offsetX, 
+            y + TILE_HEIGHT + offsetY - buildingSprite.height * scale, 
+            key, 
+            smokeSpeed, 
+            smokeScale, 
+            smokeAlpha, 
+            smokeTint
+          )
+          if (smokeParticles) {
+            // Uložíme referenciu na smoke particles
+            if (!this.smokeEffects) {
+              this.smokeEffects = {}
+            }
+            this.smokeEffects[key] = smokeParticles
+            console.log('💨 Smoke effect pridaný k budove', key)
+          }
+        }
         
         // Zoradíme budovy podľa depth (row + col)
         this.sortBuildings()
@@ -1349,6 +1432,13 @@ class IsoScene extends Phaser.Scene {
       this.redrawAllShadows()
     }
     
+    // Odstránime smoke effect ak existuje
+    if (this.smokeEffects && this.smokeEffects[key]) {
+      this.smokeEffects[key].destroy()
+      delete this.smokeEffects[key]
+      console.log(`💨 Smoke effect ${key} odstránený`)
+    }
+    
     // Aktualizuj PersonManager cache aby postavy vedeli o vymazaní bunky
     if (this.personManager) {
       this.personManager.updateWorkerRoadTiles()
@@ -1460,7 +1550,7 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackgro
     imageData: imageData,
     buildingData: imageData?.buildingData
   })
-  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName, isRoadTile, imageBitmap, false, dontDropShadow)
+  mainScene.addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground, templateName, isRoadTile, imageBitmap, false, dontDropShadow, cellData.buildingData)
   
   // Vyčisti výber
   mainScene.clearSelection()
@@ -1701,7 +1791,7 @@ defineExpose({
     
     // Počas batch loadingu preskočíme tiene (vykonajú sa na konci)
     const dontDropShadow = cellData.buildingData?.dontDropShadow || false
-    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap, isBatchLoading, dontDropShadow)
+    mainScene?.addBuildingWithShadow(key, url, row, col, cellsX, cellsY, isBackground, tileName, isRoadTile, bitmap, isBatchLoading, dontDropShadow, cellData.buildingData)
     
     // Počas batch loadingu preskočíme vytváranie osôb a aktualizciu workera
     if (!isBatchLoading) {
