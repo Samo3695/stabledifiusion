@@ -168,7 +168,7 @@ class IsoScene extends Phaser.Scene {
     this.buildingContainer.setDepth(2)
     
     this.uiContainer = this.add.container(0, 0)
-    this.uiContainer.setDepth(3)
+    this.uiContainer.setDepth(9999999) // Najvyšší z-index pre UI elementy (číslovanie, hover, selection)
     
     // Nakreslíme mriežku
     this.drawGrid()
@@ -320,6 +320,7 @@ class IsoScene extends Phaser.Scene {
             fontStyle: 'bold'
           })
           text.setOrigin(0.5, 0.5)
+          text.setDepth(999999) // Najvyšší z-index
           this.uiContainer.add(text)
           this.numberTexts.push(text)
         }
@@ -474,6 +475,7 @@ class IsoScene extends Phaser.Scene {
               fontStyle: 'bold'
             })
             text.setOrigin(0.5, 0.5)
+            text.setDepth(999999) // Najvyšší z-index
             this.uiContainer.add(text)
             this.numberTexts.push(text)
           }
@@ -1124,10 +1126,11 @@ class IsoScene extends Phaser.Scene {
       tint: tintColor
     })
 
-    // Vypočítame depth rovnaký ako má budova (podľa jej spodného rohu)
-    const bottomRow = row + cellsX - 1
-    const bottomCol = col + cellsY - 1
-    const depth = 100 + bottomRow * GRID_SIZE + bottomCol
+    // Footprint sort point - rovnaký výpočet ako pre budovu
+    const baseR = row + cellsX - 1
+    const baseC = col + (cellsY - 1) / 2
+    const depthSum = baseR + baseC
+    const depth = Math.round(depthSum * 10000 + baseC * 10) + 1 // +1 aby bol dym tesne pred budovou
     particles.setDepth(depth)
     
     console.log(`💨 Smoke effect vytvorený: speed=${speedMultiplier}x, scale=${scaleMultiplier}x, alpha=${alphaValue}, tint=${tintValue}x, depth=${depth}`)
@@ -1158,10 +1161,11 @@ class IsoScene extends Phaser.Scene {
     lightGraphics.fillStyle(lightColor, 0.5)
     lightGraphics.fillCircle(0, 0, glowRadius)
     
-    // Vypočítame depth rovnaký ako má budova (podľa jej spodného rohu)
-    const bottomRow = row + cellsX - 1
-    const bottomCol = col + cellsY - 1
-    const depth = 100 + bottomRow * GRID_SIZE + bottomCol
+    // Footprint sort point - rovnaký výpočet ako pre budovu
+    const baseR = row + cellsX - 1
+    const baseC = col + (cellsY - 1) / 2
+    const depthSum = baseR + baseC
+    const depth = Math.round(depthSum * 10000 + baseC * 10) + 1 // +1 aby bolo svetlo tesne pred budovou
     lightGraphics.setDepth(depth)
     
     // Vytvoríme blikací efekt pomocou tween animácie
@@ -1582,17 +1586,23 @@ class IsoScene extends Phaser.Scene {
         continue
       }
       
-      // Spodný roh budovy je na row + cellsX - 1, col + cellsY - 1
+      // Spodný roh budovy (najbližší k pozorovateľovi) je na row + cellsX - 1, col + cellsY - 1
       const bottomRow = row + cellsX - 1
       const bottomCol = col + cellsY - 1
       
-      // Depth je z spodného rohu - v izometrickom pohľade:
-      // Objekty s vyšším (row + col) sú vpredu, pri rovnosti uprednostníme row
-      // Formula: depth = row * GRID_SIZE + col zabezpečí správne zoradenie
-      const depth = 100 + bottomRow * GRID_SIZE + bottomCol
+      // Footprint sort point - spodná hrana footprintu
+      // baseR = spodný riadok footprintu (r + h - 1)
+      // baseC = stred spodnej hrany footprintu (c + (w-1)/2)
+      // Primárne: vyšší súčet (baseR + baseC) = bližšie k pozorovateľovi = vpredu
+      // Sekundárne: pri rovnakom súčte, vyšší baseC = vpredu
+      const baseR = row + cellsX - 1  // spodný riadok
+      const baseC = col + (cellsY - 1) / 2  // stred spodnej hrany
+      const depthSum = baseR + baseC
+      const depth = Math.round(depthSum * 10000 + baseC * 10)
+      
       this.buildingSprites[key].setDepth(depth)
       
-      console.log(`🏠 Building ${key}: row=${row}, col=${col}, bottomRow=${bottomRow}, bottomCol=${bottomCol}, depth=${depth}`)
+      console.log(`🏠 Building ${key}: row=${row}, col=${col}, cellsX=${cellsX}, cellsY=${cellsY}, baseR=${baseR}, baseC=${baseC}, depthSum=${depthSum}, depth=${depth}`)
     }
   }
 
