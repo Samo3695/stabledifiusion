@@ -161,7 +161,7 @@ class IsoScene extends Phaser.Scene {
     this.shadowRenderTexture = this.add.renderTexture(0, 0, 4000, 4000)
     this.shadowRenderTexture.setOrigin(0.5, 0.5)
     this.shadowRenderTexture.setPosition(0, GRID_SIZE * TILE_HEIGHT / 2)
-    this.shadowRenderTexture.setAlpha(0.35) // Celková priehľadnosť tieňa
+    this.shadowRenderTexture.setAlpha(0.25) // Celková priehľadnosť tieňa
     this.shadowRenderTexture.setDepth(10000) // Najvyšší depth - tiene sú nad všetkým
     
     this.buildingContainer = this.add.container(0, 0)
