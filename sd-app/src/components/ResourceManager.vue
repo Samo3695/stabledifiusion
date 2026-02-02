@@ -21,7 +21,8 @@ const addResource = () => {
     id: Date.now().toString(),
     name: newResourceName.value.trim(),
     amount: 0,
-    icon: null // Base64 ikonka
+    icon: null, // Base64 ikonka
+    workResource: false // Či je to work resource
   }
   
   resources.value.push(newResource)
@@ -88,6 +89,14 @@ const removeIcon = (id) => {
   const resource = resources.value.find(r => r.id === id)
   if (resource) {
     resource.icon = null
+    emitUpdate()
+  }
+}
+
+const toggleWorkResource = (id) => {
+  const resource = resources.value.find(r => r.id === id)
+  if (resource) {
+    resource.workResource = !resource.workResource
     emitUpdate()
   }
 }
@@ -167,6 +176,15 @@ const removeIcon = (id) => {
             </span>
             
             <div class="item-controls">
+              <label class="work-resource-toggle" :title="'Work Resource: ' + (resource.workResource ? 'Áno' : 'Nie')">
+                <input
+                  type="checkbox"
+                  :checked="resource.workResource"
+                  @change="toggleWorkResource(resource.id)"
+                  class="work-checkbox"
+                />
+                <span class="work-label">👷 Work</span>
+              </label>
               <input
                 type="number"
                 :value="resource.amount"
@@ -407,6 +425,48 @@ const removeIcon = (id) => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.work-resource-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.6rem;
+  background: #f0f0f0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 2px solid transparent;
+  user-select: none;
+}
+
+.work-resource-toggle:hover {
+  background: #e8e8e8;
+  border-color: #667eea;
+}
+
+.work-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #667eea;
+  margin: 0;
+}
+
+.work-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #555;
+  white-space: nowrap;
+}
+
+.work-resource-toggle:has(.work-checkbox:checked) {
+  background: rgba(102, 126, 234, 0.15);
+  border-color: #667eea;
+}
+
+.work-resource-toggle:has(.work-checkbox:checked) .work-label {
+  color: #667eea;
 }
 
 .amount-input {

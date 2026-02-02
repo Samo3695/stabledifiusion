@@ -45,85 +45,17 @@ const insufficientResourcesData = ref({
   missingBuildResources: [],
   missingOperationalResources: []
 })
+const ignoreResourceCheck = ref(false) // Checkbox pre ignorovanie kontroly resources
 
 // Filtrované budovy z galérie
 const buildings = computed(() => {
   return images.value.filter(img => img.buildingData?.isBuilding === true)
 })
 
-// Computed property: Spočítaj použité resources zo všetkých budov na canvase
-const usedResources = computed(() => {
-  const used = {}
-  
-  // Bezpečnostná kontrola
-  if (!canvasImagesMap.value || typeof canvasImagesMap.value !== 'object') {
-    return used
-  }
-  
-  // Prejdi všetky obrázky na canvase
-  Object.values(canvasImagesMap.value).forEach(cellData => {
-    if (!cellData) return
-    
-    // Preskočíme sekundárne bunky multi-cell budov
-    if (cellData.isSecondary) return
-    
-    const imageId = cellData.imageId
-    if (!imageId) return
-    
-    // Nájdi obrázok v images array
-    const image = images.value.find(img => img.id === imageId)
-    if (!image || !image.buildingData || !image.buildingData.isBuilding) return
-    
-    // Sčítaj operational costs (potrebné na prevádzku)
-    const operationalCost = image.buildingData.operationalCost || []
-    operationalCost.forEach(cost => {
-      if (!cost || !cost.resourceId) return
-      if (!used[cost.resourceId]) {
-        used[cost.resourceId] = 0
-      }
-      used[cost.resourceId] += cost.amount || 0
-    })
-  })
-  
-  return used
-})
-
-// Computed property: Spočítaj produkované resources zo všetkých budov na canvase
-const producedResources = computed(() => {
-  const produced = {}
-  
-  // Bezpečnostná kontrola
-  if (!canvasImagesMap.value || typeof canvasImagesMap.value !== 'object') {
-    return produced
-  }
-  
-  // Prejdi všetky obrázky na canvase
-  Object.values(canvasImagesMap.value).forEach(cellData => {
-    if (!cellData) return
-    
-    // Preskočíme sekundárne bunky multi-cell budov
-    if (cellData.isSecondary) return
-    
-    const imageId = cellData.imageId
-    if (!imageId) return
-    
-    // Nájdi obrázok v images array
-    const image = images.value.find(img => img.id === imageId)
-    if (!image || !image.buildingData || !image.buildingData.isBuilding) return
-    
-    // Sčítaj production (čo budova produkuje)
-    const production = image.buildingData.production || []
-    production.forEach(prod => {
-      if (!prod || !prod.resourceId) return
-      if (!produced[prod.resourceId]) {
-        produced[prod.resourceId] = 0
-      }
-      produced[prod.resourceId] += prod.amount || 0
-    })
-  })
-  
-  return produced
-})
+// Computed properties pre usedResources a producedResources - už nepoužívané
+// Produkcia sa teraz spúšťa manuálne tlačidlom
+const usedResources = computed(() => ({}))
+const producedResources = computed(() => ({}))
 
 // Funkcia na kontrolu dostupnosti resources pre budovu
 const checkBuildingResources = (buildingData) => {
@@ -132,7 +64,6 @@ const checkBuildingResources = (buildingData) => {
   }
   
   const missingBuild = []
-  const missingOperational = []
   
   // Kontrola build cost (potrebné na stavbu)
   const buildCost = buildingData.buildCost || []
@@ -142,56 +73,70 @@ const checkBuildingResources = (buildingData) => {
       missingBuild.push({
         name: cost.resourceName,
         needed: cost.amount,
-        available: 0
+        available: 0,
+        isWorkResource: false
       })
       return
     }
     
-    // Pre build cost kontrolujeme dostupné (base + production - used)
-    const produced = producedResources.value[cost.resourceId] || 0
-    const used = usedResources.value[cost.resourceId] || 0
-    const available = resource.amount + produced - used
+    // Pre build cost kontrolujeme reálny amount
+    const available = resource.amount
     
     if (available < cost.amount) {
       missingBuild.push({
         name: cost.resourceName,
         needed: cost.amount,
-        available: available
+        available: available,
+        isWorkResource: resource.workResource || false
       })
     }
   })
   
-  // Kontrola operational cost (potrebné na prevádzku)
-  const operationalCost = buildingData.operationalCost || []
-  operationalCost.forEach(cost => {
-    const resource = resources.value.find(r => r.id === cost.resourceId)
-    if (!resource) {
-      missingOperational.push({
-        name: cost.resourceName,
-        needed: cost.amount,
-        available: 0
-      })
-      return
-    }
-    
-    // Spočítaj dostupné (base + production - used)
-    const produced = producedResources.value[cost.resourceId] || 0
-    const used = usedResources.value[cost.resourceId] || 0
-    const available = resource.amount + produced - used
-    
-    if (available < cost.amount) {
-      missingOperational.push({
-        name: cost.resourceName,
-        needed: cost.amount,
-        available: available
-      })
-    }
-  })
+  // Operational cost sa zatiaľ nekontroluje - logiku pridáme neskôr
   
   return {
-    hasEnough: missingBuild.length === 0 && missingOperational.length === 0,
+    hasEnough: missingBuild.length === 0,
     missingBuild,
-    missingOperational
+    missingOperational: [] // Zatiaľ prázdne
+  }
+}
+
+// Funkcia na odpočítanie build cost resources a vrátenie workResource po 3 sekundách
+const deductBuildCost = (buildingData) => {
+  if (!buildingData || !buildingData.isBuilding) return
+  
+  const buildCost = buildingData.buildCost || []
+  const workResourcesToReturn = [] // Zoznam workResource ktoré treba vrátiť
+  
+  buildCost.forEach(cost => {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (resource) {
+      // Odpočítaj amount
+      resource.amount -= cost.amount
+      console.log(`💰 Odpočítané ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
+      
+      // Ak je to workResource, pridáme do zoznamu na vrátenie
+      if (resource.workResource) {
+        workResourcesToReturn.push({
+          resourceId: resource.id,
+          amount: cost.amount,
+          resourceName: resource.name
+        })
+      }
+    }
+  })
+  
+  // Vrátiť workResources po 3 sekundách
+  if (workResourcesToReturn.length > 0) {
+    setTimeout(() => {
+      workResourcesToReturn.forEach(item => {
+        const resource = resources.value.find(r => r.id === item.resourceId)
+        if (resource) {
+          resource.amount += item.amount
+          console.log(`👷 Work resource vrátené: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}`)
+        }
+      })
+    }, 3000) // 3 sekundy
   }
 }
 
@@ -313,8 +258,8 @@ const handleCellSelected = ({ row, col }) => {
     }
     
     if (selectedImage) {
-      // Kontrola resources pre budovy
-      if (selectedImage.buildingData && selectedImage.buildingData.isBuilding) {
+      // Kontrola resources pre budovy - len ak nie je zapnutý ignore checkbox
+      if (!ignoreResourceCheck.value && selectedImage.buildingData && selectedImage.buildingData.isBuilding) {
         const resourceCheck = checkBuildingResources(selectedImage.buildingData)
         if (!resourceCheck.hasEnough) {
           // Zobraz modal s chýbajúcimi resources
@@ -327,6 +272,9 @@ const handleCellSelected = ({ row, col }) => {
           console.log('⛔ GameView: Nedostatok resources:', resourceCheck)
           return // Nezakladať budovu
         }
+        
+        // Odpočítaj build cost resources (workResource sa vrátia po 3s)
+        deductBuildCost(selectedImage.buildingData)
       }
       
       const isRoadTile = selectedImageId.value.startsWith('road_tile_')
@@ -608,6 +556,75 @@ const closeBuildingModal = () => {
   showBuildingModal.value = false
   clickedBuilding.value = null
 }
+
+// Kontrola či je dosť resources na spustenie produkcie
+const canStartProduction = () => {
+  if (!clickedBuilding.value || !clickedBuilding.value.operationalCost) return true
+  
+  const operationalCost = clickedBuilding.value.operationalCost || []
+  
+  for (const cost of operationalCost) {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (!resource || resource.amount < cost.amount) {
+      return false
+    }
+  }
+  
+  return true
+}
+
+// Spustenie produkcie - odpočíta operational cost a pridá produkciu
+const startProduction = () => {
+  if (!clickedBuilding.value) return
+  
+  const operationalCost = clickedBuilding.value.operationalCost || []
+  const production = clickedBuilding.value.production || []
+  const workResourcesToReturn = []
+  
+  // Odpočítaj operational cost
+  operationalCost.forEach(cost => {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (resource) {
+      resource.amount -= cost.amount
+      console.log(`⚙️ Odpočítané prevádzkové náklady: ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
+      
+      // Ak je to workResource, pridáme do zoznamu na vrátenie
+      if (resource.workResource) {
+        workResourcesToReturn.push({
+          resourceId: resource.id,
+          amount: cost.amount,
+          resourceName: resource.name
+        })
+      }
+    }
+  })
+  
+  // Pridaj produkciu
+  production.forEach(prod => {
+    const resource = resources.value.find(r => r.id === prod.resourceId)
+    if (resource) {
+      resource.amount += prod.amount
+      console.log(`📦 Vyprodukované: +${prod.amount}x ${resource.name}, nový zostatok: ${resource.amount}`)
+    } else {
+      console.warn(`⚠️ Resource ${prod.resourceName} (${prod.resourceId}) neexistuje v zozname resources`)
+    }
+  })
+  
+  // Vrátiť workResources po 3 sekundách
+  if (workResourcesToReturn.length > 0) {
+    setTimeout(() => {
+      workResourcesToReturn.forEach(item => {
+        const resource = resources.value.find(r => r.id === item.resourceId)
+        if (resource) {
+          resource.amount += item.amount
+          console.log(`👷 Work resource vrátené: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}`)
+        }
+      })
+    }, 3000)
+  }
+  
+  console.log('✅ Produkcia spustená!')
+}
 </script>
 
 <template>
@@ -652,6 +669,13 @@ const closeBuildingModal = () => {
     
     <!-- Header -->
     <header>
+      <div class="header-left">
+        <label class="resource-check-toggle">
+          <input type="checkbox" v-model="ignoreResourceCheck" />
+          <span>🚫 Vypnúť kontrolu resources</span>
+        </label>
+      </div>
+      
       <ProjectManager 
         :images="images"
         :showNumbering="showNumbering"
@@ -757,6 +781,21 @@ const closeBuildingModal = () => {
               <span class="resource-amount">+{{ prod.amount }}</span>
             </div>
           </div>
+          
+          <!-- Tlačidlo na spustenie produkcie -->
+          <button 
+            class="production-button"
+            :class="{ disabled: !canStartProduction() }"
+            :disabled="!canStartProduction()"
+            @click="startProduction"
+          >
+            <span v-if="canStartProduction()">▶️ Spustiť produkciu</span>
+            <span v-else>⛔ Nedostatok resources</span>
+          </button>
+          
+          <p v-if="!canStartProduction()" class="production-warning">
+            ⚠️ Nemáte dostatok resources na prevádzku!
+          </p>
         </div>
       </div>
     </Modal>
@@ -847,6 +886,92 @@ header {
   backdrop-filter: blur(10px);
   z-index: 10;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.header-left {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.resource-check-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: white;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  color: #667eea;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.resource-check-toggle:hover {
+  background: #f0f0f0;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.resource-check-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #667eea;
+  margin: 0;
+}
+
+.resource-check-toggle span {
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.header-controls {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+}
+
+.resource-check-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: white;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  color: #667eea;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.resource-check-toggle:hover {
+  background: #f0f0f0;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.resource-check-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #667eea;
+}
+
+.resource-check-toggle span {
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 
 .sidebar {
@@ -1069,6 +1194,48 @@ header {
 .resource-item.production .resource-amount {
   color: #10b981;
   background: rgba(16, 185, 129, 0.1);
+}
+
+/* Production button */
+.production-button {
+  width: 100%;
+  padding: 1rem 1.5rem;
+  margin-top: 1rem;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+}
+
+.production-button:hover:not(.disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+}
+
+.production-button:active:not(.disabled) {
+  transform: translateY(0);
+}
+
+.production-button.disabled {
+  background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.production-warning {
+  margin: 0.75rem 0 0 0;
+  padding: 0.75rem;
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 4px solid #f59e0b;
+  border-radius: 4px;
+  color: #b45309;
+  font-size: 0.9rem;
+  font-weight: 500;
 }
 
 /* Insufficient Resources Modal */
