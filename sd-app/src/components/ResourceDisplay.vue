@@ -1,28 +1,13 @@
 <script setup>
-import { computed } from 'vue'
-
 const props = defineProps({
   resources: {
     type: Array,
     default: () => []
   },
-  usedResources: {
-    type: Object,
-    default: () => ({})
-  },
-  producedResources: {
+  storedResources: {
     type: Object,
     default: () => ({})
   }
-})
-
-// Vytvor mapu resources pre rýchly prístup
-const resourceMap = computed(() => {
-  const map = {}
-  props.resources.forEach(resource => {
-    map[resource.id] = resource
-  })
-  return map
 })
 </script>
 
@@ -54,25 +39,12 @@ const resourceMap = computed(() => {
         <div class="resource-info">
           <div class="resource-name">{{ resource.name }}</div>
           <div class="resource-amounts">
-            <!-- Netto hodnota (dostupné + produkované - použité) -->
+            <span class="amount-current">{{ resource.amount }}</span>
             <span 
-              :class="['amount-net', usedResources && usedResources[resource.id] ? ((resource.amount + (producedResources[resource.id] || 0)) - usedResources[resource.id] >= 0 ? 'positive' : 'negative') : 'positive']"
-              :title="`Zostatok: ${(resource.amount + (producedResources && producedResources[resource.id] || 0)) - (usedResources && usedResources[resource.id] || 0)}`"
-            >
-              {{ (resource.amount + (producedResources && producedResources[resource.id] || 0)) - (usedResources && usedResources[resource.id] || 0) }}
-            </span>
-            <span class="amount-separator">/</span>
-            <!-- Dostupné + Produkované (modrá) -->
-            <span class="amount-available" :title="`Dostupné: ${resource.amount}${producedResources && producedResources[resource.id] ? ' + Produkované: ' + producedResources[resource.id] : ''}`">
-              {{ resource.amount + (producedResources && producedResources[resource.id] || 0) }}
-            </span>
-            <!-- Použité (červená) - len ak existuje -->
-            <template v-if="usedResources && usedResources[resource.id]">
-              <span class="amount-separator">/</span>
-              <span class="amount-used" :title="`Použité na prevádzku budov: ${usedResources[resource.id]}`">
-                -{{ usedResources[resource.id] }}
-              </span>
-            </template>
+              v-if="storedResources && storedResources[resource.id] !== undefined" 
+              class="amount-stored"
+              :class="{ 'storage-full': resource.amount >= storedResources[resource.id] }"
+            >/{{ storedResources[resource.id] }}</span>
           </div>
         </div>
       </div>
@@ -170,44 +142,30 @@ const resourceMap = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-bottom: 0.25rem;
 }
 
 .resource-amounts {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.25rem;
+  align-items: baseline;
+  gap: 6px;
 }
 
-.amount-net {
+.amount-current {
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.3rem;
+  color: #667eea;
 }
 
-.amount-net.positive {
-  color: #4CAF50;
-}
-
-.amount-net.negative {
-  color: #f44336;
-}
-
-.amount-available {
-  color: #2196F3;
+.amount-stored {
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.3rem;
+  color: #000; /* čierna farba pre stored hodnotu */
+  transition: color 0.3s ease;
 }
 
-.amount-separator {
-  color: #999;
-  font-weight: 400;
-  font-size: 1rem;
-}
-
-.amount-used {
-  color: #f44336;
-  font-weight: 700;
-  font-size: 1.1rem;
+.amount-stored.storage-full {
+  color: #ff0000; /* červená farba keď je sklad plný */
 }
 
 /* Scrollbar styling */

@@ -68,6 +68,7 @@ const dontDropShadow = ref(false) // Či nezobrazovať tieň
 const buildCost = ref([]) // [{resourceId, resourceName, amount}]
 const operationalCost = ref([]) // [{resourceId, resourceName, amount}]
 const production = ref([]) // [{resourceId, resourceName, amount}]
+const stored = ref([]) // [{resourceId, resourceName, amount}] - skladované resources v budove
 const hasSmokeEffect = ref(false) // Či budova emituje dym
 const smokeSpeed = ref(1) // Rýchlosť animácie dymu (0.1 - 3)
 const smokeScale = ref(1) // Veľkosť častíc dymu (0.1 - 3)
@@ -80,9 +81,11 @@ const lightSize = ref(1) // Veľkosť svetla (0.1 - 5)
 const selectedBuildResource = ref('')
 const selectedOperationalResource = ref('')
 const selectedProductionResource = ref('')
+const selectedStoredResource = ref('')
 const buildAmount = ref(1)
 const operationalAmount = ref(1)
 const productionAmount = ref(1)
+const storedAmount = ref(1)
 
 // Watch pre props - aktualizuj lokálne refs keď sa zmenia props (napr. po načítaní projektu)
 watch(() => props.personSpawnEnabled, (newVal) => {
@@ -307,6 +310,7 @@ const saveBuildingData = () => {
       buildCost: buildCost.value,
       operationalCost: operationalCost.value,
       production: production.value,
+      stored: stored.value,
       hasSmokeEffect: hasSmokeEffect.value,
       smokeSpeed: smokeSpeed.value,
       smokeScale: smokeScale.value,
@@ -323,12 +327,12 @@ const saveBuildingData = () => {
       buildingData
     })
     
-    console.log('💾 Building data automaticky uložené (smoke effect):', buildingData)
+    console.log('💾 Building data automaticky uložené:', buildingData)
   }
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, lightBlinkSpeed, lightColor, lightSize], () => {
+watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, lightBlinkSpeed, lightColor, lightSize], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -337,6 +341,12 @@ watch(buildingSize, (newSize) => {
   console.log('📐 Building size zmenené na:', newSize)
   saveBuildingData()
 })
+
+// Explicitný watch na stored pre debugging
+watch(stored, (newStored) => {
+  console.log('🏚️ Stored zmenené:', JSON.stringify(newStored))
+  saveBuildingData()
+}, { deep: true })
 
 // Watch na isCommandCenter - command center môže byť len jeden
 watch(isCommandCenter, (newValue) => {
@@ -424,6 +434,7 @@ const openModal = (image) => {
     buildCost.value = image.buildingData.buildCost || []
     operationalCost.value = image.buildingData.operationalCost || []
     production.value = image.buildingData.production || []
+    stored.value = image.buildingData.stored || []
     hasSmokeEffect.value = image.buildingData.hasSmokeEffect === true
     smokeSpeed.value = image.buildingData.smokeSpeed || 1
     smokeScale.value = image.buildingData.smokeScale || 1
@@ -442,6 +453,7 @@ const openModal = (image) => {
     buildCost.value = []
     operationalCost.value = []
     production.value = []
+    stored.value = []
     hasSmokeEffect.value = false
     smokeSpeed.value = 1
     smokeScale.value = 1
@@ -464,6 +476,7 @@ const closeModal = () => {
   buildCost.value = []
   operationalCost.value = []
   production.value = []
+  stored.value = []
   hasSmokeEffect.value = false
   smokeSpeed.value = 1
   smokeScale.value = 1
@@ -472,6 +485,7 @@ const closeModal = () => {
   selectedBuildResource.value = ''
   selectedOperationalResource.value = ''
   selectedProductionResource.value = ''
+  selectedStoredResource.value = ''
 }
 
 const downloadImage = (image) => {
@@ -566,6 +580,24 @@ const addProductionResource = () => {
 
 const removeProductionResource = (index) => {
   production.value.splice(index, 1)
+}
+
+const addStoredResource = () => {
+  if (!selectedStoredResource.value) return
+  const resource = props.resources.find(r => r.id === selectedStoredResource.value)
+  if (!resource) return
+  
+  stored.value.push({
+    resourceId: resource.id,
+    resourceName: resource.name,
+    amount: storedAmount.value
+  })
+  selectedStoredResource.value = ''
+  storedAmount.value = 1
+}
+
+const removeStoredResource = (index) => {
+  stored.value.splice(index, 1)
 }
 </script>
 
@@ -1043,6 +1075,36 @@ const removeProductionResource = (index) => {
                       <span class="resource-name">{{ item.resourceName }}</span>
                       <span class="resource-amount">× {{ item.amount }}</span>
                       <button @click="removeProductionResource(index)" class="btn-remove" type="button">✕</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Stored -->
+                <div class="building-subsection">
+                  <h4>🏚️ Skladované (Stored)</h4>
+                  <div class="resource-input-group">
+                    <select v-model="selectedStoredResource" class="resource-select">
+                      <option value="">Vyberte resource...</option>
+                      <option v-for="resource in resources" :key="resource.id" :value="resource.id">
+                        {{ resource.name }}
+                      </option>
+                    </select>
+                    <input 
+                      v-model.number="storedAmount" 
+                      type="number" 
+                      min="1" 
+                      placeholder="Počet"
+                      class="amount-input"
+                    />
+                    <button @click="addStoredResource" class="btn-add-resource" type="button">
+                      ➕
+                    </button>
+                  </div>
+                  <div v-if="stored.length > 0" class="resource-list">
+                    <div v-for="(item, index) in stored" :key="index" class="resource-item">
+                      <span class="resource-name">{{ item.resourceName }}</span>
+                      <span class="resource-amount">× {{ item.amount }}</span>
+                      <button @click="removeStoredResource(index)" class="btn-remove" type="button">✕</button>
                     </div>
                   </div>
                 </div>

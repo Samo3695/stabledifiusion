@@ -7,6 +7,7 @@ import ImageGallery from './components/ImageGallery.vue'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
 import ResourceDisplay from './components/ResourceDisplay.vue'
+import { calculateStoredResources } from './utils/resourceCalculator.js'
 import Modal from './components/Modal.vue'
 import { buildRoad, regenerateRoadTilesOnCanvas } from './utils/roadBuilder.js'
 
@@ -47,6 +48,11 @@ const insufficientResourcesData = ref({
   buildingName: '', 
   missingBuildResources: [], 
   missingOperationalResources: [] 
+})
+
+// Aggregované skladované resources z budov umiestnených na canvase
+const storedResources = computed(() => {
+  return calculateStoredResources(canvasImagesMap.value, images.value)
 })
 
 const handleImageGenerated = async (image, cellsX = 1, cellsY = 1) => {
@@ -755,6 +761,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       buildCost: buildingData.buildCost,
       operationalCost: buildingData.operationalCost,
       production: buildingData.production,
+      stored: buildingData.stored,
       hasSmokeEffect: buildingData.hasSmokeEffect,
       smokeSpeed: buildingData.smokeSpeed,
       smokeScale: buildingData.smokeScale,
@@ -1075,7 +1082,7 @@ const handleCanvasUpdated = () => {
       
       <!-- Game Play Mode: Resources Display -->
       <template v-else>
-        <ResourceDisplay :resources="resources" :usedResources="usedResources" :producedResources="producedResources" />
+        <ResourceDisplay :resources="resources" :storedResources="storedResources" />
       </template>
     </aside>
     

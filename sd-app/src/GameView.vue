@@ -8,6 +8,15 @@ import RoadSelector from './components/RoadSelector.vue'
 import Modal from './components/Modal.vue'
 import { buildRoad, regenerateRoadTilesOnCanvas } from './utils/roadBuilder.js'
 import { loadProject } from './utils/projectLoader.js'
+import { 
+  calculateResourceUsage,
+  calculateStoredResources,
+  checkBuildingResources as checkResources,
+  deductBuildCost as deductCost,
+  canStartProduction as checkProductionResources,
+  executeProduction,
+  getMissingOperationalResources
+} from './utils/resourceCalculator.js'
 
 const images = ref([])
 const lastImageCellsX = ref(1)
@@ -36,6 +45,7 @@ const workforce = ref([])
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png')
 const roadOpacity = ref(100)
 const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
+const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každú budovu: { 'row-col': { enabled: boolean, interval: number, buildingData: {...} } }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
 const showBuildingModal = ref(false) // Či sa má zobraziť modal s metadátami budovy
 const clickedBuilding = ref(null) // Údaje o kliknutej budove
@@ -52,92 +62,37 @@ const buildings = computed(() => {
   return images.value.filter(img => img.buildingData?.isBuilding === true)
 })
 
-// Computed properties pre usedResources a producedResources - už nepoužívané
-// Produkcia sa teraz spúšťa manuálne tlačidlom
-const usedResources = computed(() => ({}))
-const producedResources = computed(() => ({}))
+// Computed property pre zistenie či má aktuálna budova zapnutú auto produkciu
+const currentBuildingAutoEnabled = computed(() => {
+  if (!clickedBuilding.value) return false
+  const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
+  return buildingProductionStates.value[key]?.enabled || false
+})
 
-// Funkcia na kontrolu dostupnosti resources pre budovu
+// Computed properties pre usedResources a producedResources - používa resourceCalculator service
+const usedResources = computed(() => {
+  const { usedResources } = calculateResourceUsage(canvasImagesMap.value, images.value)
+  return usedResources
+})
+
+const producedResources = computed(() => {
+  const { producedResources } = calculateResourceUsage(canvasImagesMap.value, images.value)
+  return producedResources
+})
+
+// Aggregované skladované resources z budov umiestnených na canvase
+const storedResources = computed(() => {
+  return calculateStoredResources(canvasImagesMap.value, images.value)
+})
+
+// Funkcia na kontrolu dostupnosti resources pre budovu - používa resourceCalculator service
 const checkBuildingResources = (buildingData) => {
-  if (!buildingData || !buildingData.isBuilding) {
-    return { hasEnough: true, missingBuild: [], missingOperational: [] }
-  }
-  
-  const missingBuild = []
-  
-  // Kontrola build cost (potrebné na stavbu)
-  const buildCost = buildingData.buildCost || []
-  buildCost.forEach(cost => {
-    const resource = resources.value.find(r => r.id === cost.resourceId)
-    if (!resource) {
-      missingBuild.push({
-        name: cost.resourceName,
-        needed: cost.amount,
-        available: 0,
-        isWorkResource: false
-      })
-      return
-    }
-    
-    // Pre build cost kontrolujeme reálny amount
-    const available = resource.amount
-    
-    if (available < cost.amount) {
-      missingBuild.push({
-        name: cost.resourceName,
-        needed: cost.amount,
-        available: available,
-        isWorkResource: resource.workResource || false
-      })
-    }
-  })
-  
-  // Operational cost sa zatiaľ nekontroluje - logiku pridáme neskôr
-  
-  return {
-    hasEnough: missingBuild.length === 0,
-    missingBuild,
-    missingOperational: [] // Zatiaľ prázdne
-  }
+  return checkResources(buildingData, resources.value)
 }
 
-// Funkcia na odpočítanie build cost resources a vrátenie workResource po 3 sekundách
+// Funkcia na odpočítanie build cost resources - používa resourceCalculator service
 const deductBuildCost = (buildingData) => {
-  if (!buildingData || !buildingData.isBuilding) return
-  
-  const buildCost = buildingData.buildCost || []
-  const workResourcesToReturn = [] // Zoznam workResource ktoré treba vrátiť
-  
-  buildCost.forEach(cost => {
-    const resource = resources.value.find(r => r.id === cost.resourceId)
-    if (resource) {
-      // Odpočítaj amount
-      resource.amount -= cost.amount
-      console.log(`💰 Odpočítané ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
-      
-      // Ak je to workResource, pridáme do zoznamu na vrátenie
-      if (resource.workResource) {
-        workResourcesToReturn.push({
-          resourceId: resource.id,
-          amount: cost.amount,
-          resourceName: resource.name
-        })
-      }
-    }
-  })
-  
-  // Vrátiť workResources po 3 sekundách
-  if (workResourcesToReturn.length > 0) {
-    setTimeout(() => {
-      workResourcesToReturn.forEach(item => {
-        const resource = resources.value.find(r => r.id === item.resourceId)
-        if (resource) {
-          resource.amount += item.amount
-          console.log(`👷 Work resource vrátené: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}`)
-        }
-      })
-    }, 3000) // 3 sekundy
-  }
+  deductCost(buildingData, resources.value)
 }
 
 const handleDelete = (id) => {
@@ -424,6 +379,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       buildCost: buildingData.buildCost,
       operationalCost: buildingData.operationalCost,
       production: buildingData.production,
+      stored: buildingData.stored,
       hasSmokeEffect: buildingData.hasSmokeEffect,
       smokeSpeed: buildingData.smokeSpeed,
       smokeScale: buildingData.smokeScale,
@@ -557,73 +513,81 @@ const closeBuildingModal = () => {
   clickedBuilding.value = null
 }
 
-// Kontrola či je dosť resources na spustenie produkcie
-const canStartProduction = () => {
-  if (!clickedBuilding.value || !clickedBuilding.value.operationalCost) return true
+// Zastaviť auto produkciu pre konkrétnu budovu
+const stopAutoProduction = (row, col) => {
+  const key = `${row}-${col}`
+  const state = buildingProductionStates.value[key]
   
-  const operationalCost = clickedBuilding.value.operationalCost || []
-  
-  for (const cost of operationalCost) {
-    const resource = resources.value.find(r => r.id === cost.resourceId)
-    if (!resource || resource.amount < cost.amount) {
-      return false
-    }
+  if (state && state.interval) {
+    clearInterval(state.interval)
+    console.log(`⏹️ Auto-produkcia zastavená pre budovu na [${row}, ${col}]`)
   }
   
-  return true
+  // Vymazať stav budovy
+  delete buildingProductionStates.value[key]
 }
 
-// Spustenie produkcie - odpočíta operational cost a pridá produkciu
-const startProduction = () => {
+// Toggle auto produkcie pre konkrétnu budovu
+const toggleAutoProduction = () => {
   if (!clickedBuilding.value) return
   
-  const operationalCost = clickedBuilding.value.operationalCost || []
-  const production = clickedBuilding.value.production || []
-  const workResourcesToReturn = []
+  const row = clickedBuilding.value.row
+  const col = clickedBuilding.value.col
+  const key = `${row}-${col}`
+  const buildingData = clickedBuilding.value
   
-  // Odpočítaj operational cost
-  operationalCost.forEach(cost => {
-    const resource = resources.value.find(r => r.id === cost.resourceId)
-    if (resource) {
-      resource.amount -= cost.amount
-      console.log(`⚙️ Odpočítané prevádzkové náklady: ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
-      
-      // Ak je to workResource, pridáme do zoznamu na vrátenie
-      if (resource.workResource) {
-        workResourcesToReturn.push({
-          resourceId: resource.id,
-          amount: cost.amount,
-          resourceName: resource.name
-        })
+  // Skontrolovať aktuálny stav
+  const currentState = buildingProductionStates.value[key]
+  
+  if (currentState?.enabled) {
+    // Vypnúť auto produkciu
+    stopAutoProduction(row, col)
+  } else {
+    // Zapnúť auto produkciu
+    console.log(`🔄 Auto-produkcia zapnutá pre: ${buildingData.buildingName} na [${row}, ${col}]`)
+    
+    // Spustiť produkciu hneď
+    if (canStartProduction()) {
+      startProduction()
+    }
+    
+    // Vytvoriť interval pre túto budovu
+    const interval = setInterval(() => {
+      // Skontrolovať či je dosť resources
+      if (checkProductionResources(buildingData, resources.value)) {
+        executeProduction(buildingData, resources.value, storedResources.value)
+      } else {
+        // Zastaviť ak nie je dosť resources
+        stopAutoProduction(row, col)
+        console.log(`⛔ Auto-produkcia zastavená pre budovu na [${row}, ${col}] - nedostatok resources`)
       }
-    }
-  })
-  
-  // Pridaj produkciu
-  production.forEach(prod => {
-    const resource = resources.value.find(r => r.id === prod.resourceId)
-    if (resource) {
-      resource.amount += prod.amount
-      console.log(`📦 Vyprodukované: +${prod.amount}x ${resource.name}, nový zostatok: ${resource.amount}`)
-    } else {
-      console.warn(`⚠️ Resource ${prod.resourceName} (${prod.resourceId}) neexistuje v zozname resources`)
-    }
-  })
-  
-  // Vrátiť workResources po 3 sekundách
-  if (workResourcesToReturn.length > 0) {
-    setTimeout(() => {
-      workResourcesToReturn.forEach(item => {
-        const resource = resources.value.find(r => r.id === item.resourceId)
-        if (resource) {
-          resource.amount += item.amount
-          console.log(`👷 Work resource vrátené: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}`)
-        }
-      })
     }, 3000)
+    
+    // Uložiť stav
+    buildingProductionStates.value[key] = {
+      enabled: true,
+      interval: interval,
+      buildingData: buildingData
+    }
   }
-  
-  console.log('✅ Produkcia spustená!')
+}
+
+// Kontrola či je dosť resources na spustenie produkcie - používa resourceCalculator service
+const canStartProduction = () => {
+  if (!clickedBuilding.value) return false
+  return checkProductionResources(clickedBuilding.value, resources.value)
+}
+
+// Computed property pre zistenie chýbajúcich operational resources
+const missingOperationalResources = computed(() => {
+  if (!clickedBuilding.value) return new Set()
+  return getMissingOperationalResources(clickedBuilding.value, resources.value)
+})
+
+// Spustenie produkcie - používa resourceCalculator service
+const startProduction = () => {
+  if (!clickedBuilding.value) return
+  executeProduction(clickedBuilding.value, resources.value, storedResources.value)
 }
 </script>
 
@@ -700,9 +664,8 @@ const startProduction = () => {
     <!-- Pravý sidebar s Resources -->
     <aside class="sidebar">
       <ResourceDisplay 
-        :resources="resources" 
-        :usedResources="usedResources" 
-        :producedResources="producedResources" 
+        :resources="resources"
+        :storedResources="storedResources"
       />
       <BuildingSelector 
         :buildings="buildings"
@@ -765,7 +728,12 @@ const startProduction = () => {
         <div v-if="clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0" class="building-info-section">
           <h3>⚙️ Prevádzkové náklady</h3>
           <div class="resource-list">
-            <div v-for="(cost, index) in clickedBuilding.operationalCost" :key="index" class="resource-item">
+            <div 
+              v-for="(cost, index) in clickedBuilding.operationalCost" 
+              :key="index" 
+              class="resource-item"
+              :class="{ 'insufficient': missingOperationalResources.has(cost.resourceId) }"
+            >
               <span class="resource-name">{{ cost.resourceName }}</span>
               <span class="resource-amount">{{ cost.amount }}</span>
             </div>
@@ -783,15 +751,27 @@ const startProduction = () => {
           </div>
           
           <!-- Tlačidlo na spustenie produkcie -->
-          <button 
-            class="production-button"
-            :class="{ disabled: !canStartProduction() }"
-            :disabled="!canStartProduction()"
-            @click="startProduction"
-          >
-            <span v-if="canStartProduction()">▶️ Spustiť produkciu</span>
-            <span v-else>⛔ Nedostatok resources</span>
-          </button>
+          <div class="production-controls">
+            <button 
+              class="production-button"
+              :class="{ disabled: !canStartProduction() || currentBuildingAutoEnabled }"
+              :disabled="!canStartProduction() || currentBuildingAutoEnabled"
+              @click="startProduction"
+            >
+              <span v-if="canStartProduction()">▶️ Spustiť produkciu</span>
+              <span v-else>⛔ Nedostatok resources</span>
+            </button>
+            
+            <label class="auto-production-toggle">
+              <input 
+                type="checkbox" 
+                v-model="currentBuildingAutoEnabled"
+                @change="toggleAutoProduction"
+                :disabled="!canStartProduction()"
+              />
+              <span>🔄 Auto (3s)</span>
+            </label>
+          </div>
           
           <p v-if="!canStartProduction()" class="production-warning">
             ⚠️ Nemáte dostatok resources na prevádzku!
@@ -1196,6 +1176,22 @@ header {
   background: rgba(16, 185, 129, 0.1);
 }
 
+.resource-item.insufficient {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.resource-item.insufficient .resource-name {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.resource-item.insufficient .resource-amount {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+  font-weight: 700;
+}
+
 /* Production button */
 .production-button {
   width: 100%;
@@ -1225,6 +1221,60 @@ header {
   background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
   cursor: not-allowed;
   box-shadow: none;
+}
+
+.production-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.auto-production-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: #f0f9ff;
+  border: 2px solid #3b82f6;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  color: #3b82f6;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.auto-production-toggle:hover {
+  background: #dbeafe;
+}
+
+.auto-production-toggle:has(input:checked) {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
+  animation: pulse-auto 2s infinite;
+}
+
+@keyframes pulse-auto {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+}
+
+.auto-production-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #3b82f6;
+}
+
+.auto-production-toggle:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.auto-production-toggle input:disabled {
+  cursor: not-allowed;
 }
 
 .production-warning {
