@@ -349,6 +349,67 @@ const handleLoadProject = async (projectData) => {
     setTimeout(() => {
       handleCanvasUpdated()
       
+      console.log('🔍 DEBUG: Kontrolujem buildingProductionStates...', loadedData.buildingProductionStates)
+      console.log('🔍 DEBUG: loadedData typ:', typeof loadedData.buildingProductionStates)
+      console.log('🔍 DEBUG: loadedData keys:', loadedData.buildingProductionStates ? Object.keys(loadedData.buildingProductionStates) : 'undefined')
+      
+      // Obnov production states pre budovy
+      if (loadedData.buildingProductionStates && Object.keys(loadedData.buildingProductionStates).length > 0) {
+        console.log('🔄 GameView: Obnovovanie auto-production states...', Object.keys(loadedData.buildingProductionStates).length, 'budov')
+        
+        Object.entries(loadedData.buildingProductionStates).forEach(([key, state]) => {
+          console.log(`  🔍 Spracovávam key: ${key}, enabled: ${state.enabled}, buildingData:`, state.buildingData)
+          
+          if (state.enabled && state.buildingData) {
+            const [row, col] = key.split('-').map(Number)
+            
+            // Skontroluj či budova existuje na canvase
+            const cellImages = canvasRef.value?.cellImages()
+            console.log(`  🔍 Canvas cellImages pre ${key}:`, cellImages?.[key] ? 'EXISTS' : 'NEEXISTUJE')
+            
+            if (cellImages && cellImages[key]) {
+              console.log(`  ✅ Obnovovanie auto-production pre budovu na [${row}, ${col}]:`, state.buildingData.buildingName)
+              
+              // Zobraz auto-production indikátor
+              canvasRef.value?.showAutoProductionIndicator(row, col)
+              
+              // Vytvor interval pre túto budovu
+              const interval = setInterval(() => {
+                // Skontroluj či má dosť resources na produkciu
+                if (checkProductionResources(state.buildingData, resources.value)) {
+                  // Vykonaj produkciu
+                  executeProduction(state.buildingData, resources.value, storedResources.value)
+                  
+                  // Skry warning indikátor ak existuje
+                  canvasRef.value?.hideWarningIndicator(row, col)
+                } else {
+                  // Nedostatok resources - zobraz warning
+                  canvasRef.value?.showWarningIndicator(row, col, 'resources')
+                  console.log(`⚠️ Nedostatok resources pre auto-produkciu: ${state.buildingData.buildingName} na [${row}, ${col}]`)
+                }
+              }, 3000)
+              
+              // Uložiť stav
+              buildingProductionStates.value[key] = {
+                enabled: true,
+                interval: interval,
+                buildingData: state.buildingData
+              }
+              
+              console.log(`  ✅ Auto-production interval vytvorený pre ${key}`)
+            } else {
+              console.warn(`⚠️ Budova na [${row}, ${col}] neexistuje na canvase, preskakujem auto-production`)
+            }
+          } else {
+            console.log(`  ⏭️ Preskakujem ${key} - enabled: ${state.enabled}, má buildingData: ${!!state.buildingData}`)
+          }
+        })
+      } else {
+        console.log('⚠️ GameView: Žiadne buildingProductionStates na obnovenie')
+        console.log('   - buildingProductionStates existuje:', !!loadedData.buildingProductionStates)
+        console.log('   - počet kľúčov:', loadedData.buildingProductionStates ? Object.keys(loadedData.buildingProductionStates).length : 0)
+      }
+      
       // Ukončenie loading state
       setTimeout(() => {
         isLoading.value = false
@@ -740,6 +801,7 @@ const startProduction = () => {
         :workforce="workforce"
         :roadSpriteUrl="roadSpriteUrl"
         :roadOpacity="roadOpacity"
+        :buildingProductionStates="buildingProductionStates"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"

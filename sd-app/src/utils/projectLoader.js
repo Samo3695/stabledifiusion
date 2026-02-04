@@ -250,7 +250,8 @@ export async function loadProject(projectData, canvasRef, onProgress = null) {
       resources: projectData.resources || [],
       workforce: projectData.workforce || [],
       roadSpriteUrl,
-      roadOpacity
+      roadOpacity,
+      buildingProductionStates: projectData.buildingProductionStates || {}
     }
     
   } catch (error) {

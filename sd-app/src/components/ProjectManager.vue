@@ -59,6 +59,10 @@ const props = defineProps({
   roadOpacity: {
     type: Number,
     default: 100
+  },
+  buildingProductionStates: {
+    type: Object,
+    default: () => ({})
   }
 })
 
@@ -257,7 +261,15 @@ const saveProject = () => {
       resources: props.resources || [],
       workforce: props.workforce || [],
       roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
-      roadOpacity: props.roadOpacity || 100
+      roadOpacity: props.roadOpacity || 100,
+      buildingProductionStates: Object.entries(props.buildingProductionStates || {}).reduce((acc, [key, state]) => {
+        // Uloží len enabled flag a buildingData, nie interval (funkciu)
+        acc[key] = {
+          enabled: state.enabled || false,
+          buildingData: state.buildingData || null
+        }
+        return acc
+      }, {})
     }
 
     // DEBUG logging pre road sprite a opacity
@@ -266,6 +278,10 @@ const saveProject = () => {
     console.log('   props.roadOpacity:', props.roadOpacity)
     console.log('   projectData.roadSpriteUrl:', projectData.roadSpriteUrl?.substring(0, 50) + '...')
     console.log('   projectData.roadOpacity:', projectData.roadOpacity)
+    console.log('   buildingProductionStates:', Object.keys(projectData.buildingProductionStates || {}).length, 'budov')
+    if (Object.keys(projectData.buildingProductionStates || {}).length > 0) {
+      console.log('   📋 Production states:', projectData.buildingProductionStates)
+    }
 
     // Konvertuj na JSON string
     const jsonString = JSON.stringify(projectData, null, 2)
@@ -412,9 +428,25 @@ const saveGameplayProject = async () => {
       resources: props.resources || [],
       workforce: props.workforce || [],
       roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
-      roadOpacity: props.roadOpacity || 100
+      roadOpacity: props.roadOpacity || 100,
+      buildingProductionStates: Object.entries(props.buildingProductionStates || {}).reduce((acc, [key, state]) => {
+        // Uloží len enabled flag a buildingData, nie interval (funkciu)
+        acc[key] = {
+          enabled: state.enabled || false,
+          buildingData: state.buildingData || null
+        }
+        return acc
+      }, {})
     }
 
+    console.log('✅ Gameplay projekt uložený s optimalizovanými obrázkami!')
+    console.log('   📦 Obrázkov:', projectData.imageCount)
+    console.log('   🎨 Škálované podľa buildingSize')
+    console.log('   🔄 Production states:', Object.keys(projectData.buildingProductionStates || {}).length, 'budov')
+    if (Object.keys(projectData.buildingProductionStates || {}).length > 0) {
+      console.log('   📋 Auto-production data:', projectData.buildingProductionStates)
+    }
+    
     // Konvertuj na JSON string
     const jsonString = JSON.stringify(projectData, null, 2)
     
@@ -528,7 +560,8 @@ const handleFileUpload = async (event) => {
       resources: projectData.resources || [],
       workforce: projectData.workforce || [],
       roadSpriteUrl: projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
-      roadOpacity: projectData.roadOpacity || 100
+      roadOpacity: projectData.roadOpacity || 100,
+      buildingProductionStates: projectData.buildingProductionStates || {}
     })
 
     // Debug logging pre buildingData
