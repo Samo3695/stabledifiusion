@@ -289,3 +289,46 @@ export function executeProduction(buildingData, resources, storedCapacities = {}
   
   console.log('✅ Produkcia spustená!')
 }
+/**
+ * Kontrola či je dostatok miesta na uskladnenie produkcie budovy
+ * @param {Object} buildingData - Metadata budovy
+ * @param {Array} resources - Zoznam dostupných resources
+ * @param {Object} storedCapacities - Objekt s celkovou stored kapacitou pre každú resource {resourceId: totalCapacity}
+ * @returns {Object} - {hasSpace: boolean, fullResources: []}
+ */
+export function canStoreProduction(buildingData, resources, storedCapacities = {}) {
+  const fullResources = []
+  
+  if (!buildingData || !buildingData.production) {
+    return { hasSpace: true, fullResources }
+  }
+  
+  const production = buildingData.production || []
+  
+  for (const prod of production) {
+    const resource = resources.find(r => r.id === prod.resourceId)
+    if (!resource) continue
+    
+    const currentAmount = resource.amount
+    const storedCapacity = storedCapacities[prod.resourceId]
+    
+    // Ak má resource stored kapacitu, kontroluj limit
+    if (storedCapacity !== undefined && storedCapacity < Infinity) {
+      const availableSpace = storedCapacity - currentAmount
+      
+      if (availableSpace <= 0) {
+        fullResources.push({
+          resourceId: prod.resourceId,
+          resourceName: prod.resourceName || resource.name,
+          currentAmount,
+          capacity: storedCapacity
+        })
+      }
+    }
+  }
+  
+  return {
+    hasSpace: fullResources.length === 0,
+    fullResources
+  }
+}

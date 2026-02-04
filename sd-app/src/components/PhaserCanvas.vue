@@ -62,10 +62,26 @@ const props = defineProps({
   carSpawnCount: {
     type: Number,
     default: 0
+  },
+  isSettingDestination: {
+    type: Boolean,
+    default: false
+  },
+  destinationTiles: {
+    type: Array,
+    default: () => []
+  },
+  selectedBuildingDestinationTiles: {
+    type: Array,
+    default: () => []
+  },
+  selectedBuildingCanBuildOnlyInDestination: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked', 'destination-tile-clicked'])
 
 const gameContainer = ref(null)
 let game = null
@@ -74,6 +90,7 @@ const showPerson = ref(true) // Či zobrazovať pohyblivú osobu
 
 // Computed pre CSS triedu kurzora
 const cursorClass = computed(() => {
+  if (props.isSettingDestination) return 'destination-mode'
   if (props.roadDeleteMode || props.deleteMode) return 'delete-mode'
   if (props.roadBuildingMode) return 'road-mode'
   if (props.selectedImageId) return 'has-selection'
@@ -117,6 +134,9 @@ class IsoScene extends Phaser.Scene {
     this.roadStartCell = null // Začiatočný bod cesty
     this.roadPath = [] // Aktuálna cesta (pole bunk)
     this.roadPathGraphics = null // Grafika pre preview cesty
+    
+    // Destination tiles graphics
+    this.selectedBuildingDestinationGraphics = null // Grafika pre destination tiles vybranej budovy
     
     // PersonManager pre správu postáv
     this.personManager = null
@@ -169,6 +189,9 @@ class IsoScene extends Phaser.Scene {
     
     this.uiContainer = this.add.container(0, 0)
     this.uiContainer.setDepth(9999999) // Najvyšší z-index pre UI elementy (číslovanie, hover, selection)
+    
+    // Graphics pre destination tiles overlay
+    this.destinationTilesGraphics = null
     
     // Nakreslíme mriežku
     this.drawGrid()
@@ -248,6 +271,324 @@ class IsoScene extends Phaser.Scene {
   toggleCar(visible) {
     if (this.carManager) {
       this.carManager.toggleCars(visible)
+    }
+  }
+
+  // Funkcia na vykreslenie destination tiles overlay
+  drawDestinationTiles() {
+    // Vyčisti staré destination tiles
+    if (this.destinationTilesGraphics) {
+      this.destinationTilesGraphics.destroy()
+      this.destinationTilesGraphics = null
+    }
+    
+    // Ak nie sme v destination mode alebo nemáme žiadne tiles, return
+    if (!props.isSettingDestination || !props.destinationTiles || props.destinationTiles.length === 0) {
+      return
+    }
+    
+    // Vytvor nové graphics
+    this.destinationTilesGraphics = this.add.graphics()
+    this.uiContainer.add(this.destinationTilesGraphics)
+    
+    // Vykresli každý destination tile
+    for (const tile of props.destinationTiles) {
+      const { x, y } = this.gridToIso(tile.row, tile.col)
+      
+      // Zelený filled tile
+      this.destinationTilesGraphics.fillStyle(0x10b981, 0.6)
+      this.destinationTilesGraphics.beginPath()
+      this.destinationTilesGraphics.moveTo(x, y)
+      this.destinationTilesGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.destinationTilesGraphics.lineTo(x, y + TILE_HEIGHT)
+      this.destinationTilesGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.destinationTilesGraphics.closePath()
+      this.destinationTilesGraphics.fillPath()
+      
+      // Tmavá zelená outline
+      this.destinationTilesGraphics.lineStyle(3, 0x059669, 1)
+      this.destinationTilesGraphics.strokePath()
+    }
+  }
+
+  // Funkcia na vykreslenie allowed destination tiles pre vybranú budovu
+  drawSelectedBuildingDestinationTiles() {
+    // Vyčisti staré destination tiles
+    if (this.selectedBuildingDestinationGraphics) {
+      this.selectedBuildingDestinationGraphics.destroy()
+      this.selectedBuildingDestinationGraphics = null
+    }
+    
+    // Ak nie je vybraná budova s destination restriction alebo nemáme žiadne tiles, return
+    if (!props.selectedBuildingCanBuildOnlyInDestination || !props.selectedBuildingDestinationTiles || props.selectedBuildingDestinationTiles.length === 0) {
+      return
+    }
+    
+    // Vytvor nové graphics
+    this.selectedBuildingDestinationGraphics = this.add.graphics()
+    this.uiContainer.add(this.selectedBuildingDestinationGraphics)
+    
+    // Vykresli každý destination tile
+    for (const tile of props.selectedBuildingDestinationTiles) {
+      const { x, y } = this.gridToIso(tile.row, tile.col)
+      
+      // Zelený filled tile (trochu priehľadnejší ako destination setting mode)
+      this.selectedBuildingDestinationGraphics.fillStyle(0x10b981, 0.4)
+      this.selectedBuildingDestinationGraphics.beginPath()
+      this.selectedBuildingDestinationGraphics.moveTo(x, y)
+      this.selectedBuildingDestinationGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.selectedBuildingDestinationGraphics.lineTo(x, y + TILE_HEIGHT)
+      this.selectedBuildingDestinationGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.selectedBuildingDestinationGraphics.closePath()
+      this.selectedBuildingDestinationGraphics.fillPath()
+      
+      // Svetlá zelená outline
+      this.selectedBuildingDestinationGraphics.lineStyle(2, 0x10b981, 0.8)
+      this.selectedBuildingDestinationGraphics.strokePath()
+    }
+  }
+
+  // Mapa warning indikátorov pre budovy
+  warningIndicators = {}
+  
+  // Mapa auto-production indikátorov pre budovy
+  autoProductionIndicators = {}
+
+  // Zobrazí warning indikátor nad budovou
+  // type: 'resources' (žltý) alebo 'storage' (červený)
+  showWarningIndicator(row, col, type = 'resources') {
+    let key = `${row}-${col}`
+    console.log(`🚨 showWarningIndicator volaný pre [${row}, ${col}], typ: ${type}`)
+    
+    // Skontroluj či je táto bunka sekundárna a nájdi origin
+    const originCellData = cellImages[key]
+    if (originCellData?.isSecondary) {
+      row = originCellData.originRow
+      col = originCellData.originCol
+      key = `${row}-${col}`
+      console.log(`🔄 Sekundárna bunka - používam origin: [${row}, ${col}]`)
+    }
+    
+    // Ak už existuje indikátor s rovnakým typom, preskočíme
+    if (this.warningIndicators[key]?.type === type) {
+      console.log(`⏭️ Indikátor už existuje`)
+      return
+    }
+    
+    // Odstránime existujúci indikátor ak je iného typu
+    this.hideWarningIndicator(row, col)
+    
+    // Nájdeme budovu na danej pozícii
+    const buildingSprite = this.buildingSprites[key]
+    if (!buildingSprite) {
+      console.warn(`⚠️ Budova na pozícii [${row}, ${col}] neexistuje`)
+      return
+    }
+    
+    // Získame pozíciu a rozmery budovy
+    const { x, y } = this.gridToIso(row, col)
+    
+    // Získame veľkosť budovy z cellImages
+    const cellData = cellImages[key]
+    const cellsX = cellData?.cellsX || 1
+    const cellsY = cellData?.cellsY || 1
+    
+    // Vypočítame offset pre multi-cell objekty (rovnaký ako v addBuildingWithShadow)
+    let offsetX = 0
+    let offsetY = 0
+    
+    if (cellsX === 1 && cellsY === 2) {
+      offsetX = -TILE_WIDTH / 4
+      offsetY = TILE_HEIGHT / 2
+    } else if (cellsX === 2 && cellsY === 2) {
+      offsetY = TILE_HEIGHT
+    } else if (cellsX >= 3) {
+      offsetY = TILE_HEIGHT * (cellsX - 1)
+    }
+    
+    // Výška indikátora nad budovou
+    const indicatorY = y + TILE_HEIGHT + offsetY - buildingSprite.height * buildingSprite.scaleY - 25
+    const indicatorX = x + offsetX
+    
+    console.log(`📍 Pozícia indikátora: x=${indicatorX}, y=${indicatorY}`)
+    
+    // Farba podľa typu
+    const color = type === 'storage' ? 0xff3333 : 0xffcc00 // červená pre storage, žltá pre resources
+    const bgColor = type === 'storage' ? 0x990000 : 0x996600
+    
+    // Vytvoríme graphics objekty priamo bez kontajnera
+    const bg = this.add.graphics()
+    bg.setPosition(indicatorX, indicatorY)
+    bg.fillStyle(bgColor, 0.9)
+    bg.fillCircle(0, 0, 14)
+    bg.lineStyle(2, 0xffffff, 1)
+    bg.strokeCircle(0, 0, 14)
+    bg.setDepth(9999999)
+    
+    // Výkričník
+    const exclamation = this.add.text(indicatorX, indicatorY, '!', {
+      fontSize: '20px',
+      fontFamily: 'Arial Black, sans-serif',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    })
+    exclamation.setOrigin(0.5, 0.5)
+    exclamation.setDepth(9999999)
+    
+    // Pridáme pulzujúcu animáciu
+    this.tweens.add({
+      targets: [bg, exclamation],
+      scaleX: { from: 1, to: 1.2 },
+      scaleY: { from: 1, to: 1.2 },
+      duration: 500,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1
+    })
+    
+    // Uložíme referenciu
+    this.warningIndicators[key] = {
+      bg,
+      exclamation,
+      type
+    }
+    
+    console.log(`✅ Warning indikátor vytvorený a zobrazený na [${row}, ${col}], typ: ${type}`)
+  }
+
+  // Skryje warning indikátor
+  hideWarningIndicator(row, col) {
+    const key = `${row}-${col}`
+    
+    if (this.warningIndicators[key]) {
+      this.warningIndicators[key].bg?.destroy()
+      this.warningIndicators[key].exclamation?.destroy()
+      delete this.warningIndicators[key]
+      console.log(`✅ Warning indikátor skrytý na [${row}, ${col}]`)
+    }
+  }
+
+  // Zobrazí indikátor auto-produkcie nad budovou (zelený krúžok s rotujúcou šípkou)
+  showAutoProductionIndicator(row, col) {
+    let key = `${row}-${col}`
+    console.log(`🔄 showAutoProductionIndicator volaný pre [${row}, ${col}]`)
+    
+    // Skontroluj či je táto bunka sekundárna a nájdi origin
+    const originCellData = cellImages[key]
+    if (originCellData?.isSecondary) {
+      row = originCellData.originRow
+      col = originCellData.originCol
+      key = `${row}-${col}`
+      console.log(`🔄 Sekundárna bunka - používam origin: [${row}, ${col}]`)
+    }
+    
+    // Ak už existuje, preskočíme
+    if (this.autoProductionIndicators[key]) {
+      console.log(`⏭️ Auto-production indikátor už existuje`)
+      return
+    }
+    
+    // Nájdeme budovu na danej pozícii
+    const buildingSprite = this.buildingSprites[key]
+    if (!buildingSprite) {
+      console.warn(`⚠️ Budova na pozícii [${row}, ${col}] neexistuje`)
+      return
+    }
+    
+    // Získame pozíciu a rozmery budovy
+    const { x, y } = this.gridToIso(row, col)
+    
+    // Získame veľkosť budovy z cellImages
+    const cellData = cellImages[key]
+    const cellsX = cellData?.cellsX || 1
+    const cellsY = cellData?.cellsY || 1
+    
+    // Vypočítame offset pre multi-cell objekty
+    let offsetX = 0
+    let offsetY = 0
+    
+    if (cellsX === 1 && cellsY === 2) {
+      offsetX = -TILE_WIDTH / 4
+      offsetY = TILE_HEIGHT / 2
+    } else if (cellsX === 2 && cellsY === 2) {
+      offsetY = TILE_HEIGHT
+    } else if (cellsX >= 3) {
+      offsetY = TILE_HEIGHT * (cellsX - 1)
+    }
+    
+    // Pozícia vľavo hore od budovy (aby neblokoval warning indikátory)
+    const indicatorY = y + TILE_HEIGHT + offsetY - buildingSprite.height * buildingSprite.scaleY - 25
+    const indicatorX = x + offsetX - 30 // Posun vľavo
+    
+    console.log(`📍 Pozícia auto-production indikátora: x=${indicatorX}, y=${indicatorY}`)
+    
+    // Vytvoríme graphics objekty priamo bez kontajnera
+    const bg = this.add.graphics()
+    bg.setPosition(indicatorX, indicatorY)
+    bg.fillStyle(0x10b981, 0.9) // Zelená farba
+    bg.fillCircle(0, 0, 14)
+    bg.lineStyle(2, 0xffffff, 1)
+    bg.strokeCircle(0, 0, 14)
+    bg.setDepth(9999999)
+    
+    // Rotujúca šípka
+    const arrow = this.add.graphics()
+    arrow.setPosition(indicatorX, indicatorY)
+    arrow.lineStyle(2, 0xffffff, 1)
+    arrow.fillStyle(0xffffff, 1)
+    
+    // Nakresli kruhový path pre šípku (ako reload symbol)
+    const radius = 7
+    arrow.beginPath()
+    arrow.arc(0, 0, radius, Phaser.Math.DegToRad(-90), Phaser.Math.DegToRad(180), false)
+    arrow.strokePath()
+    
+    // Šípka na konci
+    arrow.fillTriangle(
+      -radius * 0.7, -radius * 0.7,
+      -radius * 0.7 - 4, -radius * 0.7 - 4,
+      -radius * 0.7 + 4, -radius * 0.7
+    )
+    arrow.setDepth(9999999)
+    
+    // Pridáme rotačnú animáciu
+    this.tweens.add({
+      targets: arrow,
+      rotation: Phaser.Math.PI2,
+      duration: 2000,
+      ease: 'Linear',
+      repeat: -1
+    })
+    
+    // Pridáme jemné pulzovanie
+    this.tweens.add({
+      targets: [bg, arrow],
+      scaleX: { from: 1, to: 1.1 },
+      scaleY: { from: 1, to: 1.1 },
+      duration: 1000,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1
+    })
+    
+    // Uložíme referenciu
+    this.autoProductionIndicators[key] = {
+      bg,
+      arrow
+    }
+    
+    console.log(`✅ Auto-production indikátor vytvorený a zobrazený na [${row}, ${col}]`)
+  }
+
+  // Skryje indikátor auto-produkcie
+  hideAutoProductionIndicator(row, col) {
+    const key = `${row}-${col}`
+    
+    if (this.autoProductionIndicators[key]) {
+      this.autoProductionIndicators[key].bg?.destroy()
+      this.autoProductionIndicators[key].arrow?.destroy()
+      delete this.autoProductionIndicators[key]
+      console.log(`✅ Auto-production indikátor skrytý na [${row}, ${col}]`)
     }
   }
 
@@ -501,6 +842,35 @@ class IsoScene extends Phaser.Scene {
       this.hoverPreviewSprite = null
     }
     
+    // Vykresli destination tiles ak sme v destination mode
+    this.drawDestinationTiles()
+    
+    // Vykresli destination tiles pre vybraný building (ak má destination restriction)
+    this.drawSelectedBuildingDestinationTiles()
+    
+    // Pre destination mode zobraz zelený hover
+    if (props.isSettingDestination && this.hoveredCell.row !== -1) {
+      this.hoverGraphics = this.add.graphics()
+      this.uiContainer.add(this.hoverGraphics)
+      
+      const { x, y } = this.gridToIso(this.hoveredCell.row, this.hoveredCell.col)
+      
+      // Zelený hover pre destination building
+      this.hoverGraphics.fillStyle(0x10b981, 0.5)
+      this.hoverGraphics.beginPath()
+      this.hoverGraphics.moveTo(x, y)
+      this.hoverGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.hoverGraphics.lineTo(x, y + TILE_HEIGHT)
+      this.hoverGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.hoverGraphics.closePath()
+      this.hoverGraphics.fillPath()
+      
+      this.hoverGraphics.lineStyle(3, 0x10b981, 1)
+      this.hoverGraphics.strokePath()
+      
+      return
+    }
+    
     // Pre road building mode zobraz hover aj keď ešte nekreslím
     if (props.roadBuildingMode && this.hoveredCell.row !== -1) {
       this.hoverGraphics = this.add.graphics()
@@ -695,6 +1065,24 @@ class IsoScene extends Phaser.Scene {
   }
 
   checkCollision(row, col, cellsX, cellsY) {
+    // Ak má vybraná budova destination restriction, skontroluj či je na povolených tiles
+    if (props.selectedBuildingCanBuildOnlyInDestination && props.selectedBuildingDestinationTiles && props.selectedBuildingDestinationTiles.length > 0) {
+      // Zisti všetky bunky ktoré by budova zabrala
+      const affectedCells = this.getAffectedCells(row, col, cellsX, cellsY)
+      
+      // Všetky affected cells musia byť v destinationTiles
+      const isValidPlacement = affectedCells.every(cell => {
+        return props.selectedBuildingDestinationTiles.some(destTile => 
+          destTile.row === cell.row && destTile.col === cell.col
+        )
+      })
+      
+      // Ak nie je valid placement, vráť true (kolízia)
+      if (!isValidPlacement) {
+        return true
+      }
+    }
+    
     const newCells = this.getAffectedCells(row, col, cellsX, cellsY)
       .map(c => `${c.row}-${c.col}`)
     
@@ -953,6 +1341,13 @@ class IsoScene extends Phaser.Scene {
       const cell = this.isoToGrid(worldPoint.x, worldPoint.y)
       
       if (cell.row >= 0 && cell.row < GRID_SIZE && cell.col >= 0 && cell.col < GRID_SIZE) {
+        
+        // Destination mode - kliknutie na tile pre nastavenie destination
+        if (props.isSettingDestination) {
+          console.log(`🎯 Destination tile clicked: [${cell.row}, ${cell.col}]`)
+          emit('destination-tile-clicked', { row: cell.row, col: cell.col })
+          return
+        }
         
         // Ak nie je žiadny špeciálny mód, skontroluj či sa kliklo na existujúcu budovu
         if (!props.roadDeleteMode && !props.roadBuildingMode && !props.deleteMode && !props.selectedImageId) {
@@ -2021,6 +2416,23 @@ defineExpose({
   },
   togglePerson: (visible) => {
     mainScene?.togglePerson(visible)
+  },
+  // Zobrazí warning indikátor nad budovou
+  // type: 'resources' (žltý - nedostatok surovín) alebo 'storage' (červený - plný sklad)
+  showWarningIndicator: (row, col, type = 'resources') => {
+    mainScene?.showWarningIndicator(row, col, type)
+  },
+  // Skryje warning indikátor
+  hideWarningIndicator: (row, col) => {
+    mainScene?.hideWarningIndicator(row, col)
+  },
+  // Zobrazí indikátor auto-produkcie
+  showAutoProductionIndicator: (row, col) => {
+    mainScene?.showAutoProductionIndicator(row, col)
+  },
+  // Skryje indikátor auto-produkcie
+  hideAutoProductionIndicator: (row, col) => {
+    mainScene?.hideAutoProductionIndicator(row, col)
   }
 })
 
@@ -2044,6 +2456,13 @@ watch(() => props.roadBuildingMode, (newVal) => {
     mainScene.clearRoadBuilding()
   }
 })
+
+// Watch pre zmeny destination tiles restriction - prekresli hover keď sa zmení vybraná budova
+watch([() => props.selectedBuildingCanBuildOnlyInDestination, () => props.selectedBuildingDestinationTiles], () => {
+  if (mainScene) {
+    mainScene.drawHover()
+  }
+}, { deep: true })
 
 onMounted(() => {
   const config = {
@@ -2151,6 +2570,10 @@ onUnmounted(() => {
 
 .game-container.delete-mode {
   cursor: not-allowed;
+}
+
+.game-container.destination-mode {
+  cursor: crosshair;
 }
 
 .game-container canvas {

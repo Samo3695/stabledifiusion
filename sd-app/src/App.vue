@@ -49,6 +49,8 @@ const insufficientResourcesData = ref({
   missingBuildResources: [], 
   missingOperationalResources: [] 
 })
+const isSettingDestination = ref(false) // Režim nastavovania destination tiles
+const destinationTiles = ref([]) // Dočasné uloženie destination tiles počas výberu
 
 // Aggregované skladované resources z budov umiestnených na canvase
 const storedResources = computed(() => {
@@ -173,6 +175,50 @@ const handleCarSpawnSettingsChanged = ({ enabled, count }) => {
   const parsed = Number.isFinite(count) ? count : 0
   carSpawnCount.value = Math.max(0, Math.min(500, Math.round(parsed)))
   console.log(`🚗 App.vue: Car spawn ${carSpawnEnabled.value ? 'ON' : 'OFF'}, count=${carSpawnCount.value}`)
+}
+
+// Destination mode handlers
+const handleDestinationModeStarted = () => {
+  console.log('🎯 App.vue: Destination mode STARTED')
+  isSettingDestination.value = true
+  destinationTiles.value = []
+  // Canvas začne zobrazovať zelený hover
+}
+
+const handleDestinationModeFinished = () => {
+  console.log('✅ App.vue: Destination mode FINISHED')
+  isSettingDestination.value = false
+  
+  // Zavolaj finishSettingDestination v ImageGallery aby sa znova otvoril modal
+  if (imageGalleryRef.value && imageGalleryRef.value.finishSettingDestination) {
+    imageGalleryRef.value.finishSettingDestination()
+    console.log('   ✅ ImageGallery finishSettingDestination called - modal by sa mal znova otvoriť')
+  }
+  
+  // Ulož destination tiles do ImageGallery
+  if (imageGalleryRef.value && destinationTiles.value.length > 0) {
+    // Destination tiles sú už uložené v ImageGallery cez addDestinationTile
+    console.log(`   ${destinationTiles.value.length} destination tiles uložených`)
+  }
+  // destinationTiles zostanú uložené pre ImageGallery
+}
+
+const handleDestinationTileClicked = ({ row, col }) => {
+  console.log(`🎯 App.vue: Destination tile clicked [${row}, ${col}]`)
+  // Toggle tile v zozname
+  const index = destinationTiles.value.findIndex(t => t.row === row && t.col === col)
+  if (index !== -1) {
+    destinationTiles.value.splice(index, 1)
+    console.log(`   ➖ Removed tile [${row}, ${col}]`)
+  } else {
+    destinationTiles.value.push({ row, col })
+    console.log(`   ➕ Added tile [${row}, ${col}]`)
+  }
+  
+  // Emit do ImageGallery aby aktualizoval svoj state
+  if (imageGalleryRef.value && imageGalleryRef.value.addDestinationTile) {
+    imageGalleryRef.value.addDestinationTile(row, col)
+  }
 }
 
 // Watch pre zmenu roadTiles - keď sa zmení opacity, regeneruj canvas
@@ -755,6 +801,8 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
     image.buildingData = {
       isBuilding: buildingData.isBuilding,
       isCommandCenter: buildingData.isCommandCenter,
+      canBuildOnlyInDestination: buildingData.canBuildOnlyInDestination,
+      destinationTiles: buildingData.destinationTiles,
       buildingName: buildingData.buildingName,
       buildingSize: buildingData.buildingSize,
       dontDropShadow: buildingData.dontDropShadow,
@@ -992,12 +1040,15 @@ const handleCanvasUpdated = () => {
       :personSpawnCount="personSpawnCount"
       :carSpawnEnabled="carSpawnEnabled"
       :carSpawnCount="carSpawnCount"
+      :isSettingDestination="isSettingDestination"
+      :destinationTiles="destinationTiles"
       @cell-selected="handleCellSelected"
       @image-placed="(data) => { handleImagePlaced(data); handleCanvasUpdated(); }"
       @toggle-numbering="handleToggleNumbering"
       @toggle-gallery="handleToggleGallery"
       @toggle-grid="handleToggleGrid"
       @road-placed="handleRoadPlaced"
+      @destination-tile-clicked="handleDestinationTileClicked"
     />
     
     <!-- Header (absolútne pozicionovaný) -->
@@ -1111,8 +1162,19 @@ const handleCanvasUpdated = () => {
         @car-spawn-settings-changed="handleCarSpawnSettingsChanged"
         @update-building-data="handleUpdateBuildingData"
         @command-center-selected="handleCommandCenterSelected"
+        @destination-mode-started="handleDestinationModeStarted"
+        @destination-mode-finished="handleDestinationModeFinished"
       />
     </div>
+    
+    <!-- Floating button pre dokončenie destination mode -->
+    <button 
+      v-if="isSettingDestination" 
+      @click="handleDestinationModeFinished"
+      class="destination-finish-button"
+    >
+      ✅ isSet ({{ destinationTiles.length }} tiles)
+    </button>
     
     <!-- Insufficient Resources Modal -->
     <Modal 
@@ -1431,5 +1493,39 @@ header h1 {
   background: #f0f0f0;
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Floating button pre destination mode */
+.destination-finish-button {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1rem 2rem;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 700;
+  font-size: 1.1rem;
+  cursor: pointer;
+  box-shadow: 0 6px 24px rgba(102, 126, 234, 0.5);
+  z-index: 10000;
+  transition: all 0.3s;
+  animation: pulse 2s infinite;
+}
+
+.destination-finish-button:hover {
+  transform: translateX(-50%) scale(1.05);
+  box-shadow: 0 8px 32px rgba(102, 126, 234, 0.7);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 6px 24px rgba(102, 126, 234, 0.5);
+  }
+  50% {
+    box-shadow: 0 6px 32px rgba(102, 126, 234, 0.8);
+  }
 }
 </style>

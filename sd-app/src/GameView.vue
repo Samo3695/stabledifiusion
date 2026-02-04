@@ -15,7 +15,8 @@ import {
   deductBuildCost as deductCost,
   canStartProduction as checkProductionResources,
   executeProduction,
-  getMissingOperationalResources
+  getMissingOperationalResources,
+  canStoreProduction
 } from './utils/resourceCalculator.js'
 
 const images = ref([])
@@ -47,6 +48,8 @@ const roadOpacity = ref(100)
 const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
 const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každú budovu: { 'row-col': { enabled: boolean, interval: number, buildingData: {...} } }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
+const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybranú budovu
+const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
 const showBuildingModal = ref(false) // Či sa má zobraziť modal s metadátami budovy
 const clickedBuilding = ref(null) // Údaje o kliknutej budove
 const showInsufficientResourcesModal = ref(false) // Modal pre nedostatok resources
@@ -411,6 +414,9 @@ const handleCanvasUpdated = () => {
     const cellImages = canvasRef.value.cellImages()
     const newMap = {}
     
+    // Získaj staré kľúče pred aktualizáciou
+    const oldKeys = new Set(Object.keys(canvasImagesMap.value))
+    
     Object.entries(cellImages).forEach(([key, data]) => {
       // Preskočíme sekundárne bunky multi-cell budov
       if (data.isSecondary) {
@@ -433,6 +439,29 @@ const handleCanvasUpdated = () => {
       }
     })
     
+    // Skontroluj či sa niektoré budovy vymazali a zastav ich auto-produkciu + skry warning indikátory
+    const newKeys = new Set(Object.keys(newMap))
+    oldKeys.forEach(oldKey => {
+      if (!newKeys.has(oldKey)) {
+        // Budova bola vymazaná
+        const [row, col] = oldKey.split('-').map(Number)
+        
+        // Zastavenie auto-produkcie (ak bežala)
+        const state = buildingProductionStates.value[oldKey]
+        if (state && state.interval) {
+          clearInterval(state.interval)
+          delete buildingProductionStates.value[oldKey]
+          console.log(`⏹️ Auto-produkcia zastavená pre vymazanú budovu na [${row}, ${col}]`)
+        }
+        
+        // Skrytie warning indikátora
+        canvasRef.value?.hideWarningIndicator(row, col)
+        
+        // Skrytie auto-production indikátora
+        canvasRef.value?.hideAutoProductionIndicator(row, col)
+      }
+    })
+    
     canvasImagesMap.value = newMap
     console.log('🔄 GameView: Canvas aktualizovaný, budov na canvase:', Object.keys(newMap).length)
   }
@@ -445,6 +474,8 @@ const handleBuildingSelected = (data) => {
     selectedBuildingId.value = null
     selectedImageId.value = null
     selectedImageData.value = null
+    selectedBuildingDestinationTiles.value = []
+    selectedBuildingCanBuildOnlyInDestination.value = false
     console.log('🏗️ GameView: Budova odznačená')
     return
   }
@@ -455,6 +486,16 @@ const handleBuildingSelected = (data) => {
   selectedImageData.value = building
   lastImageCellsX.value = cellsX
   lastImageCellsY.value = cellsY
+  
+  // Extrahuj destination tiles ak má budova toto obmedzenie
+  if (building.buildingData?.canBuildOnlyInDestination && building.buildingData?.destinationTiles) {
+    selectedBuildingCanBuildOnlyInDestination.value = true
+    selectedBuildingDestinationTiles.value = building.buildingData.destinationTiles
+    console.log('🎯 GameView: Budova má destination restriction:', selectedBuildingDestinationTiles.value.length, 'tiles')
+  } else {
+    selectedBuildingCanBuildOnlyInDestination.value = false
+    selectedBuildingDestinationTiles.value = []
+  }
   
   // Zruš road building mode a bulldozer mode pri výbere budovy
   roadBuildingMode.value = false
@@ -494,9 +535,19 @@ const handleBuildingClicked = ({ row, col, buildingData }) => {
   
   // buildingData z canvasu už obsahuje všetky potrebné údaje vrátane buildingData
   if (buildingData && buildingData.buildingData) {
+    // Normálne na origin súradnice pre multi-cell budovy
+    let originRow = row
+    let originCol = col
+    
+    if (buildingData.isSecondary) {
+      originRow = buildingData.originRow
+      originCol = buildingData.originCol
+      console.log(`🔄 Sekundárna bunka - používam origin: [${originRow}, ${originCol}]`)
+    }
+    
     clickedBuilding.value = {
-      row,
-      col,
+      row: originRow,
+      col: originCol,
       ...buildingData.buildingData,
       imageUrl: buildingData.url
     }
@@ -514,17 +565,29 @@ const closeBuildingModal = () => {
 }
 
 // Zastaviť auto produkciu pre konkrétnu budovu
-const stopAutoProduction = (row, col) => {
+const stopAutoProduction = (row, col, reason = 'manual') => {
   const key = `${row}-${col}`
   const state = buildingProductionStates.value[key]
   
   if (state && state.interval) {
     clearInterval(state.interval)
-    console.log(`⏹️ Auto-produkcia zastavená pre budovu na [${row}, ${col}]`)
+    console.log(`⏹️ Auto-produkcia zastavená pre budovu na [${row}, ${col}], dôvod: ${reason}`)
+  }
+  
+  // Zobraz warning indikátor podľa dôvodu zastavenia
+  if (reason === 'resources') {
+    // Žltý výkričník - nedostatok surovín na produkciu
+    canvasRef.value?.showWarningIndicator(row, col, 'resources')
+  } else {
+    // Manuálne zastavenie - skry indikátor
+    canvasRef.value?.hideWarningIndicator(row, col)
   }
   
   // Vymazať stav budovy
   delete buildingProductionStates.value[key]
+  
+  // Skry auto-production indikátor
+  canvasRef.value?.hideAutoProductionIndicator(row, col)
 }
 
 // Toggle auto produkcie pre konkrétnu budovu
@@ -540,25 +603,47 @@ const toggleAutoProduction = () => {
   const currentState = buildingProductionStates.value[key]
   
   if (currentState?.enabled) {
-    // Vypnúť auto produkciu
-    stopAutoProduction(row, col)
+    // Vypnúť auto produkciu - skry warning indikátor
+    stopAutoProduction(row, col, 'manual')
   } else {
     // Zapnúť auto produkciu
     console.log(`🔄 Auto-produkcia zapnutá pre: ${buildingData.buildingName} na [${row}, ${col}]`)
     
-    // Spustiť produkciu hneď
+    // Skry prípadný existujúci warning indikátor
+    canvasRef.value?.hideWarningIndicator(row, col)
+    
+    // Zobraz zelený auto-production indikátor
+    canvasRef.value?.showAutoProductionIndicator(row, col)
+    
+    // Spustiť produkciu hneď ak je dosť surovín
     if (canStartProduction()) {
       startProduction()
+    } else {
+      console.log(`⛔ Nemožno spustiť produkciu - nedostatok surovín`)
+      stopAutoProduction(row, col, 'resources')
+      return
     }
     
     // Vytvoriť interval pre túto budovu
     const interval = setInterval(() => {
       // Skontrolovať či je dosť resources
       if (checkProductionResources(buildingData, resources.value)) {
+        // Skry žltý indikátor ak bol zobrazený (máme dosť surovín)
+        canvasRef.value?.hideWarningIndicator(row, col)
+        
+        // Skontrolovať či je dosť miesta na uskladnenie
+        const storageCheck = canStoreProduction(buildingData, resources.value, storedResources.value)
+        if (!storageCheck.hasSpace) {
+          // Zobraz červený indikátor - plný sklad, ale pokračuj v produkcii
+          canvasRef.value?.showWarningIndicator(row, col, 'storage')
+          console.log(`⚠️ Sklad plný pre: ${storageCheck.fullResources.map(r => r.resourceName).join(', ')} - produkcia pokračuje, ale surovina sa nepridá`)
+        }
+        
+        // Spusti produkciu (executeProduction samo kontroluje kapacitu skladu)
         executeProduction(buildingData, resources.value, storedResources.value)
       } else {
-        // Zastaviť ak nie je dosť resources
-        stopAutoProduction(row, col)
+        // Zastaviť ak nie je dosť resources - žltý indikátor
+        stopAutoProduction(row, col, 'resources')
         console.log(`⛔ Auto-produkcia zastavená pre budovu na [${row}, ${col}] - nedostatok resources`)
       }
     }, 3000)
@@ -622,6 +707,8 @@ const startProduction = () => {
       :roadTiles="roadTiles"
       :personSpawnEnabled="personSpawnEnabled"
       :personSpawnCount="personSpawnCount"
+      :selectedBuildingDestinationTiles="selectedBuildingDestinationTiles"
+      :selectedBuildingCanBuildOnlyInDestination="selectedBuildingCanBuildOnlyInDestination"
       @cell-selected="handleCellSelected"
       @image-placed="handleImagePlaced"
       @toggle-numbering="handleToggleNumbering"
@@ -765,7 +852,7 @@ const startProduction = () => {
             <label class="auto-production-toggle">
               <input 
                 type="checkbox" 
-                v-model="currentBuildingAutoEnabled"
+                :checked="currentBuildingAutoEnabled"
                 @change="toggleAutoProduction"
                 :disabled="!canStartProduction()"
               />

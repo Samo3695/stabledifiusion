@@ -26,6 +26,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  workforce: {
+    type: Array,
+    default: () => []
+  },
   roadSpriteUrl: {
     type: String,
     default: '/templates/roads/sprites/pastroad.png'
@@ -44,7 +48,9 @@ const emit = defineEmits([
   'person-spawn-settings-changed',
   'car-spawn-settings-changed',
   'update-building-data',
-  'command-center-selected'
+  'command-center-selected',
+  'destination-mode-started',
+  'destination-mode-finished'
 ])
 
 const selectedImage = ref(null)
@@ -62,6 +68,9 @@ const carsPerPlacement = ref(props.carSpawnCount) // Počet áut na jedno umiest
 // Building data
 const isBuilding = ref(false)
 const isCommandCenter = ref(false) // Či je budova command center
+const canBuildOnlyInDestination = ref(false) // Či sa môže stavať len v destination tiles
+const destinationTiles = ref([]) // Pole destination tiles [{row, col}]
+const isSettingDestination = ref(false) // Či práve nastavujeme destination
 const buildingName = ref('') // Názov budovy
 const buildingSize = ref('default') // Veľkosť budovy
 const dontDropShadow = ref(false) // Či nezobrazovať tieň
@@ -304,6 +313,8 @@ const saveBuildingData = () => {
     const buildingData = {
       isBuilding: isBuilding.value,
       isCommandCenter: isCommandCenter.value,
+      canBuildOnlyInDestination: canBuildOnlyInDestination.value,
+      destinationTiles: destinationTiles.value,
       buildingName: buildingName.value,
       buildingSize: buildingSize.value,
       dontDropShadow: dontDropShadow.value,
@@ -332,7 +343,7 @@ const saveBuildingData = () => {
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, lightBlinkSpeed, lightColor, lightSize], () => {
+watch([isBuilding, isCommandCenter, canBuildOnlyInDestination, destinationTiles, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, lightBlinkSpeed, lightColor, lightSize], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -345,6 +356,12 @@ watch(buildingSize, (newSize) => {
 // Explicitný watch na stored pre debugging
 watch(stored, (newStored) => {
   console.log('🏚️ Stored zmenené:', JSON.stringify(newStored))
+  saveBuildingData()
+}, { deep: true })
+
+// Explicitný watch na destinationTiles pre debugging
+watch(destinationTiles, (newTiles) => {
+  console.log('🎯 Destination tiles zmenené:', JSON.stringify(newTiles))
   saveBuildingData()
 }, { deep: true })
 
@@ -389,16 +406,6 @@ const getRoadTileByIndex = (tileIndex) => {
   return roadTileManager.getTileByIndex(tileIndex)
 }
 
-// Expose pre parent komponent
-defineExpose({
-  getRoadTileByDirection,
-  getRoadTileByIndex,
-  roadTiles,
-  updateRoadSprite,
-  activeGalleryTab,
-  roadOpacity // Expose roadOpacity pre načítanie z projektu
-})
-
 const copyToClipboard = async (text, label = 'text') => {
   if (!text) return
   try {
@@ -428,6 +435,8 @@ const openModal = (image) => {
   if (image.buildingData) {
     isBuilding.value = image.buildingData.isBuilding || false
     isCommandCenter.value = image.buildingData.isCommandCenter || false
+    canBuildOnlyInDestination.value = image.buildingData.canBuildOnlyInDestination || false
+    destinationTiles.value = image.buildingData.destinationTiles || []
     buildingName.value = image.buildingData.buildingName || ''
     buildingSize.value = image.buildingData.buildingSize || 'default'
     dontDropShadow.value = image.buildingData.dontDropShadow === true // Explicitná kontrola pre boolean
@@ -447,6 +456,9 @@ const openModal = (image) => {
     console.log('🔍 Loading building data (smoke & light):', image.buildingData)
   } else {
     isBuilding.value = false
+    isCommandCenter.value = false
+    canBuildOnlyInDestination.value = false
+    destinationTiles.value = []
     buildingName.value = ''
     buildingSize.value = 'default'
     dontDropShadow.value = false
@@ -470,6 +482,9 @@ const closeModal = () => {
   selectedImage.value = null
   isBuilding.value = false
   isCommandCenter.value = false
+  canBuildOnlyInDestination.value = false
+  destinationTiles.value = []
+  isSettingDestination.value = false
   dontDropShadow.value = false
   buildingName.value = ''
   buildingSize.value = 'default'
@@ -599,6 +614,52 @@ const addStoredResource = () => {
 const removeStoredResource = (index) => {
   stored.value.splice(index, 1)
 }
+
+// Destination mode funkcie
+const startSettingDestination = () => {
+  isSettingDestination.value = true
+  console.log('🎯 Začínam nastavovať destination tiles')
+  // Emit event pre parent aby vedel že sme v destination mode
+  emit('destination-mode-started')
+}
+
+const finishSettingDestination = () => {
+  isSettingDestination.value = false
+  console.log('✅ Destination tiles nastavené:', destinationTiles.value)
+  // Emit event pre parent že destination mode skončil
+  emit('destination-mode-finished')
+}
+
+const addDestinationTile = (row, col) => {
+  // Skontroluj či tile už nie je v zozname
+  const exists = destinationTiles.value.some(t => t.row === row && t.col === col)
+  if (!exists) {
+    destinationTiles.value.push({ row, col })
+    console.log(`➕ Pridaný destination tile: [${row}, ${col}]`)
+  } else {
+    // Ak už existuje, odstráň ho (toggle)
+    destinationTiles.value = destinationTiles.value.filter(t => !(t.row === row && t.col === col))
+    console.log(`➖ Odstránený destination tile: [${row}, ${col}]`)
+  }
+}
+
+const isDestinationTile = (row, col) => {
+  return destinationTiles.value.some(t => t.row === row && t.col === col)
+}
+
+// Expose pre parent komponent
+defineExpose({
+  getRoadTileByDirection,
+  getRoadTileByIndex,
+  roadTiles,
+  updateRoadSprite,
+  activeGalleryTab,
+  roadOpacity,
+  isSettingDestination,
+  addDestinationTile,
+  isDestinationTile,
+  finishSettingDestination
+})
 </script>
 
 <template>
@@ -775,7 +836,7 @@ const removeStoredResource = (index) => {
 
     <!-- Modal -->
     <Teleport to="body">
-      <div v-if="selectedImage" class="modal-overlay" @click="closeModal">
+      <div v-if="selectedImage && !isSettingDestination" class="modal-overlay" @click="closeModal">
         <div class="modal-content" @click.stop>
           <button class="close-btn" @click="closeModal">✕</button>
           
@@ -852,6 +913,34 @@ const removeStoredResource = (index) => {
                   <input type="checkbox" v-model="isCommandCenter" />
                   <span>Is Command Center</span>
                 </label>
+                
+                <div v-if="isBuilding" class="destination-controls" style="margin-top: 0.75rem;">
+                  <label class="building-checkbox">
+                    <input type="checkbox" v-model="canBuildOnlyInDestination" />
+                    <span>🎯 Can build only in destination</span>
+                  </label>
+                  
+                  <button 
+                    v-if="canBuildOnlyInDestination" 
+                    @click="startSettingDestination"
+                    class="btn-set-destination"
+                    :disabled="isSettingDestination"
+                  >
+                    🗺️ Set destination
+                  </button>
+                  
+                  <button 
+                    v-if="canBuildOnlyInDestination && destinationTiles.length > 0" 
+                    @click="finishSettingDestination"
+                    class="btn-destination-finish"
+                  >
+                    ✅ Destination is set ({{ destinationTiles.length }} tiles)
+                  </button>
+                  
+                  <div v-if="destinationTiles.length > 0" class="destination-info">
+                    <span>✅ {{ destinationTiles.length }} tiles nastavených</span>
+                  </div>
+                </div>
               </div>
 
               <div v-if="isBuilding" class="building-details">
@@ -1978,5 +2067,101 @@ h2 {
 
 .building-size-select:hover {
   border-color: #667eea;
+}
+
+/* Destination controls */
+.destination-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #f0f8ff;
+  border-radius: 8px;
+  border: 2px solid #667eea;
+}
+
+.btn-set-destination {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.btn-set-destination:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
+}
+
+.btn-set-destination:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-destination-finish {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.btn-destination-finish:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+}
+
+.destination-info {
+  padding: 0.5rem;
+  background: rgba(16, 185, 129, 0.1);
+  border-radius: 6px;
+  font-weight: 600;
+  color: #059669;
+  text-align: center;
+}
+
+/* Minimized modal floating button */
+.destination-finish-button {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1rem 2rem;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 700;
+  font-size: 1.1rem;
+  cursor: pointer;
+  box-shadow: 0 6px 24px rgba(102, 126, 234, 0.5);
+  z-index: 10000;
+  transition: all 0.3s;
+  animation: pulse 2s infinite;
+}
+
+.destination-finish-button:hover {
+  transform: translateX(-50%) scale(1.05);
+  box-shadow: 0 8px 32px rgba(102, 126, 234, 0.7);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 6px 24px rgba(102, 126, 234, 0.5);
+  }
+  50% {
+    box-shadow: 0 6px 32px rgba(102, 126, 234, 0.8);
+  }
 }
 </style>
