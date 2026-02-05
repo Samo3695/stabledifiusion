@@ -81,7 +81,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked', 'destination-tile-clicked'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked', 'destination-tile-clicked', 'building-deleted'])
 
 const gameContainer = ref(null)
 let game = null
@@ -1398,6 +1398,11 @@ class IsoScene extends Phaser.Scene {
             else {
               const cellsX = originData?.cellsX || imageData.cellsX || 1
               const cellsY = originData?.cellsY || imageData.cellsY || 1
+
+              const deletedBuildingData = originData?.buildingData || imageData.buildingData || null
+              if (deletedBuildingData?.isBuilding) {
+                emit('building-deleted', { row: originRow, col: originCol, buildingData: deletedBuildingData })
+              }
               
               // Zmazať všetky bunky budovy od originálnej pozície
               for (let r = originRow; r < originRow + cellsX; r++) {

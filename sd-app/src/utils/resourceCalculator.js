@@ -51,18 +51,23 @@ export function calculateResourceUsage(canvasImagesMap, images) {
 
 /**
  * Vypočíta celkové skladované resources zo všetkých budov umiestnených na canvase
- * Aggreguje hodnoty z buildingData.stored pre budovy, ktoré sú na canvase.
+ * Aggreguje hodnoty z buildingData.stored len pre budovy, ktoré sú v production mode.
  * @param {Object} canvasImagesMap - Mapa budov na canvase {key: {imageId, url, templateName}}
  * @param {Array} images - Zoznam všetkých obrázkov s buildingData
+ * @param {Object} buildingProductionStates - Mapa stavov produkcie {'row-col': {enabled: boolean}}
  * @returns {Object} - {resourceId: amount}
  */
-export function calculateStoredResources(canvasImagesMap, images) {
+export function calculateStoredResources(canvasImagesMap, images, buildingProductionStates = {}) {
   const stored = {}
 
   // Prejdi všetky umiestnené budovy na canvase
-  Object.values(canvasImagesMap || {}).forEach(canvasItem => {
+  Object.entries(canvasImagesMap || {}).forEach(([key, canvasItem]) => {
     const image = images.find(img => img.id === canvasItem.imageId)
     if (!image || !image.buildingData || !image.buildingData.isBuilding) return
+
+    // Započítaj stored capacity len ak má budova zapnutú auto produkciu
+    const productionState = buildingProductionStates[key]
+    if (!productionState || !productionState.enabled) return
 
     const buildingStored = image.buildingData.stored || []
     buildingStored.forEach(s => {
@@ -162,6 +167,27 @@ export function deductBuildCost(buildingData, resources) {
       })
     }, 3000) // 3 sekundy
   }
+}
+
+/**
+ * Vráti build cost resources pri zmazaní budovy (nevracia workResource)
+ * @param {Object} buildingData - Metadata budovy
+ * @param {Array} resources - Zoznam dostupných resources (ref)
+ */
+export function refundBuildCostOnDelete(buildingData, resources) {
+  if (!buildingData || !buildingData.isBuilding) return
+
+  const buildCost = buildingData.buildCost || []
+  buildCost.forEach(cost => {
+    const resource = resources.find(r => r.id === cost.resourceId)
+    if (!resource) return
+
+    // Work resources sa nevracajú
+    if (resource.workResource) return
+
+    resource.amount += cost.amount
+    console.log(`🔁 Vrátené ${cost.amount}x ${resource.name}, nový zostatok: ${resource.amount}`)
+  })
 }
 
 /**

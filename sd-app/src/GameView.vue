@@ -13,6 +13,7 @@ import {
   calculateStoredResources,
   checkBuildingResources as checkResources,
   deductBuildCost as deductCost,
+  refundBuildCostOnDelete,
   canStartProduction as checkProductionResources,
   executeProduction,
   getMissingOperationalResources,
@@ -83,9 +84,9 @@ const producedResources = computed(() => {
   return producedResources
 })
 
-// Aggregované skladované resources z budov umiestnených na canvase
+// Aggregované skladované resources z budov umiestnených na canvase (len budovy v production mode)
 const storedResources = computed(() => {
-  return calculateStoredResources(canvasImagesMap.value, images.value)
+  return calculateStoredResources(canvasImagesMap.value, images.value, buildingProductionStates.value)
 })
 
 // Funkcia na kontrolu dostupnosti resources pre budovu - používa resourceCalculator service
@@ -200,6 +201,19 @@ const handleCellSelected = ({ row, col }) => {
   selectedCell.value = { row, col }
   
   if (deleteMode.value && canvasRef.value) {
+    const cellImages = canvasRef.value.cellImages ? canvasRef.value.cellImages() : {}
+    const directKey = `${row}-${col}`
+    let targetData = cellImages[directKey]
+
+    if (targetData?.isSecondary && targetData.originRow !== undefined && targetData.originCol !== undefined) {
+      const originKey = `${targetData.originRow}-${targetData.originCol}`
+      targetData = cellImages[originKey] || targetData
+    }
+
+    if (targetData?.buildingData?.isBuilding && !targetData.isRoadTile) {
+      refundBuildCostOnDelete(targetData.buildingData, resources.value)
+    }
+
     canvasRef.value.deleteImageAtCell(row, col)
     selectedImageId.value = null
     selectedImageData.value = null
@@ -619,6 +633,13 @@ const handleBuildingClicked = ({ row, col, buildingData }) => {
   }
 }
 
+// Handler pre zmazanie budovy (bulldozer/road delete mode)
+const handleBuildingDeleted = ({ buildingData }) => {
+  if (buildingData?.isBuilding) {
+    refundBuildCostOnDelete(buildingData, resources.value)
+  }
+}
+
 // Zatvorenie modalu
 const closeBuildingModal = () => {
   showBuildingModal.value = false
@@ -777,6 +798,7 @@ const startProduction = () => {
       @toggle-grid="handleToggleGrid"
       @road-placed="handleRoadPlaced"
       @building-clicked="handleBuildingClicked"
+      @building-deleted="handleBuildingDeleted"
     />
     
     <!-- Header -->
@@ -885,6 +907,17 @@ const startProduction = () => {
             >
               <span class="resource-name">{{ cost.resourceName }}</span>
               <span class="resource-amount">{{ cost.amount }}</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Stored (Sklad) -->
+        <div v-if="clickedBuilding.stored && clickedBuilding.stored.length > 0" class="building-info-section">
+          <h3>🏪 Skladovacia kapacita</h3>
+          <div class="resource-list">
+            <div v-for="(store, index) in clickedBuilding.stored" :key="index" class="resource-item stored">
+              <span class="resource-name">{{ store.resourceName }}</span>
+              <span class="resource-amount">{{ store.amount }}</span>
             </div>
           </div>
         </div>
@@ -1323,6 +1356,12 @@ header {
 .resource-item.production .resource-amount {
   color: #10b981;
   background: rgba(16, 185, 129, 0.1);
+}
+
+.resource-item.stored .resource-amount {
+  color: #2196f3;
+  background: rgba(33, 150, 243, 0.1);
+  font-weight: 600;
 }
 
 .resource-item.insufficient {
