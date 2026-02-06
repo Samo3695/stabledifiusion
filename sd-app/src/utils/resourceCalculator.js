@@ -55,10 +55,9 @@ export function calculateResourceUsage(canvasImagesMap, images) {
  * @param {Object} canvasImagesMap - Mapa budov na canvase {key: {imageId, url, templateName}}
  * @param {Array} images - Zoznam všetkých obrázkov s buildingData
  * @param {Object} buildingProductionStates - Mapa stavov produkcie {'row-col': {enabled: boolean}}
- * @param {Array} allResources - Všetky resources pre kontrolu mustBeStored
  * @returns {Object} - {resourceId: amount}
  */
-export function calculateStoredResources(canvasImagesMap, images, buildingProductionStates = {}, allResources = []) {
+export function calculateStoredResources(canvasImagesMap, images, buildingProductionStates = {}) {
   const stored = {}
 
   // Prejdi všetky umiestnené budovy na canvase
@@ -75,13 +74,6 @@ export function calculateStoredResources(canvasImagesMap, images, buildingProduc
       if (!stored[s.resourceId]) stored[s.resourceId] = 0
       stored[s.resourceId] += Number(s.amount) || 0
     })
-  })
-
-  // Pre všetky resources s mustBeStored: true, pridaj kapacitu 0 ak nemajú žiadny sklad
-  allResources.forEach(resource => {
-    if (resource.mustBeStored && stored[resource.id] === undefined) {
-      stored[resource.id] = 0
-    }
   })
 
   return stored
@@ -323,32 +315,6 @@ export function executeProduction(buildingData, resources, storedCapacities = {}
   
   console.log('✅ Produkcia spustená!')
 }
-/**
- * Odpočíta resources s mustBeStored: true keď nemajú dostatok skladu
- * @param {Array} resources - Zoznam dostupných resources (ref)
- * @param {Object} storedCapacities - Objekt s celkovou stored kapacitou pre každú resource {resourceId: totalCapacity}
- */
-export function decreaseMustBeStoredResources(resources, storedCapacities = {}) {
-  resources.forEach(resource => {
-    if (!resource.mustBeStored) return
-    
-    const capacity = storedCapacities[resource.id] || 0
-    
-    // Ak resource nemá žiadny sklad (capacity === 0) alebo je sklad plný
-    if (capacity === 0) {
-      // Odpočítaj 1 resource každú sekundu
-      if (resource.amount > 0) {
-        resource.amount = Math.max(0, resource.amount - 1)
-        console.log(`⬇️ ${resource.name} klesá (žiadny sklad): ${resource.amount}`)
-      }
-    } else if (resource.amount > capacity) {
-      // Ak je resource nad kapacitou, zníž ju na kapacitu
-      resource.amount = capacity
-      console.log(`📉 ${resource.name} znížené na kapacitu skladu: ${resource.amount}/${capacity}`)
-    }
-  })
-}
-
 /**
  * Kontrola či je dostatok miesta na uskladnenie produkcie budovy
  * @param {Object} buildingData - Metadata budovy

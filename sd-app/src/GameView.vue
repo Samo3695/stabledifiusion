@@ -17,8 +17,7 @@ import {
   canStartProduction as checkProductionResources,
   executeProduction,
   getMissingOperationalResources,
-  canStoreProduction,
-  decreaseMustBeStoredResources
+  canStoreProduction
 } from './utils/resourceCalculator.js'
 
 const images = ref([])
@@ -46,24 +45,6 @@ const personSpawnCount = ref(0)
 const resources = ref([])
 const workforce = ref([])
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png')
-
-// Interval pre odpočítavanie mustBeStored resources
-let mustBeStoredInterval = null
-
-// Spusti odpočítavanie mustBeStored resources každú sekundu
-const startMustBeStoredDecrement = () => {
-  if (mustBeStoredInterval) clearInterval(mustBeStoredInterval)
-  
-  mustBeStoredInterval = setInterval(() => {
-    decreaseMustBeStoredResources(resources.value, storedResources.value)
-  }, 1000) // Každú sekundu
-  
-  console.log('🔻 MustBeStored odpočítavanie spustené')
-}
-
-// Začni odpočítavanie pri načítaní
-startMustBeStoredDecrement()
-
 const roadOpacity = ref(100)
 const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
 const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každú budovu: { 'row-col': { enabled: boolean, interval: number, buildingData: {...} } }
@@ -105,7 +86,7 @@ const producedResources = computed(() => {
 
 // Aggregované skladované resources z budov umiestnených na canvase (len budovy v production mode)
 const storedResources = computed(() => {
-  return calculateStoredResources(canvasImagesMap.value, images.value, buildingProductionStates.value, resources.value)
+  return calculateStoredResources(canvasImagesMap.value, images.value, buildingProductionStates.value)
 })
 
 // Funkcia na kontrolu dostupnosti resources pre budovu - používa resourceCalculator service
@@ -558,63 +539,6 @@ const handleCanvasUpdated = () => {
     
     canvasImagesMap.value = newMap
     console.log('🔄 GameView: Canvas aktualizovaný, budov na canvase:', Object.keys(newMap).length)
-    
-    // Automaticky spusti auto produkciu pre všetky command center budovy
-    nextTick(() => {
-      Object.entries(newMap).forEach(([key, mapData]) => {
-        const [row, col] = key.split('-').map(Number)
-        const matchingImage = images.value.find(img => img.id === mapData.imageId)
-        
-        if (matchingImage?.buildingData?.isCommandCenter && matchingImage.buildingData.production?.length > 0) {
-          // Skontroluj či už má zapnutú auto produkciu
-          if (!buildingProductionStates.value[key]?.enabled) {
-            console.log(`🏛️ Auto-spúšťam produkciu pre Command Center na [${row}, ${col}]`)
-            
-            // Priprav buildingData pre auto produkciu
-            const buildingDataForProduction = {
-              row,
-              col,
-              buildingName: matchingImage.buildingData.buildingName,
-              isCommandCenter: true,
-              operationalCost: matchingImage.buildingData.operationalCost || [],
-              production: matchingImage.buildingData.production || [],
-              stored: matchingImage.buildingData.stored || []
-            }
-            
-            // Zobraz auto-production indikátor
-            canvasRef.value?.showAutoProductionIndicator(row, col)
-            
-            // Spusť produkciu hneď ak je dosť surovín
-            if (checkProductionResources(buildingDataForProduction, resources.value)) {
-              executeProduction(buildingDataForProduction, resources.value, storedResources.value)
-            }
-            
-            // Vytvor interval pre auto produkciu
-            const interval = setInterval(() => {
-              if (checkProductionResources(buildingDataForProduction, resources.value)) {
-                canvasRef.value?.hideWarningIndicator(row, col)
-                
-                const storageCheck = canStoreProduction(buildingDataForProduction, resources.value, storedResources.value)
-                if (!storageCheck.hasSpace) {
-                  canvasRef.value?.showWarningIndicator(row, col, 'storage')
-                }
-                
-                executeProduction(buildingDataForProduction, resources.value, storedResources.value)
-              } else {
-                canvasRef.value?.showWarningIndicator(row, col, 'resources')
-              }
-            }, 3000)
-            
-            // Ulož stav
-            buildingProductionStates.value[key] = {
-              enabled: true,
-              interval: interval,
-              buildingData: buildingDataForProduction
-            }
-          }
-        }
-      })
-    })
   }
 }
 
@@ -756,12 +680,6 @@ const toggleAutoProduction = () => {
   const col = clickedBuilding.value.col
   const key = `${row}-${col}`
   const buildingData = clickedBuilding.value
-  
-  // Ak je to command center, nedovolíme vypnúť auto produkciu
-  if (buildingData.isCommandCenter) {
-    console.log('🏛️ Command Center má vždy zapnutú auto produkciu - nedá sa vypnúť')
-    return
-  }
   
   // Skontrolovať aktuálny stav
   const currentState = buildingProductionStates.value[key]
@@ -1026,15 +944,14 @@ const startProduction = () => {
               <span v-else>⛔ Nedostatok resources</span>
             </button>
             
-            <label class="auto-production-toggle" :class="{ 'command-center': clickedBuilding.isCommandCenter }">
+            <label class="auto-production-toggle">
               <input 
                 type="checkbox" 
                 :checked="currentBuildingAutoEnabled"
                 @change="toggleAutoProduction"
-                :disabled="!canStartProduction() || clickedBuilding.isCommandCenter"
+                :disabled="!canStartProduction()"
               />
-              <span v-if="clickedBuilding.isCommandCenter">🏛️ Auto (Vždy zapnuté)</span>
-              <span v-else>🔄 Auto (3s)</span>
+              <span>🔄 Auto (3s)</span>
             </label>
           </div>
           
@@ -1546,17 +1463,6 @@ header {
 
 .auto-production-toggle input:disabled {
   cursor: not-allowed;
-}
-
-.auto-production-toggle.command-center {
-  background: rgba(102, 126, 234, 0.2);
-  border-color: #667eea;
-  cursor: default;
-}
-
-.auto-production-toggle.command-center span {
-  color: #667eea;
-  font-weight: 600;
 }
 
 .production-warning {
