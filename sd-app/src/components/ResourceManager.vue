@@ -22,7 +22,8 @@ const addResource = () => {
     name: newResourceName.value.trim(),
     amount: 0,
     icon: null, // Base64 ikonka
-    workResource: false // Či je to work resource
+    workResource: false, // Či je to work resource
+    mustBeStored: false // Či musí byť uložené
   }
   
   resources.value.push(newResource)
@@ -97,6 +98,14 @@ const toggleWorkResource = (id) => {
   const resource = resources.value.find(r => r.id === id)
   if (resource) {
     resource.workResource = !resource.workResource
+    emitUpdate()
+  }
+}
+
+const toggleMustBeStored = (id) => {
+  const resource = resources.value.find(r => r.id === id)
+  if (resource) {
+    resource.mustBeStored = !resource.mustBeStored
     emitUpdate()
   }
 }
@@ -184,6 +193,15 @@ const toggleWorkResource = (id) => {
                   class="work-checkbox"
                 />
                 <span class="work-label">👷 Work</span>
+              </label>
+              <label class="work-resource-toggle" :title="'Must Be Stored: ' + (resource.mustBeStored ? 'Áno' : 'Nie')">
+                <input
+                  type="checkbox"
+                  :checked="resource.mustBeStored"
+                  @change="toggleMustBeStored(resource.id)"
+                  class="work-checkbox"
+                />
+                <span class="work-label">📦 Store</span>
               </label>
               <input
                 type="number"

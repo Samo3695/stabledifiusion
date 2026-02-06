@@ -41,10 +41,13 @@ const props = defineProps({
           <div class="resource-amounts">
             <span class="amount-current">{{ resource.amount }}</span>
             <span 
-              v-if="storedResources && storedResources[resource.id] !== undefined" 
+              v-if="resource.mustBeStored || (storedResources && storedResources[resource.id] !== undefined)" 
               class="amount-stored"
-              :class="{ 'storage-full': resource.amount >= storedResources[resource.id] }"
-            >/{{ storedResources[resource.id] }}</span>
+              :class="{ 
+                'storage-full': resource.amount >= (storedResources[resource.id] || 0),
+                'no-storage': resource.mustBeStored && (storedResources[resource.id] === 0 || storedResources[resource.id] === undefined)
+              }"
+            >/{{ storedResources[resource.id] !== undefined ? storedResources[resource.id] : 0 }}</span>
           </div>
         </div>
       </div>
@@ -166,6 +169,17 @@ const props = defineProps({
 
 .amount-stored.storage-full {
   color: #ff0000; /* červená farba keď je sklad plný */
+}
+
+.amount-stored.no-storage {
+  color: #ff6600; /* oranžová farba keď nie je žiadny sklad */
+  font-weight: 900;
+  animation: blink-warning 1.5s infinite;
+}
+
+@keyframes blink-warning {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* Scrollbar styling */
