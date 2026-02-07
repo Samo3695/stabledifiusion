@@ -37,14 +37,17 @@ const props = defineProps({
           <span v-else class="icon-placeholder">📦</span>
         </div>
         <div class="resource-info">
-          <div class="resource-name">{{ resource.name }}</div>
+          <span class="resource-name">{{ resource.name }}</span>
           <div class="resource-amounts">
             <span class="amount-current">{{ resource.amount }}</span>
             <span 
-              v-if="storedResources && storedResources[resource.id] !== undefined" 
+              v-if="resource.mustBeStored || (storedResources && storedResources[resource.id] !== undefined)" 
               class="amount-stored"
-              :class="{ 'storage-full': resource.amount >= storedResources[resource.id] }"
-            >/{{ storedResources[resource.id] }}</span>
+              :class="{ 
+                'storage-full': resource.amount >= (storedResources[resource.id] || 0),
+                'no-storage': resource.mustBeStored && (storedResources[resource.id] === 0 || storedResources[resource.id] === undefined)
+              }"
+            >/{{ storedResources[resource.id] !== undefined ? storedResources[resource.id] : 0 }}</span>
           </div>
         </div>
       </div>
@@ -60,7 +63,7 @@ const props = defineProps({
 }
 
 .resource-header {
-  padding: 1rem;
+  padding: 0.5rem 0.75rem;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border-bottom: 2px solid #e0e0e0;
@@ -68,14 +71,14 @@ const props = defineProps({
 
 .resource-header h2 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: 0.9rem;
   font-weight: 600;
 }
 
 .resource-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0.5rem;
+  padding: 0.25rem;
 }
 
 .empty-state {
@@ -92,11 +95,11 @@ const props = defineProps({
 .resource-item {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  margin-bottom: 0.25rem;
   background: #f8f9fa;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid #e0e0e0;
   transition: all 0.2s;
 }
@@ -108,64 +111,80 @@ const props = defineProps({
 }
 
 .resource-icon {
-  width: 48px;
-  height: 48px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: white;
-  border-radius: 8px;
-  border: 2px solid #e0e0e0;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
   flex-shrink: 0;
 }
 
 .icon-image {
-  width: 40px;
-  height: 40px;
+  width: 28px;
+  height: 28px;
   object-fit: contain;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
 .icon-placeholder {
-  font-size: 1.5rem;
+  font-size: 1rem;
 }
 
 .resource-info {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .resource-name {
   font-weight: 600;
   color: #333;
-  font-size: 0.95rem;
+  font-size: 0.75rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 0.25rem;
+  margin: 0;
 }
 
 .resource-amounts {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 3px;
+  flex-shrink: 0;
 }
 
 .amount-current {
   font-weight: 700;
-  font-size: 1.3rem;
+  font-size: 0.95rem;
   color: #667eea;
 }
 
 .amount-stored {
   font-weight: 700;
-  font-size: 1.3rem;
+  font-size: 0.95rem;
   color: #000; /* čierna farba pre stored hodnotu */
   transition: color 0.3s ease;
 }
 
 .amount-stored.storage-full {
   color: #ff0000; /* červená farba keď je sklad plný */
+}
+
+.amount-stored.no-storage {
+  color: #ff6600; /* oranžová farba keď nie je žiadny sklad */
+  font-weight: 900;
+  animation: blink-warning 1.5s infinite;
+}
+
+@keyframes blink-warning {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* Scrollbar styling */
