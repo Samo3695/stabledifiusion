@@ -127,11 +127,12 @@ export function checkBuildingResources(buildingData, resources) {
 }
 
 /**
- * Odpočíta build cost resources a vráti workResource po 3 sekundách
+ * Odpočíta build cost resources a trackuje alokovanie workResource na 3 sekundy
  * @param {Object} buildingData - Metadata budovy
  * @param {Array} resources - Zoznam dostupných resources (ref)
+ * @param {Object} allocatedResources - Objekt pre tracking alokovaných resources (ref)
  */
-export function deductBuildCost(buildingData, resources) {
+export function deductBuildCost(buildingData, resources, allocatedResources = {}) {
   if (!buildingData || !buildingData.isBuilding) return
   
   const buildCost = buildingData.buildCost || []
@@ -144,8 +145,15 @@ export function deductBuildCost(buildingData, resources) {
       resource.amount -= cost.amount
       console.log(`💰 Odpočítané ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
       
-      // Ak je to workResource, pridáme do zoznamu na vrátenie
+      // Ak je to workResource, pridáme do zoznamu na vrátenie a trackujeme alokovanie
       if (resource.workResource) {
+        // Pridaj do allocated
+        if (!allocatedResources[cost.resourceId]) {
+          allocatedResources[cost.resourceId] = 0
+        }
+        allocatedResources[cost.resourceId] += cost.amount
+        console.log(`👷 Alokované work force (build): ${cost.amount}x ${resource.name}, total allocated: ${allocatedResources[cost.resourceId]}`)
+        
         workResourcesToReturn.push({
           resourceId: resource.id,
           amount: cost.amount,
@@ -162,7 +170,16 @@ export function deductBuildCost(buildingData, resources) {
         const resource = resources.find(r => r.id === item.resourceId)
         if (resource) {
           resource.amount += item.amount
-          console.log(`👷 Work resource vrátené: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}`)
+          
+          // Uber z allocated
+          if (allocatedResources[item.resourceId]) {
+            allocatedResources[item.resourceId] -= item.amount
+            if (allocatedResources[item.resourceId] <= 0) {
+              delete allocatedResources[item.resourceId]
+            }
+          }
+          
+          console.log(`👷 Work resource vrátené a dealokované: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}, allocated: ${allocatedResources[item.resourceId] || 0}`)
         }
       })
     }, 3000) // 3 sekundy

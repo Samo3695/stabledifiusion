@@ -84,16 +84,18 @@ export async function applyBackgroundTiles(canvasRef, tiles) {
  * @param {Object} canvasRef - Referencia na PhaserCanvas
  * @param {Object} placedImages - Objekt s umiestnenými obrázkami
  * @param {Array} roadTiles - Pole road tiles
+ * @param {Array} imageLibrary - Zoznam obrázkov s buildingData (na rekonštrukciu metadát)
  * @param {Function} onProgress - Callback pre progress (progress, status)
  * @returns {Promise<void>}
  */
-export async function loadPlacedObjects(canvasRef, placedImages, roadTiles, onProgress) {
+export async function loadPlacedObjects(canvasRef, placedImages, roadTiles, imageLibrary, onProgress) {
   if (!canvasRef || !placedImages || Object.keys(placedImages).length === 0) {
     console.log('⚠️ ProjectLoader: Žiadne objekty na načítanie')
     return
   }
   
   console.log('🏗️ ProjectLoader: Začínam načítavať objekty na canvas')
+  console.log(`📚 ProjectLoader: ImageLibrary obsahuje ${imageLibrary?.length || 0} obrázkov`)
   
   // Vyčistiť canvas
   if (typeof canvasRef.clearAll === 'function') {
@@ -117,10 +119,31 @@ export async function loadPlacedObjects(canvasRef, placedImages, roadTiles, onPr
     
     for (let i = currentIndex; i < batchEnd; i++) {
       const [key, imageData] = objectsToLoad[i]
-      const { row, col, url, cellsX, cellsY, isBackground, isRoadTile, templateName, tileMetadata, buildingData } = imageData
+      const { row, col, url, cellsX, cellsY, isBackground, isRoadTile, templateName, tileMetadata, buildingData, imageId } = imageData
       
       let finalUrl = url
       let finalBitmap = null
+      let finalBuildingData = buildingData || null
+      
+      // Ak buildingData chýba, skús ho rekonštruovať z imageLibrary podľa imageId alebo url
+      if (!finalBuildingData && imageLibrary && imageLibrary.length > 0) {
+        // Najprv skús nájsť pomocou imageId
+        let sourceImage = null
+        if (imageId) {
+          sourceImage = imageLibrary.find(img => img.id === imageId)
+        }
+        
+        // Ak nenájdené cez imageId, skús podľa url
+        if (!sourceImage) {
+          sourceImage = imageLibrary.find(img => img.url === url)
+        }
+        
+        // Ak našiel zdroj, skopíruj buildingData
+        if (sourceImage && sourceImage.buildingData) {
+          finalBuildingData = { ...sourceImage.buildingData }
+          console.log(`🔧 ProjectLoader: Rekonštruované buildingData pre [${row}, ${col}] z imageLibrary (${finalBuildingData.buildingName || 'unknown'})`)
+        }
+      }
       
       // Pre road tiles nájdi správny tile z roadTiles
       if (isRoadTile && tileMetadata && roadTiles.length > 0) {
@@ -144,7 +167,7 @@ export async function loadPlacedObjects(canvasRef, placedImages, roadTiles, onPr
             finalBitmap,
             templateName || '',
             tileMetadata || null,
-            buildingData || null  // Pridané buildingData
+            finalBuildingData  // Použiť rekonštruované buildingData
           )
           successCount++
         } catch (error) {
@@ -230,8 +253,10 @@ export async function loadProject(projectData, canvasRef, onProgress = null) {
     
     // 4. Načítaj umiestnené objekty
     const placedImages = projectData.placedImages || {}
+    const imageLibrary = projectData.imageLibrary || projectData.images || []
+    
     if (Object.keys(placedImages).length > 0) {
-      await loadPlacedObjects(canvasRef, placedImages, roadTiles, (progress, status) => {
+      await loadPlacedObjects(canvasRef, placedImages, roadTiles, imageLibrary, (progress, status) => {
         if (onProgress) {
           // Progress 20-100 pre načítanie objektov
           const adjustedProgress = 20 + Math.round(progress * 0.8)

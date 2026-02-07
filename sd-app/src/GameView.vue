@@ -48,6 +48,7 @@ const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png')
 const roadOpacity = ref(100)
 const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
 const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každú budovu: { 'row-col': { enabled: boolean, interval: number, buildingData: {...} } }
+const allocatedResources = ref({}) // Tracking alokovaných work force resources { resourceId: amount }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
 const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybranú budovu
 const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
@@ -96,7 +97,7 @@ const checkBuildingResources = (buildingData) => {
 
 // Funkcia na odpočítanie build cost resources - používa resourceCalculator service
 const deductBuildCost = (buildingData) => {
-  deductCost(buildingData, resources.value)
+  deductCost(buildingData, resources.value, allocatedResources.value)
 }
 
 const handleDelete = (id) => {
@@ -725,6 +726,23 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   if (state && state.interval) {
     clearInterval(state.interval)
     console.log(`⏹️ Auto-produkcia zastavená pre budovu na [${row}, ${col}], dôvod: ${reason}`)
+    
+    // Dealokuj work force resources
+    const buildingData = state.buildingData
+    if (buildingData && buildingData.operationalCost) {
+      buildingData.operationalCost.forEach(cost => {
+        const resource = resources.value.find(r => r.id === cost.resourceId)
+        if (resource && resource.workResource) {
+          if (allocatedResources.value[cost.resourceId]) {
+            allocatedResources.value[cost.resourceId] -= cost.amount
+            if (allocatedResources.value[cost.resourceId] <= 0) {
+              delete allocatedResources.value[cost.resourceId]
+            }
+            console.log(`👷 Dealokované work force: ${cost.amount}x ${resource.name}, total allocated: ${allocatedResources.value[cost.resourceId] || 0}`)
+          }
+        }
+      })
+    }
   }
   
   // Zobraz warning indikátor podľa dôvodu zastavenia
@@ -773,6 +791,19 @@ const toggleAutoProduction = () => {
     
     // Zobraz zelený auto-production indikátor
     canvasRef.value?.showAutoProductionIndicator(row, col)
+    
+    // Alokuj work force resources pre operationalCost
+    const operationalCost = buildingData.operationalCost || []
+    operationalCost.forEach(cost => {
+      const resource = resources.value.find(r => r.id === cost.resourceId)
+      if (resource && resource.workResource) {
+        if (!allocatedResources.value[cost.resourceId]) {
+          allocatedResources.value[cost.resourceId] = 0
+        }
+        allocatedResources.value[cost.resourceId] += cost.amount
+        console.log(`👷 Alokované work force: ${cost.amount}x ${resource.name}, total allocated: ${allocatedResources.value[cost.resourceId]}`)
+      }
+    })
     
     // Spustiť produkciu hneď ak je dosť surovín
     if (canStartProduction()) {
@@ -934,6 +965,7 @@ const handleReduceToCapacity = (resourceId) => {
       <ResourceDisplay 
         :resources="resources"
         :storedResources="storedResources"
+        :allocatedResources="allocatedResources"
         @reduce-to-capacity="handleReduceToCapacity"
       />
       <BuildingSelector 

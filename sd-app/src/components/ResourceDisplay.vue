@@ -9,6 +9,10 @@ const props = defineProps({
   storedResources: {
     type: Object,
     default: () => ({})
+  },
+  allocatedResources: {
+    type: Object,
+    default: () => ({})
   }
 })
 
@@ -162,65 +166,146 @@ onUnmounted(() => {
         <p>Žiadne resources</p>
       </div>
       
-      <div 
-        v-for="resource in resources" 
-        :key="resource.id" 
-        class="resource-item"
-        :class="{ 
-          'over-capacity-blink': (storedResources[resource.id] !== undefined && resource.amount > storedResources[resource.id]) || 
-                                  (storedResources[resource.id] === 0 && resource.amount > 0)
-        }"
-      >
-        <div class="resource-icon">
-          <img 
-            v-if="resource.icon" 
-            :src="resource.icon" 
-            :alt="resource.name"
-            class="icon-image"
-          />
-          <span v-else class="icon-placeholder">📦</span>
+      <!-- Work-force resources sekcia -->
+      <div v-if="resources.filter(r => r.workResource).length > 0" class="resource-section">
+        <div class="section-header">
+          <span class="section-icon">👷</span>
+          <span class="section-title">Work-force</span>
         </div>
-        <div class="resource-info">
-          <span class="resource-name">{{ resource.name }}</span>
-          <div class="resource-amounts">
-            <span class="amount-current">{{ resource.amount }}</span>
-            <span
-              class="trend-arrow"
-              :class="{
-                'trend-up': trends[resource.id] === 'up',
-                'trend-down': trends[resource.id] === 'down'
-              }"
-              v-if="trends[resource.id] && trends[resource.id] !== 'flat'"
-            >{{ trends[resource.id] === 'up' ? '▲' : '▼' }}</span>
-            <span 
-              v-if="resource.mustBeStored || (storedResources && storedResources[resource.id] !== undefined)" 
-              class="amount-stored"
-              :class="{ 
-                'storage-full': resource.amount >= (storedResources[resource.id] || 0),
-                'no-storage': resource.mustBeStored && (storedResources[resource.id] === 0 || storedResources[resource.id] === undefined)
-              }"
-            >/{{ storedResources[resource.id] !== undefined ? storedResources[resource.id] : 0 }}</span>
+        <div 
+          v-for="resource in resources.filter(r => r.workResource)" 
+          :key="resource.id" 
+          class="resource-item"
+          :class="{ 
+            'over-capacity-blink': (storedResources[resource.id] !== undefined && resource.amount > storedResources[resource.id]) || 
+                                    (storedResources[resource.id] === 0 && resource.amount > 0)
+          }"
+        >
+          <div class="resource-icon">
+            <img 
+              v-if="resource.icon" 
+              :src="resource.icon" 
+              :alt="resource.name"
+              class="icon-image"
+            />
+            <span v-else class="icon-placeholder">📦</span>
+          </div>
+          <div class="resource-info">
+            <span class="resource-name">{{ resource.name }}</span>
+            <div class="resource-amounts">
+              <span class="amount-current">{{ resource.amount }}</span>
+              <span
+                class="trend-arrow"
+                :class="{
+                  'trend-up': trends[resource.id] === 'up',
+                  'trend-down': trends[resource.id] === 'down'
+                }"
+                v-if="trends[resource.id] && trends[resource.id] !== 'flat'"
+              >{{ trends[resource.id] === 'up' ? '▲' : '▼' }}</span>
+              <span 
+                v-if="resource.workResource && allocatedResources[resource.id]"
+                class="amount-allocated"
+                :title="`Alokované work force`"
+              >({{ allocatedResources[resource.id] }})</span>
+              <span 
+                v-if="resource.mustBeStored || (storedResources && storedResources[resource.id] !== undefined)" 
+                class="amount-stored"
+                :class="{ 
+                  'storage-full': resource.amount >= (storedResources[resource.id] || 0),
+                  'no-storage': resource.mustBeStored && (storedResources[resource.id] === 0 || storedResources[resource.id] === undefined)
+                }"
+              >/{{ storedResources[resource.id] !== undefined ? storedResources[resource.id] : 0 }}</span>
+            </div>
+          </div>
+          
+          <!-- Pie chart odpočítavanie -->
+          <div v-if="countdowns[resource.id]" class="countdown-pie">
+            <svg viewBox="0 0 36 36" class="pie-chart">
+              <circle cx="18" cy="18" r="16" fill="none" stroke="#fee" stroke-width="3"></circle>
+              <circle 
+                cx="18" 
+                cy="18" 
+                r="16" 
+                fill="none" 
+                stroke="#ef4444" 
+                stroke-width="3"
+                stroke-dasharray="100"
+                :stroke-dashoffset="100 - countdowns[resource.id].progress"
+                stroke-linecap="round"
+                transform="rotate(-90 18 18)"
+              ></circle>
+              <text x="18" y="21" text-anchor="middle" class="pie-text">{{ countdowns[resource.id].timeLeft }}</text>
+            </svg>
           </div>
         </div>
-        
-        <!-- Pie chart odpočítavanie -->
-        <div v-if="countdowns[resource.id]" class="countdown-pie">
-          <svg viewBox="0 0 36 36" class="pie-chart">
-            <circle cx="18" cy="18" r="16" fill="none" stroke="#fee" stroke-width="3"></circle>
-            <circle 
-              cx="18" 
-              cy="18" 
-              r="16" 
-              fill="none" 
-              stroke="#ef4444" 
-              stroke-width="3"
-              stroke-dasharray="100"
-              :stroke-dashoffset="100 - countdowns[resource.id].progress"
-              stroke-linecap="round"
-              transform="rotate(-90 18 18)"
-            ></circle>
-            <text x="18" y="21" text-anchor="middle" class="pie-text">{{ countdowns[resource.id].timeLeft }}</text>
-          </svg>
+      </div>
+
+      <!-- Non-work-force resources sekcia -->
+      <div v-if="resources.filter(r => !r.workResource).length > 0" class="resource-section">
+        <div class="section-header">
+          <span class="section-icon">📦</span>
+          <span class="section-title">Materials</span>
+        </div>
+        <div 
+          v-for="resource in resources.filter(r => !r.workResource)" 
+          :key="resource.id" 
+          class="resource-item"
+          :class="{ 
+            'over-capacity-blink': (storedResources[resource.id] !== undefined && resource.amount > storedResources[resource.id]) || 
+                                    (storedResources[resource.id] === 0 && resource.amount > 0)
+          }"
+        >
+          <div class="resource-icon">
+            <img 
+              v-if="resource.icon" 
+              :src="resource.icon" 
+              :alt="resource.name"
+              class="icon-image"
+            />
+            <span v-else class="icon-placeholder">📦</span>
+          </div>
+          <div class="resource-info">
+            <span class="resource-name">{{ resource.name }}</span>
+            <div class="resource-amounts">
+              <span class="amount-current">{{ resource.amount }}</span>
+              <span
+                class="trend-arrow"
+                :class="{
+                  'trend-up': trends[resource.id] === 'up',
+                  'trend-down': trends[resource.id] === 'down'
+                }"
+                v-if="trends[resource.id] && trends[resource.id] !== 'flat'"
+              >{{ trends[resource.id] === 'up' ? '▲' : '▼' }}</span>
+              <span 
+                v-if="resource.mustBeStored || (storedResources && storedResources[resource.id] !== undefined)" 
+                class="amount-stored"
+                :class="{ 
+                  'storage-full': resource.amount >= (storedResources[resource.id] || 0),
+                  'no-storage': resource.mustBeStored && (storedResources[resource.id] === 0 || storedResources[resource.id] === undefined)
+                }"
+              >/{{ storedResources[resource.id] !== undefined ? storedResources[resource.id] : 0 }}</span>
+            </div>
+          </div>
+          
+          <!-- Pie chart odpočítavanie -->
+          <div v-if="countdowns[resource.id]" class="countdown-pie">
+            <svg viewBox="0 0 36 36" class="pie-chart">
+              <circle cx="18" cy="18" r="16" fill="none" stroke="#fee" stroke-width="3"></circle>
+              <circle 
+                cx="18" 
+                cy="18" 
+                r="16" 
+                fill="none" 
+                stroke="#ef4444" 
+                stroke-width="3"
+                stroke-dasharray="100"
+                :stroke-dashoffset="100 - countdowns[resource.id].progress"
+                stroke-linecap="round"
+                transform="rotate(-90 18 18)"
+              ></circle>
+              <text x="18" y="21" text-anchor="middle" class="pie-text">{{ countdowns[resource.id].timeLeft }}</text>
+            </svg>
+          </div>
         </div>
       </div>
     </div>
@@ -262,6 +347,34 @@ onUnmounted(() => {
 .empty-state p {
   margin: 0;
   font-size: 0.9rem;
+}
+
+.resource-section {
+  margin-bottom: 1rem;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  border: 1px solid #d1d5db;
+}
+
+.section-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.section-title {
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .resource-item {
@@ -375,6 +488,13 @@ onUnmounted(() => {
   color: #ff6600; /* oranžová farba keď nie je žiadny sklad */
   font-weight: 900;
   animation: blink-warning 1.5s infinite;
+}
+
+.amount-allocated {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #f59e0b; /* oranžová farba pre alokované */
+  margin-left: 2px;
 }
 
 @keyframes blink-warning {
