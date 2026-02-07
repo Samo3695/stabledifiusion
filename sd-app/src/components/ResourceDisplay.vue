@@ -1,4 +1,6 @@
 <script setup>
+import { ref, watch, onMounted, onUnmounted } from 'vue'
+
 const props = defineProps({
   resources: {
     type: Array,
@@ -8,6 +10,144 @@ const props = defineProps({
     type: Object,
     default: () => ({})
   }
+})
+
+const emit = defineEmits(['reduce-to-capacity'])
+
+// Trackery pre odpočítavanie - { resourceId: { progress: 0-100, timeLeft: 10 } }
+const countdowns = ref({})
+let countdownIntervals = {}
+
+// Trendy pre resource amounts
+const trends = ref({})
+const trendHistory = ref({})
+const TREND_WINDOW = 30
+const TREND_THRESHOLD = 0.5
+
+// Funkcia na začatie odpočítavania pre resource
+const startCountdown = (resourceId) => {
+  if (countdownIntervals[resourceId]) return // Už beží
+  
+  countdowns.value[resourceId] = {
+    progress: 100,
+    timeLeft: 10
+  }
+  
+  const startTime = Date.now()
+  const duration = 10000 // 10 sekúnd
+  
+  countdownIntervals[resourceId] = setInterval(() => {
+    const elapsed = Date.now() - startTime
+    const remaining = duration - elapsed
+    
+    if (remaining <= 0) {
+      // Odpočítavanie skončilo
+      clearInterval(countdownIntervals[resourceId])
+      delete countdownIntervals[resourceId]
+      delete countdowns.value[resourceId]
+      
+      // Emituj event na zníženie resources na kapacitu
+      emit('reduce-to-capacity', resourceId)
+    } else {
+      countdowns.value[resourceId] = {
+        progress: (remaining / duration) * 100,
+        timeLeft: Math.ceil(remaining / 1000)
+      }
+    }
+  }, 100) // Update každých 100ms pre plynulú animáciu
+}
+
+// Funkcia na zastavenie odpočítavania
+const stopCountdown = (resourceId) => {
+  if (countdownIntervals[resourceId]) {
+    clearInterval(countdownIntervals[resourceId])
+    delete countdownIntervals[resourceId]
+    delete countdowns.value[resourceId]
+  }
+}
+
+// Watch pre detekciu over-capacity
+watch(() => [props.resources, props.storedResources], () => {
+  props.resources.forEach(resource => {
+    const capacity = props.storedResources[resource.id]
+    // Konvertuj capacity - ak je undefined, použi 0 ak sa zobrazuje /0
+    const capacityNum = capacity !== undefined ? Number(capacity) : 0
+    
+    // Debug log
+    if ((capacityNum <= 0 && resource.amount > 0) || resource.amount > capacityNum) {
+      console.log(`🔍 Resource: ${resource.name}, amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum}, typeof capacity: ${typeof capacity}`)
+    }
+    
+    // Spusti countdown ak:
+    // 1. resource.amount > capacity (nad kapacitou)
+    // 2. capacity je 0 alebo undefined a zobrazuje sa /0 a má suroviny
+    const hasStorageDisplay = resource.mustBeStored || capacity !== undefined
+    const isOverCapacity = (hasStorageDisplay && resource.amount > capacityNum) || 
+                           (hasStorageDisplay && capacityNum <= 0 && resource.amount > 0)
+    
+    if (isOverCapacity && !countdownIntervals[resource.id]) {
+      // Začni odpočítavanie
+      console.log(`⏱️ Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum})`)
+      startCountdown(resource.id)
+    } else if (!isOverCapacity && countdownIntervals[resource.id]) {
+      // Zastav odpočítavanie ak už nie je over capacity
+      stopCountdown(resource.id)
+    }
+
+    // Trend vývoja (vyhladené cez okno)
+    if (!trendHistory.value[resource.id]) {
+      trendHistory.value[resource.id] = []
+    }
+    trendHistory.value[resource.id].push(resource.amount)
+    if (trendHistory.value[resource.id].length > TREND_WINDOW) {
+      trendHistory.value[resource.id].shift()
+    }
+
+    const history = trendHistory.value[resource.id]
+    if (history.length >= Math.ceil(TREND_WINDOW / 2)) {
+      const mid = Math.floor(history.length / 2)
+      const firstHalf = history.slice(0, mid)
+      const secondHalf = history.slice(mid)
+      const avg = arr => arr.reduce((sum, v) => sum + v, 0) / (arr.length || 1)
+      const diff = avg(secondHalf) - avg(firstHalf)
+
+      if (diff > TREND_THRESHOLD) {
+        trends.value[resource.id] = 'up'
+      } else if (diff < -TREND_THRESHOLD) {
+        trends.value[resource.id] = 'down'
+      } else {
+        trends.value[resource.id] = 'flat'
+      }
+    } else {
+      trends.value[resource.id] = 'flat'
+    }
+  })
+}, { deep: true })
+
+onMounted(() => {
+  // Skontroluj po načítaní
+  props.resources.forEach(resource => {
+    const capacity = props.storedResources[resource.id]
+    const capacityNum = capacity !== undefined ? Number(capacity) : 0
+    const hasStorageDisplay = resource.mustBeStored || capacity !== undefined
+    const isOverCapacity = (hasStorageDisplay && resource.amount > capacityNum) ||
+                           (hasStorageDisplay && capacityNum <= 0 && resource.amount > 0)
+    if (isOverCapacity) {
+      console.log(`⏱️ onMounted: Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum})`)
+      startCountdown(resource.id)
+    }
+
+    // Init trend
+    trendHistory.value[resource.id] = [resource.amount]
+    trends.value[resource.id] = 'flat'
+  })
+})
+
+onUnmounted(() => {
+  // Vyčisti všetky intervaly
+  Object.keys(countdownIntervals).forEach(resourceId => {
+    clearInterval(countdownIntervals[resourceId])
+  })
 })
 </script>
 
@@ -26,6 +166,10 @@ const props = defineProps({
         v-for="resource in resources" 
         :key="resource.id" 
         class="resource-item"
+        :class="{ 
+          'over-capacity-blink': (storedResources[resource.id] !== undefined && resource.amount > storedResources[resource.id]) || 
+                                  (storedResources[resource.id] === 0 && resource.amount > 0)
+        }"
       >
         <div class="resource-icon">
           <img 
@@ -40,6 +184,14 @@ const props = defineProps({
           <span class="resource-name">{{ resource.name }}</span>
           <div class="resource-amounts">
             <span class="amount-current">{{ resource.amount }}</span>
+            <span
+              class="trend-arrow"
+              :class="{
+                'trend-up': trends[resource.id] === 'up',
+                'trend-down': trends[resource.id] === 'down'
+              }"
+              v-if="trends[resource.id] && trends[resource.id] !== 'flat'"
+            >{{ trends[resource.id] === 'up' ? '▲' : '▼' }}</span>
             <span 
               v-if="resource.mustBeStored || (storedResources && storedResources[resource.id] !== undefined)" 
               class="amount-stored"
@@ -49,6 +201,26 @@ const props = defineProps({
               }"
             >/{{ storedResources[resource.id] !== undefined ? storedResources[resource.id] : 0 }}</span>
           </div>
+        </div>
+        
+        <!-- Pie chart odpočítavanie -->
+        <div v-if="countdowns[resource.id]" class="countdown-pie">
+          <svg viewBox="0 0 36 36" class="pie-chart">
+            <circle cx="18" cy="18" r="16" fill="none" stroke="#fee" stroke-width="3"></circle>
+            <circle 
+              cx="18" 
+              cy="18" 
+              r="16" 
+              fill="none" 
+              stroke="#ef4444" 
+              stroke-width="3"
+              stroke-dasharray="100"
+              :stroke-dashoffset="100 - countdowns[resource.id].progress"
+              stroke-linecap="round"
+              transform="rotate(-90 18 18)"
+            ></circle>
+            <text x="18" y="21" text-anchor="middle" class="pie-text">{{ countdowns[resource.id].timeLeft }}</text>
+          </svg>
         </div>
       </div>
     </div>
@@ -110,6 +282,15 @@ const props = defineProps({
   transform: translateY(-1px);
 }
 
+.resource-item.over-capacity-blink {
+  animation: gentle-red-blink 2s ease-in-out infinite;
+}
+
+@keyframes gentle-red-blink {
+  0%, 100% { background: #f8f9fa; }
+  50% { background: #ffe5e5; }
+}
+
 .resource-icon {
   width: 32px;
   height: 32px;
@@ -159,6 +340,20 @@ const props = defineProps({
   flex-shrink: 0;
 }
 
+.trend-arrow {
+  font-size: 0.85rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.trend-arrow.trend-up {
+  color: #10b981;
+}
+
+.trend-arrow.trend-down {
+  color: #ef4444;
+}
+
 .amount-current {
   font-weight: 700;
   font-size: 0.95rem;
@@ -185,6 +380,24 @@ const props = defineProps({
 @keyframes blink-warning {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+.countdown-pie {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+}
+
+.pie-chart {
+  width: 100%;
+  height: 100%;
+}
+
+.pie-text {
+  font-size: 12px;
+  font-weight: bold;
+  fill: #ef4444;
 }
 
 /* Scrollbar styling */

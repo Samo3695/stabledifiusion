@@ -539,6 +539,77 @@ const handleCanvasUpdated = () => {
     
     canvasImagesMap.value = newMap
     console.log('🔄 GameView: Canvas aktualizovaný, budov na canvase:', Object.keys(newMap).length)
+    
+    // Automaticky spusti auto produkciu pre všetky nové budovy ktoré majú produkciu
+    nextTick(() => {
+      Object.entries(newMap).forEach(([key, mapData]) => {
+        const [row, col] = key.split('-').map(Number)
+        const matchingImage = images.value.find(img => img.id === mapData.imageId)
+        
+        // Ak budova má produkciu a ešte nemá zapnutú auto produkciu
+        if (matchingImage?.buildingData?.isBuilding && 
+            matchingImage.buildingData.production?.length > 0 &&
+            !buildingProductionStates.value[key]?.enabled) {
+          
+          console.log(`🏗️ Auto-spúšťam produkciu pre budovu: ${matchingImage.buildingData.buildingName} na [${row}, ${col}]`)
+          
+          // Priprav buildingData pre auto produkciu
+          const buildingDataForProduction = {
+            row,
+            col,
+            buildingName: matchingImage.buildingData.buildingName,
+            isCommandCenter: matchingImage.buildingData.isCommandCenter || false,
+            operationalCost: matchingImage.buildingData.operationalCost || [],
+            production: matchingImage.buildingData.production || [],
+            stored: matchingImage.buildingData.stored || []
+          }
+          
+          // Skontroluj či je dosť surovín
+          if (!checkProductionResources(buildingDataForProduction, resources.value)) {
+            console.log(`⚠️ Nedostatok surovín pre auto produkciu budovy na [${row}, ${col}]`)
+            return // Nespúšťaj auto produkciu ak nie sú suroviny
+          }
+          
+          // Zobraz auto-production indikátor
+          canvasRef.value?.showAutoProductionIndicator(row, col)
+          
+          // Spusť produkciu hneď
+          executeProduction(buildingDataForProduction, resources.value, storedResources.value)
+          
+          // Vytvor interval pre auto produkciu
+          const interval = setInterval(() => {
+            if (checkProductionResources(buildingDataForProduction, resources.value)) {
+              canvasRef.value?.hideWarningIndicator(row, col)
+              
+              const storageCheck = canStoreProduction(buildingDataForProduction, resources.value, storedResources.value)
+              if (!storageCheck.hasSpace) {
+                canvasRef.value?.showWarningIndicator(row, col, 'storage')
+              }
+              
+              executeProduction(buildingDataForProduction, resources.value, storedResources.value)
+            } else {
+              // Zastav auto produkciu ak nie sú suroviny
+              canvasRef.value?.showWarningIndicator(row, col, 'resources')
+              console.log(`⛔ Auto-produkcia zastavená pre budovu na [${row}, ${col}] - nedostatok resources`)
+              
+              // Vymaž interval
+              if (buildingProductionStates.value[key]?.interval) {
+                clearInterval(buildingProductionStates.value[key].interval)
+                delete buildingProductionStates.value[key]
+                canvasRef.value?.hideAutoProductionIndicator(row, col)
+              }
+            }
+          }, 3000)
+          
+          // Ulož stav
+          buildingProductionStates.value[key] = {
+            enabled: true,
+            interval: interval,
+            buildingData: buildingDataForProduction
+          }
+        }
+      })
+    })
   }
 }
 
@@ -681,6 +752,12 @@ const toggleAutoProduction = () => {
   const key = `${row}-${col}`
   const buildingData = clickedBuilding.value
   
+  // Ak je to command center, nedovolíme vypnúť auto produkciu
+  if (buildingData.isCommandCenter) {
+    console.log('🏛️ Command Center má vždy zapnutú auto produkciu - nedá sa vypnúť')
+    return
+  }
+  
   // Skontrolovať aktuálny stav
   const currentState = buildingProductionStates.value[key]
   
@@ -755,6 +832,26 @@ const missingOperationalResources = computed(() => {
 const startProduction = () => {
   if (!clickedBuilding.value) return
   executeProduction(clickedBuilding.value, resources.value, storedResources.value)
+}
+
+// Handler pre zníženie resource na kapacitu po odpočítavaní
+const handleReduceToCapacity = (resourceId) => {
+  const resource = resources.value.find(r => r.id === resourceId)
+  if (!resource) return
+  
+  const capacity = storedResources.value[resourceId]
+  const capacityNum = capacity !== undefined ? Number(capacity) : 0
+  
+  // Ak je capacity 0 (alebo undefined ale zobrazuje sa /0), dáme surovinu na 0
+  if (capacityNum <= 0 && resource.amount > 0) {
+    console.log(`📉 Znižujem ${resource.name} z ${resource.amount} na 0 (bez skladu)`)
+    resource.amount = 0
+  }
+  // Ak je capacity väčšia ako 0 a resource je nad kapacitou
+  else if (capacityNum > 0 && resource.amount > capacityNum) {
+    console.log(`📉 Znižujem ${resource.name} z ${resource.amount} na kapacitu ${capacityNum}`)
+    resource.amount = capacityNum
+  }
 }
 </script>
 
@@ -837,6 +934,7 @@ const startProduction = () => {
       <ResourceDisplay 
         :resources="resources"
         :storedResources="storedResources"
+        @reduce-to-capacity="handleReduceToCapacity"
       />
       <BuildingSelector 
         :buildings="buildings"
