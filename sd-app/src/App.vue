@@ -221,6 +221,27 @@ const handleDestinationTileClicked = ({ row, col }) => {
   }
 }
 
+// Handler pre nahradenie URL obrázka (zachovaj všetky metadáta)
+const handleReplaceImageUrl = (imageId, newUrl) => {
+  const imageIndex = images.value.findIndex(img => img.id === imageId)
+  if (imageIndex !== -1) {
+    // Aktualizuj len URL, všetky ostatné metadáta zostanú
+    images.value[imageIndex] = {
+      ...images.value[imageIndex],
+      url: newUrl,
+      timestamp: Date.now() // Aktualizuj timestamp aby bolo zrejmé kedy bol obrázok nahradený
+    }
+    console.log('🔄 App.vue: Obrázok nahradený pre ID:', imageId)
+    console.log('   Zachované metadáta:', {
+      prompt: images.value[imageIndex].prompt,
+      seed: images.value[imageIndex].seed,
+      buildingData: images.value[imageIndex].buildingData ? '✅' : '❌'
+    })
+  } else {
+    console.warn('⚠️ App.vue: Obrázok s ID', imageId, 'nebol nájdený')
+  }
+}
+
 // Watch pre zmenu roadTiles - keď sa zmení opacity, regeneruj canvas
 watch(roadTiles, (newTiles, oldTiles) => {
   // Kontrola či sa zmenila opacity (nie len prvé načítanie)
@@ -1164,6 +1185,7 @@ const handleCanvasUpdated = () => {
         @command-center-selected="handleCommandCenterSelected"
         @destination-mode-started="handleDestinationModeStarted"
         @destination-mode-finished="handleDestinationModeFinished"
+        @replace-image-url="handleReplaceImageUrl"
       />
     </div>
     

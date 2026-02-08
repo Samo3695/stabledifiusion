@@ -50,7 +50,8 @@ const emit = defineEmits([
   'update-building-data',
   'command-center-selected',
   'destination-mode-started',
-  'destination-mode-finished'
+  'destination-mode-finished',
+  'replace-image-url'
 ])
 
 const selectedImage = ref(null)
@@ -647,6 +648,45 @@ const isDestinationTile = (row, col) => {
   return destinationTiles.value.some(t => t.row === row && t.col === col)
 }
 
+// Nahradenie obrázka v modále
+const handleReplaceImage = async (event) => {
+  const file = event.target.files[0]
+  if (!file) return
+  
+  // Kontrola veľkosti súboru (max 10MB)
+  if (file.size > 10 * 1024 * 1024) {
+    alert('Obrázok je príliš veľký (max 10MB)')
+    event.target.value = ''
+    return
+  }
+  
+  // Kontrola typu súboru
+  if (!file.type.startsWith('image/')) {
+    alert('Súbor nie je obrázok')
+    event.target.value = ''
+    return
+  }
+  
+  const reader = new FileReader()
+  reader.onload = async (e) => {
+    const newImageUrl = e.target.result
+    
+    // Nahraď len URL obrázka, všetky metadáta zostanú
+    if (selectedImage.value) {
+      emit('replace-image-url', selectedImage.value.id, newImageUrl)
+      console.log('🔄 Obrázok nahradený pre ID:', selectedImage.value.id)
+      
+      // Zatvor modal po úspešnom nahratí
+      closeModal()
+    }
+    
+    // Vyčisti file input
+    event.target.value = ''
+  }
+  
+  reader.readAsDataURL(file)
+}
+
 // Expose pre parent komponent
 defineExpose({
   getRoadTileByDirection,
@@ -1201,6 +1241,16 @@ defineExpose({
             </div>
 
             <div class="modal-actions">
+              <input 
+                type="file" 
+                id="replace-image-input" 
+                accept="image/*" 
+                @change="handleReplaceImage"
+                style="display: none;"
+              />
+              <label for="replace-image-input" class="btn-replace">
+                🔄 Nahradiť obrázok
+              </label>
               <button @click="downloadImage(selectedImage)" class="btn-download">
                 💾 Stiahnuť
               </button>
@@ -1555,10 +1605,13 @@ h2 {
 .modal-actions {
   display: flex;
   gap: 1rem;
+  flex-wrap: wrap;
 }
 
-.modal-actions button {
+.modal-actions button,
+.modal-actions label {
   flex: 1;
+  min-width: 120px;
   padding: 0.75rem 1.5rem;
   border: none;
   border-radius: 8px;
@@ -1566,25 +1619,41 @@ h2 {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s;
+  text-align: center;
+  display: inline-block;
+}
+
+.btn-replace {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.btn-replace:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
 }
 
 .btn-download {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
   color: white;
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
 }
 
 .btn-download:hover {
   transform: translateY(-2px);
-  box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 5px 20px rgba(76, 175, 80, 0.5);
 }
 
 .btn-delete {
-  background: #fee;
-  color: #c33;
+  background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3);
 }
 
 .btn-delete:hover {
-  background: #fdd;
+  transform: translateY(-2px);
+  box-shadow: 0 5px 20px rgba(244, 67, 54, 0.5);
 }
 
 /* Opacity control */
