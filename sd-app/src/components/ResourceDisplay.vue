@@ -34,11 +34,11 @@ const startCountdown = (resourceId) => {
   
   countdowns.value[resourceId] = {
     progress: 100,
-    timeLeft: 10
+    timeLeft: 60
   }
   
   const startTime = Date.now()
-  const duration = 10000 // 10 sekúnd
+  const duration = 60000 // 60 sekúnd (1 minúta)
   
   countdownIntervals[resourceId] = setInterval(() => {
     const elapsed = Date.now() - startTime
