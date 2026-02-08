@@ -47,8 +47,9 @@ const workforce = ref([])
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png')
 const roadOpacity = ref(100)
 const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
-const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každú budovu: { 'row-col': { enabled: boolean, interval: number, buildingData: {...} } }
+const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každú budovu: { 'row-col': { enabled: boolean, interval: number, buildingData: {...}, progress: 0, progressInterval: null } }
 const allocatedResources = ref({}) // Tracking alokovaných work force resources { resourceId: amount }
+const productionProgress = ref({}) // Progress pre každú budovu { 'row-col': 0-100 }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
 const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybranú budovu
 const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
@@ -72,6 +73,13 @@ const currentBuildingAutoEnabled = computed(() => {
   if (!clickedBuilding.value) return false
   const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
   return buildingProductionStates.value[key]?.enabled || false
+})
+
+// Computed property pre progress aktuálnej budovy
+const currentBuildingProgress = computed(() => {
+  if (!clickedBuilding.value) return 0
+  const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
+  return productionProgress.value[key] || 0
 })
 
 // Computed properties pre usedResources a producedResources - používa resourceCalculator service
@@ -390,6 +398,9 @@ const handleLoadProject = async (projectData) => {
               
               // Vytvor interval pre túto budovu
               const interval = setInterval(() => {
+                // Reset progress
+                productionProgress.value[key] = 0
+                
                 // Skontroluj či má dosť resources na produkciu
                 if (checkProductionResources(state.buildingData, resources.value)) {
                   // Vykonaj produkciu
@@ -402,12 +413,21 @@ const handleLoadProject = async (projectData) => {
                   canvasRef.value?.showWarningIndicator(row, col, 'resources')
                   console.log(`⚠️ Nedostatok resources pre auto-produkciu: ${state.buildingData.buildingName} na [${row}, ${col}]`)
                 }
-              }, 3000)
+              }, 5000)
+              
+              // Vytvor progress interval
+              productionProgress.value[key] = 0
+              const progressInterval = setInterval(() => {
+                if (productionProgress.value[key] !== undefined) {
+                  productionProgress.value[key] = (productionProgress.value[key] + 2) % 100
+                }
+              }, 100)
               
               // Uložiť stav
               buildingProductionStates.value[key] = {
                 enabled: true,
                 interval: interval,
+                progressInterval: progressInterval,
                 buildingData: state.buildingData
               }
               
@@ -573,11 +593,11 @@ const handleCanvasUpdated = () => {
           // Zobraz auto-production indikátor
           canvasRef.value?.showAutoProductionIndicator(row, col)
           
-          // Spusť produkciu hneď
-          executeProduction(buildingDataForProduction, resources.value, storedResources.value)
-          
-          // Vytvor interval pre auto produkciu
+          // Vytvor interval pre auto produkciu (produkcia sa vykoná na konci 5s)
           const interval = setInterval(() => {
+            // Reset progress
+            productionProgress.value[key] = 0
+            
             if (checkProductionResources(buildingDataForProduction, resources.value)) {
               canvasRef.value?.hideWarningIndicator(row, col)
               
@@ -595,16 +615,28 @@ const handleCanvasUpdated = () => {
               // Vymaž interval
               if (buildingProductionStates.value[key]?.interval) {
                 clearInterval(buildingProductionStates.value[key].interval)
-                delete buildingProductionStates.value[key]
-                canvasRef.value?.hideAutoProductionIndicator(row, col)
               }
+              if (buildingProductionStates.value[key]?.progressInterval) {
+                clearInterval(buildingProductionStates.value[key].progressInterval)
+              }
+              delete buildingProductionStates.value[key]
+              canvasRef.value?.hideAutoProductionIndicator(row, col)
             }
-          }, 3000)
+          }, 5000)
+          
+          // Vytvor progress interval
+          productionProgress.value[key] = 0
+          const progressInterval = setInterval(() => {
+            if (productionProgress.value[key] !== undefined) {
+              productionProgress.value[key] = (productionProgress.value[key] + 2) % 100
+            }
+          }, 100)
           
           // Ulož stav
           buildingProductionStates.value[key] = {
             enabled: true,
             interval: interval,
+            progressInterval: progressInterval,
             buildingData: buildingDataForProduction
           }
         }
@@ -722,8 +754,17 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   const key = `${row}-${col}`
   const state = buildingProductionStates.value[key]
   
-  if (state && state.interval) {
-    clearInterval(state.interval)
+  if (state) {
+    // Vyčisti hlavný interval
+    if (state.interval) {
+      clearInterval(state.interval)
+    }
+    
+    // Vyčisti progress interval
+    if (state.progressInterval) {
+      clearInterval(state.progressInterval)
+    }
+    
     console.log(`⏹️ Auto-produkcia zastavená pre budovu na [${row}, ${col}], dôvod: ${reason}`)
     
     // Dealokuj work force resources
@@ -743,6 +784,9 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
       })
     }
   }
+  
+  // Reset progress
+  productionProgress.value[key] = 0
   
   // Zobraz warning indikátor podľa dôvodu zastavenia
   if (reason === 'resources') {
@@ -804,17 +848,11 @@ const toggleAutoProduction = () => {
       }
     })
     
-    // Spustiť produkciu hneď ak je dosť surovín
-    if (canStartProduction()) {
-      startProduction()
-    } else {
-      console.log(`⛔ Nemožno spustiť produkciu - nedostatok surovín`)
-      stopAutoProduction(row, col, 'resources')
-      return
-    }
-    
-    // Vytvoriť interval pre túto budovu
+    // Vytvo riť interval pre túto budovu (produkcia sa vykoná na konci 5s)
     const interval = setInterval(() => {
+      // Reset progress
+      productionProgress.value[key] = 0
+      
       // Skontrolovať či je dosť resources
       if (checkProductionResources(buildingData, resources.value)) {
         // Skry žltý indikátor ak bol zobrazený (máme dosť surovín)
@@ -835,12 +873,21 @@ const toggleAutoProduction = () => {
         stopAutoProduction(row, col, 'resources')
         console.log(`⛔ Auto-produkcia zastavená pre budovu na [${row}, ${col}] - nedostatok resources`)
       }
-    }, 3000)
+    }, 5000)
+    
+    // Vytvor progress interval (aktualizuje sa každých 100ms)
+    productionProgress.value[key] = 0
+    const progressInterval = setInterval(() => {
+      if (productionProgress.value[key] !== undefined) {
+        productionProgress.value[key] = (productionProgress.value[key] + 2) % 100 // +2% každých 100ms = 5s na 100%
+      }
+    }, 100)
     
     // Uložiť stav
     buildingProductionStates.value[key] = {
       enabled: true,
       interval: interval,
+      progressInterval: progressInterval,
       buildingData: buildingData
     }
   }
@@ -1073,14 +1120,19 @@ const handleReduceToCapacity = (resourceId) => {
               <span v-else>⛔ Nedostatok resources</span>
             </button>
             
-            <label class="auto-production-toggle">
+            <label class="auto-production-toggle" :class="{ 'with-progress': currentBuildingAutoEnabled }">
               <input 
                 type="checkbox" 
                 :checked="currentBuildingAutoEnabled"
                 @change="toggleAutoProduction"
                 :disabled="!canStartProduction()"
               />
-              <span>🔄 Auto (3s)</span>
+              <span class="toggle-content">
+                <span class="toggle-text">🔄 Auto (5s)</span>
+                <div v-if="currentBuildingAutoEnabled" class="progress-bar-container">
+                  <div class="progress-bar-fill" :style="{ width: currentBuildingProgress + '%' }"></div>
+                </div>
+              </span>
             </label>
           </div>
           
@@ -1561,6 +1613,8 @@ header {
   color: #3b82f6;
   transition: all 0.2s;
   user-select: none;
+  position: relative;
+  overflow: hidden;
 }
 
 .auto-production-toggle:hover {
@@ -1571,6 +1625,40 @@ header {
   background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
   color: white;
   animation: pulse-auto 2s infinite;
+}
+
+.auto-production-toggle.with-progress {
+  padding-bottom: 1.5rem;
+}
+
+.toggle-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  z-index: 1;
+}
+
+.toggle-text {
+  white-space: nowrap;
+}
+
+.progress-bar-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.3);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+  transition: width 0.1s linear;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
 }
 
 @keyframes pulse-auto {
