@@ -409,9 +409,27 @@ const handleLoadProject = async (projectData) => {
                   // Skry warning indikátor ak existuje
                   canvasRef.value?.hideWarningIndicator(row, col)
                 } else {
-                  // Nedostatok resources - zobraz warning
-                  canvasRef.value?.showWarningIndicator(row, col, 'resources')
-                  console.log(`⚠️ Nedostatok resources pre auto-produkciu: ${state.buildingData.buildingName} na [${row}, ${col}]`)
+                  // Nedostatok resources - zobraz warning s chýbajúcimi surovinami
+                  const missingResources = []
+                  if (state.buildingData?.operationalCost) {
+                    state.buildingData.operationalCost.forEach(cost => {
+                      const resource = resources.value.find(r => r.id === cost.resourceId)
+                      if (!resource || resource.amount < cost.amount) {
+                        missingResources.push({
+                          id: cost.resourceId,
+                          name: cost.resourceName || resource?.name || 'Unknown',
+                          icon: resource?.icon || '',
+                          needed: cost.amount,
+                          available: resource?.amount || 0
+                        })
+                      }
+                    })
+                  }
+                  
+                  if (missingResources.length > 0) {
+                    canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
+                  }
+                  console.log(`⚠️ Nedostatok resources pre auto-produkciu: ${state.buildingData.buildingName} na [${row}, ${col}]`, missingResources)
                 }
               }, 5000)
               
@@ -609,8 +627,27 @@ const handleCanvasUpdated = () => {
               executeProduction(buildingDataForProduction, resources.value, storedResources.value)
             } else {
               // Zastav auto produkciu ak nie sú suroviny
-              canvasRef.value?.showWarningIndicator(row, col, 'resources')
-              console.log(`⛔ Auto-produkcia zastavená pre budovu na [${row}, ${col}] - nedostatok resources`)
+              // Získaj zoznam chýbajúcich surovín
+              const missingResources = []
+              if (buildingDataForProduction?.operationalCost) {
+                buildingDataForProduction.operationalCost.forEach(cost => {
+                  const resource = resources.value.find(r => r.id === cost.resourceId)
+                  if (!resource || resource.amount < cost.amount) {
+                    missingResources.push({
+                      id: cost.resourceId,
+                      name: cost.resourceName || resource?.name || 'Unknown',
+                      icon: resource?.icon || '',
+                      needed: cost.amount,
+                      available: resource?.amount || 0
+                    })
+                  }
+                })
+              }
+              
+              if (missingResources.length > 0) {
+                canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
+              }
+              console.log(`⛔ Auto-produkcia zastavená pre budovu na [${row}, ${col}] - nedostatok resources`, missingResources)
               
               // Vymaž interval
               if (buildingProductionStates.value[key]?.interval) {
@@ -754,35 +791,39 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   const key = `${row}-${col}`
   const state = buildingProductionStates.value[key]
   
-  if (state) {
-    // Vyčisti hlavný interval
-    if (state.interval) {
-      clearInterval(state.interval)
-    }
-    
-    // Vyčisti progress interval
-    if (state.progressInterval) {
-      clearInterval(state.progressInterval)
-    }
-    
-    console.log(`⏹️ Auto-produkcia zastavená pre budovu na [${row}, ${col}], dôvod: ${reason}`)
-    
-    // Dealokuj work force resources
-    const buildingData = state.buildingData
-    if (buildingData && buildingData.operationalCost) {
-      buildingData.operationalCost.forEach(cost => {
-        const resource = resources.value.find(r => r.id === cost.resourceId)
-        if (resource && resource.workResource) {
-          if (allocatedResources.value[cost.resourceId]) {
-            allocatedResources.value[cost.resourceId] -= cost.amount
-            if (allocatedResources.value[cost.resourceId] <= 0) {
-              delete allocatedResources.value[cost.resourceId]
-            }
-            console.log(`👷 Dealokované work force: ${cost.amount}x ${resource.name}, total allocated: ${allocatedResources.value[cost.resourceId] || 0}`)
+  // Ak state neexistuje, budova už bola zastavená - return
+  if (!state) {
+    console.log(`⏭️ stopAutoProduction - state neexistuje pre [${row}, ${col}], preskakujem`)
+    return
+  }
+  
+  // Vyčisti hlavný interval
+  if (state.interval) {
+    clearInterval(state.interval)
+  }
+  
+  // Vyčisti progress interval
+  if (state.progressInterval) {
+    clearInterval(state.progressInterval)
+  }
+  
+  console.log(`⏹️ Auto-produkcia zastavená pre budovu na [${row}, ${col}], dôvod: ${reason}`)
+  
+  // Dealokuj work force resources
+  const buildingData = state.buildingData
+  if (buildingData && buildingData.operationalCost) {
+    buildingData.operationalCost.forEach(cost => {
+      const resource = resources.value.find(r => r.id === cost.resourceId)
+      if (resource && resource.workResource) {
+        if (allocatedResources.value[cost.resourceId]) {
+          allocatedResources.value[cost.resourceId] -= cost.amount
+          if (allocatedResources.value[cost.resourceId] <= 0) {
+            delete allocatedResources.value[cost.resourceId]
           }
+          console.log(`👷 Dealokované work force: ${cost.amount}x ${resource.name}, total allocated: ${allocatedResources.value[cost.resourceId] || 0}`)
         }
-      })
-    }
+      }
+    })
   }
   
   // Reset progress
@@ -790,8 +831,30 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   
   // Zobraz warning indikátor podľa dôvodu zastavenia
   if (reason === 'resources') {
-    // Žltý výkričník - nedostatok surovín na produkciu
-    canvasRef.value?.showWarningIndicator(row, col, 'resources')
+    // Získaj zoznam chýbajúcich surovín
+    const missingResources = []
+    
+    if (buildingData && buildingData.operationalCost) {
+      buildingData.operationalCost.forEach(cost => {
+        const resource = resources.value.find(r => r.id === cost.resourceId)
+        if (!resource || resource.amount < cost.amount) {
+          missingResources.push({
+            id: cost.resourceId,
+            name: cost.resourceName || resource?.name || 'Unknown',
+            icon: resource?.icon || '',
+            needed: cost.amount,
+            available: resource?.amount || 0
+          })
+        }
+      })
+    }
+    
+    console.log('🔍 Chýbajúce suroviny pre warning indikátor:', missingResources)
+    
+    // Zobraz indikátor LEN ak máme missing resources
+    if (missingResources.length > 0) {
+      canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
+    }
   } else {
     // Manuálne zastavenie - skry indikátor
     canvasRef.value?.hideWarningIndicator(row, col)
@@ -1107,10 +1170,17 @@ const handleReduceToCapacity = (resourceId) => {
               <span class="resource-amount">+{{ prod.amount }}</span>
             </div>
           </div>
+        </div>
+        
+        <!-- Production Controls - zobrazí sa aj pre budovy bez produkcie, ak majú operationalCost -->
+        <div v-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
+          <h3 v-if="clickedBuilding.production && clickedBuilding.production.length > 0">⚙️ Ovládanie produkcie</h3>
+          <h3 v-else>⚙️ Ovládanie prevádzky</h3>
           
           <!-- Tlačidlo na spustenie produkcie -->
           <div class="production-controls">
             <button 
+              v-if="clickedBuilding.production && clickedBuilding.production.length > 0"
               class="production-button"
               :class="{ disabled: !canStartProduction() || currentBuildingAutoEnabled }"
               :disabled="!canStartProduction() || currentBuildingAutoEnabled"

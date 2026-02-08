@@ -356,9 +356,10 @@ class IsoScene extends Phaser.Scene {
 
   // Zobrazí warning indikátor nad budovou
   // type: 'resources' (žltý) alebo 'storage' (červený)
-  showWarningIndicator(row, col, type = 'resources') {
+  // missingResources: array objektov s chýbajúcimi surovinami [{name, needed, available}, ...]
+  showWarningIndicator(row, col, type = 'resources', missingResources = []) {
     let key = `${row}-${col}`
-    console.log(`🚨 showWarningIndicator volaný pre [${row}, ${col}], typ: ${type}`)
+    console.log(`🚨 showWarningIndicator volaný pre [${row}, ${col}], typ: ${type}`, missingResources)
     
     // Skontroluj či je táto bunka sekundárna a nájdi origin
     const originCellData = cellImages[key]
@@ -369,13 +370,14 @@ class IsoScene extends Phaser.Scene {
       console.log(`🔄 Sekundárna bunka - používam origin: [${row}, ${col}]`)
     }
     
-    // Ak už existuje indikátor s rovnakým typom, preskočíme
-    if (this.warningIndicators[key]?.type === type) {
-      console.log(`⏭️ Indikátor už existuje`)
+    // Ak už existuje indikátor s rovnakým typom a rovnakými resources, preskočíme
+    const existing = this.warningIndicators[key]
+    if (existing?.type === type && JSON.stringify(existing.missingResources) === JSON.stringify(missingResources)) {
+      console.log(`⏭️ Indikátor už existuje s rovnakými údajmi`)
       return
     }
     
-    // Odstránime existujúci indikátor ak je iného typu
+    // Odstránime existujúci indikátor
     this.hideWarningIndicator(row, col)
     
     // Nájdeme budovu na danej pozícii
@@ -411,46 +413,188 @@ class IsoScene extends Phaser.Scene {
     const indicatorX = x + offsetX
     
     console.log(`📍 Pozícia indikátora: x=${indicatorX}, y=${indicatorY}`)
+    console.log(`🔍 DEBUG: type='${type}', missingResources=`, missingResources)
+    console.log(`🔍 DEBUG: missingResources.length=${missingResources ? missingResources.length : 'undefined'}`)
     
-    // Farba podľa typu
-    const color = type === 'storage' ? 0xff3333 : 0xffcc00 // červená pre storage, žltá pre resources
-    const bgColor = type === 'storage' ? 0x990000 : 0x996600
+    const elements = []
     
-    // Vytvoríme graphics objekty priamo bez kontajnera
-    const bg = this.add.graphics()
-    bg.setPosition(indicatorX, indicatorY)
-    bg.fillStyle(bgColor, 0.9)
-    bg.fillCircle(0, 0, 14)
-    bg.lineStyle(2, 0xffffff, 1)
-    bg.strokeCircle(0, 0, 14)
-    bg.setDepth(9999999)
-    
-    // Výkričník
-    const exclamation = this.add.text(indicatorX, indicatorY, '!', {
-      fontSize: '20px',
-      fontFamily: 'Arial Black, sans-serif',
-      color: '#ffffff',
-      fontStyle: 'bold'
-    })
-    exclamation.setOrigin(0.5, 0.5)
-    exclamation.setDepth(9999999)
-    
-    // Pridáme pulzujúcu animáciu
-    this.tweens.add({
-      targets: [bg, exclamation],
-      scaleX: { from: 1, to: 1.2 },
-      scaleY: { from: 1, to: 1.2 },
-      duration: 500,
-      ease: 'Sine.easeInOut',
-      yoyo: true,
-      repeat: -1
-    })
+    // Ak máme chýbajúce resources a type je 'resources', zobrazíme ich
+    if (type === 'resources' && missingResources && missingResources.length > 0) {
+      console.log(`✅ Zobrazujem resource box s ${missingResources.length} položkami`)
+      // Vytvoríme semi-transparentný box na pozadí
+      const padding = 8
+      const itemHeight = 24
+      const boxHeight = missingResources.length * itemHeight + padding * 2
+      const boxWidth = 140
+      
+      const bg = this.add.graphics()
+      bg.setPosition(indicatorX, indicatorY)
+      bg.fillStyle(0x000000, 0.85)
+      bg.fillRoundedRect(-boxWidth/2, -boxHeight/2, boxWidth, boxHeight, 6)
+      bg.lineStyle(2, 0xffcc00, 1)
+      bg.strokeRoundedRect(-boxWidth/2, -boxHeight/2, boxWidth, boxHeight, 6)
+      bg.setDepth(9999999)
+      elements.push(bg)
+      
+      // Pre každú chýbajúcu surovinu vytvoríme ikonu + text
+      missingResources.forEach((resource, index) => {
+        const yOffset = -boxHeight/2 + padding + index * itemHeight + itemHeight/2
+        
+        // Ak má resource ikonu, zobrazíme ju
+        if (resource.icon) {
+          // Vytvor unikátny kľúč pre textúru
+          const iconKey = `missing_icon_${resource.id}_${Date.now()}`
+          
+          // Načítaj ikonu (ak už nie je načítaná)
+          if (!this.textures.exists(iconKey)) {
+            this.load.image(iconKey, resource.icon)
+            this.load.once('complete', () => {
+              // Vytvor sprite po načítaní
+              const iconSprite = this.add.sprite(
+                indicatorX - boxWidth/2 + padding + 10,
+                indicatorY + yOffset,
+                iconKey
+              )
+              iconSprite.setDisplaySize(16, 16)
+              iconSprite.setDepth(9999999)
+              elements.push(iconSprite)
+              
+              // Názov suroviny vedľa ikony (skrátený)
+              let displayName = resource.name
+              if (displayName.length > 10) {
+                displayName = displayName.substring(0, 8) + '..'
+              }
+              
+              const text = this.add.text(
+                indicatorX - boxWidth/2 + padding + 26,
+                indicatorY + yOffset,
+                displayName,
+                {
+                  fontSize: '11px',
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#ffcc00',
+                  fontStyle: 'bold',
+                  stroke: '#000000',
+                  strokeThickness: 2
+                }
+              )
+              text.setOrigin(0, 0.5)
+              text.setDepth(9999999)
+              elements.push(text)
+            })
+            this.load.start()
+          } else {
+            // Ak je už načítaná, vytvor sprite priamo
+            const iconSprite = this.add.sprite(
+              indicatorX - boxWidth/2 + padding + 10,
+              indicatorY + yOffset,
+              iconKey
+            )
+            iconSprite.setDisplaySize(16, 16)
+            iconSprite.setDepth(9999999)
+            elements.push(iconSprite)
+            
+            // Názov suroviny vedľa ikony (skrátený)
+            let displayName = resource.name
+            if (displayName.length > 10) {
+              displayName = displayName.substring(0, 8) + '..'
+            }
+            
+            const text = this.add.text(
+              indicatorX - boxWidth/2 + padding + 26,
+              indicatorY + yOffset,
+              displayName,
+              {
+                fontSize: '11px',
+                fontFamily: 'Arial, sans-serif',
+                color: '#ffcc00',
+                fontStyle: 'bold',
+                stroke: '#000000',
+                strokeThickness: 2
+              }
+            )
+            text.setOrigin(0, 0.5)
+            text.setDepth(9999999)
+            elements.push(text)
+          }
+        } else {
+          // Fallback - len text ak nemá ikonu
+          let displayName = resource.name
+          if (displayName.length > 12) {
+            displayName = displayName.substring(0, 10) + '..'
+          }
+          
+          const text = this.add.text(
+            indicatorX,
+            indicatorY + yOffset,
+            displayName,
+            {
+              fontSize: '11px',
+              fontFamily: 'Arial, sans-serif',
+              color: '#ffcc00',
+              fontStyle: 'bold',
+              stroke: '#000000',
+              strokeThickness: 2
+            }
+          )
+          text.setOrigin(0.5, 0.5)
+          text.setDepth(9999999)
+          elements.push(text)
+        }
+      })
+      
+      // Pridáme jemnú pulzujúcu animáciu
+      this.tweens.add({
+        targets: elements,
+        alpha: { from: 0.8, to: 1 },
+        duration: 800,
+        ease: 'Sine.easeInOut',
+        yoyo: true,
+        repeat: -1
+      })
+      
+    } else {
+      // Pôvodný výkričník pre storage alebo keď nemáme info o resources
+      console.log(`⚠️ Zobrazujem výkričník - dôvod: type='${type}', missingResources.length=${missingResources ? missingResources.length : 'undefined'}`)
+      const color = type === 'storage' ? 0xff3333 : 0xffcc00
+      const bgColor = type === 'storage' ? 0x990000 : 0x996600
+      
+      const bg = this.add.graphics()
+      bg.setPosition(indicatorX, indicatorY)
+      bg.fillStyle(bgColor, 0.9)
+      bg.fillCircle(0, 0, 14)
+      bg.lineStyle(2, 0xffffff, 1)
+      bg.strokeCircle(0, 0, 14)
+      bg.setDepth(9999999)
+      elements.push(bg)
+      
+      const exclamation = this.add.text(indicatorX, indicatorY, '!', {
+        fontSize: '20px',
+        fontFamily: 'Arial Black, sans-serif',
+        color: '#ffffff',
+        fontStyle: 'bold'
+      })
+      exclamation.setOrigin(0.5, 0.5)
+      exclamation.setDepth(9999999)
+      elements.push(exclamation)
+      
+      // Pridáme pulzujúcu animáciu
+      this.tweens.add({
+        targets: elements,
+        scaleX: { from: 1, to: 1.2 },
+        scaleY: { from: 1, to: 1.2 },
+        duration: 500,
+        ease: 'Sine.easeInOut',
+        yoyo: true,
+        repeat: -1
+      })
+    }
     
     // Uložíme referenciu
     this.warningIndicators[key] = {
-      bg,
-      exclamation,
-      type
+      elements,
+      type,
+      missingResources
     }
     
     console.log(`✅ Warning indikátor vytvorený a zobrazený na [${row}, ${col}], typ: ${type}`)
@@ -461,6 +605,11 @@ class IsoScene extends Phaser.Scene {
     const key = `${row}-${col}`
     
     if (this.warningIndicators[key]) {
+      // Destroy všetky elementy (môže to byť array alebo jednotlivé objekty)
+      if (this.warningIndicators[key].elements) {
+        this.warningIndicators[key].elements.forEach(el => el?.destroy())
+      }
+      // Backward compatibility pre staré referencie
       this.warningIndicators[key].bg?.destroy()
       this.warningIndicators[key].exclamation?.destroy()
       delete this.warningIndicators[key]
@@ -2424,8 +2573,8 @@ defineExpose({
   },
   // Zobrazí warning indikátor nad budovou
   // type: 'resources' (žltý - nedostatok surovín) alebo 'storage' (červený - plný sklad)
-  showWarningIndicator: (row, col, type = 'resources') => {
-    mainScene?.showWarningIndicator(row, col, type)
+  showWarningIndicator: (row, col, type = 'resources', missingResources = []) => {
+    mainScene?.showWarningIndicator(row, col, type, missingResources)
   },
   // Skryje warning indikátor
   hideWarningIndicator: (row, col) => {
