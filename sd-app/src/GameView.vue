@@ -547,9 +547,8 @@ const handleCanvasUpdated = () => {
         const [row, col] = key.split('-').map(Number)
         const matchingImage = images.value.find(img => img.id === mapData.imageId)
         
-        // Ak budova má produkciu a ešte nemá zapnutú auto produkciu
+        // Ak budova je building a ešte nemá zapnutú auto produkciu (produkcia môže byť aj prázdna)
         if (matchingImage?.buildingData?.isBuilding && 
-            matchingImage.buildingData.production?.length > 0 &&
             !buildingProductionStates.value[key]?.enabled) {
           
           console.log(`🏗️ Auto-spúšťam produkciu pre budovu: ${matchingImage.buildingData.buildingName} na [${row}, ${col}]`)
