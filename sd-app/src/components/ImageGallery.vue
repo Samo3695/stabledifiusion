@@ -85,6 +85,7 @@ const smokeScale = ref(1) // Veľkosť častíc dymu (0.1 - 3)
 const smokeAlpha = ref(0.5) // Priehľadnosť dymu (0.1 - 1.0)
 const smokeTint = ref(1) // Tmavosť dymu - brightness multiplikátor (0.1 - 2.0, 1=normálne)
 const hasLightEffect = ref(false) // Či budova má blikajúce svetlo
+const hasFlyAwayEffect = ref(false) // Či budova má fly-away efekt
 const lightBlinkSpeed = ref(1) // Rýchlosť blikania svetla (0.1 - 10)
 const lightColor = ref('#ffff00') // Farba svetla (hex)
 const lightSize = ref(1) // Veľkosť svetla (0.1 - 5)
@@ -329,6 +330,7 @@ const saveBuildingData = () => {
       smokeAlpha: smokeAlpha.value,
       smokeTint: smokeTint.value,
       hasLightEffect: hasLightEffect.value,
+      hasFlyAwayEffect: hasFlyAwayEffect.value,
       lightBlinkSpeed: lightBlinkSpeed.value,
       lightColor: lightColor.value,
       lightSize: lightSize.value
@@ -344,7 +346,7 @@ const saveBuildingData = () => {
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, canBuildOnlyInDestination, destinationTiles, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, lightBlinkSpeed, lightColor, lightSize], () => {
+watch([isBuilding, isCommandCenter, canBuildOnlyInDestination, destinationTiles, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, hasFlyAwayEffect, lightBlinkSpeed, lightColor, lightSize], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -451,6 +453,7 @@ const openModal = (image) => {
     smokeAlpha.value = image.buildingData.smokeAlpha !== undefined ? image.buildingData.smokeAlpha : 0.5
     smokeTint.value = image.buildingData.smokeTint || 1
     hasLightEffect.value = image.buildingData.hasLightEffect === true
+    hasFlyAwayEffect.value = image.buildingData.hasFlyAwayEffect === true
     lightBlinkSpeed.value = image.buildingData.lightBlinkSpeed || 1
     lightColor.value = image.buildingData.lightColor || '#ffff00'
     lightSize.value = image.buildingData.lightSize || 1
@@ -473,6 +476,7 @@ const openModal = (image) => {
     smokeAlpha.value = 0.5
     smokeTint.value = 1
     hasLightEffect.value = false
+    hasFlyAwayEffect.value = false
     lightBlinkSpeed.value = 1
     lightColor.value = '#ffff00'
     lightSize.value = 1
@@ -498,6 +502,7 @@ const closeModal = () => {
   smokeScale.value = 1
   smokeAlpha.value = 0.5
   smokeTint.value = 1
+  hasFlyAwayEffect.value = false
   selectedBuildResource.value = ''
   selectedOperationalResource.value = ''
   selectedProductionResource.value = ''
@@ -1005,6 +1010,13 @@ defineExpose({
                       v-model="hasSmokeEffect"
                     />
                     <span>💨 Dym (Smoke Effect)</span>
+                  </label>
+                  <label class="shadow-checkbox" style="margin-top: 0.75rem;">
+                    <input 
+                      type="checkbox" 
+                      v-model="hasFlyAwayEffect"
+                    />
+                    <span>🛫 Fly away efekt (5s)</span>
                   </label>
                   <div v-if="hasSmokeEffect" class="smoke-speed-control">
                     <label for="smoke-speed">⚡ Rýchlosť dymu:</label>

@@ -837,6 +837,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       smokeAlpha: buildingData.smokeAlpha,
       smokeTint: buildingData.smokeTint,
       hasLightEffect: buildingData.hasLightEffect,
+      hasFlyAwayEffect: buildingData.hasFlyAwayEffect,
       lightBlinkSpeed: buildingData.lightBlinkSpeed,
       lightColor: buildingData.lightColor,
       lightSize: buildingData.lightSize

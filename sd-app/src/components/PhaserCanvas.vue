@@ -133,6 +133,7 @@ class IsoScene extends Phaser.Scene {
     this.groundMask = null
     this.groundMaskGraphics = null
     this.hoverPreviewSprite = null // Preview budovy pri hoveri
+    this.flyAwayEffects = {} // Mapa fly-away efektov pre budovy
     
     // Road building mode
     this.roadStartCell = null // Začiatočný bod cesty
@@ -764,7 +765,7 @@ class IsoScene extends Phaser.Scene {
     const buildingData = cellData?.buildingData
     if (!cellData || !buildingData) return
 
-    if (!buildingData.hasSmokeEffect && !buildingData.hasLightEffect) return
+    if (!buildingData.hasSmokeEffect && !buildingData.hasLightEffect && !buildingData.hasFlyAwayEffect) return
 
     const buildingSprite = this.buildingSprites[key]
     if (!buildingSprite) return
@@ -829,6 +830,10 @@ class IsoScene extends Phaser.Scene {
         console.log('💡 Production light effect zapnutý', key)
       }
     }
+
+    if (buildingData.hasFlyAwayEffect) {
+      this.startFlyAwayEffect(key, buildingSprite)
+    }
   }
 
   // Skryje produkčné efekty (dym/svetlo)
@@ -850,6 +855,59 @@ class IsoScene extends Phaser.Scene {
       delete this.smokeEffects[key]
       console.log('🧹 Production effects vypnuté', key)
     }
+
+    if (this.flyAwayEffects && this.flyAwayEffects[key]) {
+      const effect = this.flyAwayEffects[key]
+      effect?.tween?.stop()
+      if (effect?.sprite && effect?.originalY !== undefined) {
+        effect.sprite.y = effect.originalY
+      }
+      const shadowInfo = this.shadowSprites[key]
+      if (shadowInfo) {
+        shadowInfo.alpha = 1
+        shadowInfo.scaleMultiplier = 1
+      }
+      delete this.flyAwayEffects[key]
+    }
+  }
+
+  // Spustí fly-away efekt (5s: 2.5s hore, 2.5s späť)
+  startFlyAwayEffect(key, buildingSprite) {
+    if (this.flyAwayEffects[key]) return
+
+    const camera = this.cameras.main
+    const viewHeight = camera.height / camera.zoom
+    const travelDistance = viewHeight + buildingSprite.height + 200
+    const originalY = buildingSprite.y
+
+    const [row, col] = key.split('-').map(Number)
+    const shadowInfo = this.shadowSprites[key]
+
+    const tween = this.tweens.add({
+      targets: buildingSprite,
+      y: originalY - travelDistance,
+      duration: 2500,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: 0,
+      onUpdate: () => {
+        if (!shadowInfo) return
+        const distance = Math.abs(buildingSprite.y - originalY)
+        const t = Math.min(1, distance / travelDistance)
+        shadowInfo.alpha = 1 - t
+        shadowInfo.scaleMultiplier = 1 - t
+        this.redrawAllShadows()
+      },
+      onComplete: () => {
+        if (!shadowInfo) return
+        shadowInfo.alpha = 1
+        shadowInfo.scaleMultiplier = 1
+        this.redrawAllShadows()
+      }
+    })
+
+    this.flyAwayEffects[key] = { tween, sprite: buildingSprite, originalY }
+    console.log('🛫 Fly-away efekt spustený', key)
   }
 
   createShadowTexture() {
@@ -1964,6 +2022,8 @@ class IsoScene extends Phaser.Scene {
             x: x + offsetX,
             y: y + TILE_HEIGHT + offsetY,
             scale,
+            scaleMultiplier: 1,
+            alpha: 1,
             cellsX, // Veľkosť pre výber správneho offsetu
             isTree: isTreeTemplate, // Špeciálny flag pre stromy
             offsetX: -baseShadowOffset,
@@ -2044,6 +2104,7 @@ class IsoScene extends Phaser.Scene {
     for (const key in this.shadowSprites) {
       const shadowInfo = this.shadowSprites[key]
       if (!shadowInfo || !shadowInfo.textureKey) continue
+      if (shadowInfo.alpha !== undefined && shadowInfo.alpha <= 0) continue
       
       // Skontrolujeme či textúra existuje
       if (!this.textures.exists(shadowInfo.textureKey)) continue
@@ -2063,15 +2124,16 @@ class IsoScene extends Phaser.Scene {
       const frame = texture.get()
       
       // Nastavíme scale pre tieň
-      const shadowScaleX = shadowInfo.scale * 0.45
-      const shadowScaleY = shadowInfo.scale * 1.3
+      const scaleMultiplier = shadowInfo.scaleMultiplier !== undefined ? shadowInfo.scaleMultiplier : 1
+      const shadowScaleX = shadowInfo.scale * 0.45 * scaleMultiplier
+      const shadowScaleY = shadowInfo.scale * 1.3 * scaleMultiplier
       
       tempSprite.setScale(shadowScaleX, shadowScaleY)
       // Origin na spodný stred - rovnaký ako budova
       tempSprite.setOrigin(0.5, 1)
       tempSprite.setAngle(-90)
       tempSprite.setTint(0x000000)
-      tempSprite.setAlpha(1)
+      tempSprite.setAlpha(shadowInfo.alpha !== undefined ? shadowInfo.alpha : 1)
       
       // Po rotácii o -90° sa výška obrázka stane šírkou tieňa
       // Kompenzujeme pozíciu tak, aby tieň bol vždy rovnako ďaleko od spodku budovy
@@ -2118,6 +2180,7 @@ class IsoScene extends Phaser.Scene {
       const shadowInfo = this.shadowSprites[key]
       if (!shadowInfo || !shadowInfo.textureKey) return
       if (!this.textures.exists(shadowInfo.textureKey)) return
+      if (shadowInfo.alpha !== undefined && shadowInfo.alpha <= 0) return
 
       const drawX = shadowInfo.x + shadowInfo.offsetX + rtOffsetX
       const drawY = shadowInfo.y + shadowInfo.offsetY + rtOffsetY
@@ -2130,13 +2193,14 @@ class IsoScene extends Phaser.Scene {
       const texture = this.textures.get(shadowInfo.textureKey)
       const frame = texture.get()
 
-      const shadowScaleX = shadowInfo.scale * 0.45
-      const shadowScaleY = shadowInfo.scale * 1.3
+      const scaleMultiplier = shadowInfo.scaleMultiplier !== undefined ? shadowInfo.scaleMultiplier : 1
+      const shadowScaleX = shadowInfo.scale * 0.45 * scaleMultiplier
+      const shadowScaleY = shadowInfo.scale * 1.3 * scaleMultiplier
       tempSprite.setScale(shadowScaleX, shadowScaleY)
       tempSprite.setOrigin(0.5, 1)
       tempSprite.setAngle(-90)
       tempSprite.setTint(0x000000)
-      tempSprite.setAlpha(1)
+      tempSprite.setAlpha(shadowInfo.alpha !== undefined ? shadowInfo.alpha : 1)
 
       const shadowOffsets = {
         '1x1': { x: 44, y: -23 },
@@ -2219,6 +2283,15 @@ class IsoScene extends Phaser.Scene {
       delete this.shadowSprites[key]
       // Prekreslíme tiene
       this.redrawAllShadows()
+    }
+
+    if (this.flyAwayEffects && this.flyAwayEffects[key]) {
+      const effect = this.flyAwayEffects[key]
+      effect?.tween?.stop()
+      if (effect?.sprite && effect?.originalY !== undefined) {
+        effect.sprite.y = effect.originalY
+      }
+      delete this.flyAwayEffects[key]
     }
     
     // Odstránime smoke effect ak existuje
