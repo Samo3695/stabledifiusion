@@ -773,8 +773,12 @@ class IsoScene extends Phaser.Scene {
     const cellsX = cellData.cellsX || 1
     const cellsY = cellData.cellsY || 1
 
-    const effectX = buildingSprite.x
-    const effectY = buildingSprite.y - buildingSprite.height * buildingSprite.scaleY
+    const useBottomOrigin = !!buildingData.hasFlyAwayEffect
+    const originPoint = useBottomOrigin
+      ? buildingSprite.getBottomCenter()
+      : buildingSprite.getTopCenter()
+    const effectX = originPoint.x
+    const effectY = originPoint.y
 
     if (!this.smokeEffects) {
       this.smokeEffects = {}
@@ -790,6 +794,8 @@ class IsoScene extends Phaser.Scene {
       const smokeScale = buildingData.smokeScale || 1
       const smokeAlpha = buildingData.smokeAlpha !== undefined ? buildingData.smokeAlpha : 0.5
       const smokeTint = buildingData.smokeTint || 1
+      const smokeDirection = buildingData.hasFlyAwayEffect ? 'down' : 'up'
+      const smokeDepthOffset = buildingData.hasFlyAwayEffect ? -1 : 1
       const smokeParticles = this.createSmokeEffect(
         effectX,
         effectY,
@@ -801,7 +807,9 @@ class IsoScene extends Phaser.Scene {
         row,
         col,
         cellsX,
-        cellsY
+        cellsY,
+        smokeDirection,
+        smokeDepthOffset
       )
       if (smokeParticles) {
         this.smokeEffects[key].push(smokeParticles)
@@ -897,6 +905,24 @@ class IsoScene extends Phaser.Scene {
         shadowInfo.alpha = 1 - t
         shadowInfo.scaleMultiplier = 1 - t
         this.redrawAllShadows()
+
+        // Posúvaj efekty spolu s budovou (dym/svetlo)
+        const effects = this.smokeEffects?.[key]
+        if (effects && effects.length) {
+          const cellData = cellImages[key]
+          const useBottomOrigin = !!cellData?.buildingData?.hasFlyAwayEffect
+          const originPoint = useBottomOrigin
+            ? buildingSprite.getBottomCenter()
+            : buildingSprite.getTopCenter()
+          const effectX = originPoint.x
+          const effectY = originPoint.y
+          const list = Array.isArray(effects) ? effects : [effects]
+          list.forEach(effect => {
+            if (effect?.setPosition) {
+              effect.setPosition(effectX, effectY)
+            }
+          })
+        }
       },
       onComplete: () => {
         if (!shadowInfo) return
@@ -1797,7 +1823,7 @@ class IsoScene extends Phaser.Scene {
   }
 
   // Vytvorenie smoke effectu pre budovu
-  createSmokeEffect(x, y, key, speed = 1, scale = 1, alpha = 0.5, tint = 1, row = 0, col = 0, cellsX = 1, cellsY = 1) {
+  createSmokeEffect(x, y, key, speed = 1, scale = 1, alpha = 0.5, tint = 1, row = 0, col = 0, cellsX = 1, cellsY = 1, direction = 'up', depthOffset = 1) {
     if (!this.textures.exists('smoke')) {
       console.warn('⚠️ Smoke textúra nie je načítaná')
       return null
@@ -1808,7 +1834,9 @@ class IsoScene extends Phaser.Scene {
     const scaleMultiplier = scale || 1
     const alphaValue = alpha !== undefined ? alpha : 0.5
     const tintValue = tint || 1
-    const baseSpeedY = { min: -100, max: -200 }
+    const baseSpeedY = direction === 'down'
+      ? { min: 100, max: 200 }
+      : { min: -100, max: -200 }
     const baseSpeedX = { min: -20, max: 20 }
     const baseFrequency = 100
     const baseLifespan = 3000
@@ -1848,10 +1876,10 @@ class IsoScene extends Phaser.Scene {
     const baseR = row + cellsX - 1
     const baseC = col + (cellsY - 1) / 2
     const depthSum = baseR + baseC
-    const depth = Math.round(depthSum * 10000 + baseC * 10) + 1 // +1 aby bol dym tesne pred budovou
+    const depth = Math.round(depthSum * 10000 + baseC * 10) + depthOffset
     particles.setDepth(depth)
     
-    console.log(`💨 Smoke effect vytvorený: speed=${speedMultiplier}x, scale=${scaleMultiplier}x, alpha=${alphaValue}, tint=${tintValue}x, depth=${depth}`)
+    console.log(`💨 Smoke effect vytvorený: speed=${speedMultiplier}x, scale=${scaleMultiplier}x, alpha=${alphaValue}, tint=${tintValue}x, depth=${depth}, direction=${direction}`)
     
     return particles
   }
