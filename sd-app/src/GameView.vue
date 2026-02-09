@@ -395,6 +395,8 @@ const handleLoadProject = async (projectData) => {
               
               // Zobraz auto-production indikátor
               canvasRef.value?.showAutoProductionIndicator(row, col)
+              // Zapni produkčné efekty len počas produkcie
+              canvasRef.value?.showProductionEffects(row, col)
               
               // Vytvor interval pre túto budovu
               const interval = setInterval(() => {
@@ -429,6 +431,8 @@ const handleLoadProject = async (projectData) => {
                   if (missingResources.length > 0) {
                     canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
                   }
+                  // Vypni produkčné efekty ak nie sú resources
+                  canvasRef.value?.hideProductionEffects(row, col)
                   console.log(`⚠️ Nedostatok resources pre auto-produkciu: ${state.buildingData.buildingName} na [${row}, ${col}]`, missingResources)
                 }
               }, 5000)
@@ -610,6 +614,8 @@ const handleCanvasUpdated = () => {
           
           // Zobraz auto-production indikátor
           canvasRef.value?.showAutoProductionIndicator(row, col)
+          // Zapni produkčné efekty len počas produkcie
+          canvasRef.value?.showProductionEffects(row, col)
           
           // Vytvor interval pre auto produkciu (produkcia sa vykoná na konci 5s)
           const interval = setInterval(() => {
@@ -647,6 +653,8 @@ const handleCanvasUpdated = () => {
               if (missingResources.length > 0) {
                 canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
               }
+              // Vypni produkčné efekty ak nie sú resources
+              canvasRef.value?.hideProductionEffects(row, col)
               console.log(`⛔ Auto-produkcia zastavená pre budovu na [${row}, ${col}] - nedostatok resources`, missingResources)
               
               // Vymaž interval
@@ -865,6 +873,8 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   
   // Skry auto-production indikátor
   canvasRef.value?.hideAutoProductionIndicator(row, col)
+  // Skry produkčné efekty
+  canvasRef.value?.hideProductionEffects(row, col)
 }
 
 // Toggle auto produkcie pre konkrétnu budovu
@@ -897,6 +907,8 @@ const toggleAutoProduction = () => {
     
     // Zobraz zelený auto-production indikátor
     canvasRef.value?.showAutoProductionIndicator(row, col)
+    // Zapni produkčné efekty len počas produkcie
+    canvasRef.value?.showProductionEffects(row, col)
     
     // Alokuj work force resources pre operationalCost
     const operationalCost = buildingData.operationalCost || []

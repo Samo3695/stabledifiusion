@@ -741,6 +741,113 @@ class IsoScene extends Phaser.Scene {
     }
   }
 
+  // Zobrazí produkčné efekty (dym/svetlo) len keď je budova v production stave
+  showProductionEffects(row, col) {
+    let key = `${row}-${col}`
+    const originCellData = cellImages[key]
+    if (originCellData?.isSecondary) {
+      row = originCellData.originRow
+      col = originCellData.originCol
+      key = `${row}-${col}`
+    }
+
+    // Ak už efekty existujú, nič nerob
+    if (this.smokeEffects && this.smokeEffects[key]) {
+      return
+    }
+
+    const cellData = cellImages[key]
+    const buildingData = cellData?.buildingData
+    if (!cellData || !buildingData) return
+
+    if (!buildingData.hasSmokeEffect && !buildingData.hasLightEffect) return
+
+    const buildingSprite = this.buildingSprites[key]
+    if (!buildingSprite) return
+
+    const cellsX = cellData.cellsX || 1
+    const cellsY = cellData.cellsY || 1
+
+    const effectX = buildingSprite.x
+    const effectY = buildingSprite.y - buildingSprite.height * buildingSprite.scaleY
+
+    if (!this.smokeEffects) {
+      this.smokeEffects = {}
+    }
+    if (!this.smokeEffects[key]) {
+      this.smokeEffects[key] = []
+    } else if (!Array.isArray(this.smokeEffects[key])) {
+      this.smokeEffects[key] = [this.smokeEffects[key]]
+    }
+
+    if (buildingData.hasSmokeEffect) {
+      const smokeSpeed = buildingData.smokeSpeed || 1
+      const smokeScale = buildingData.smokeScale || 1
+      const smokeAlpha = buildingData.smokeAlpha !== undefined ? buildingData.smokeAlpha : 0.5
+      const smokeTint = buildingData.smokeTint || 1
+      const smokeParticles = this.createSmokeEffect(
+        effectX,
+        effectY,
+        key,
+        smokeSpeed,
+        smokeScale,
+        smokeAlpha,
+        smokeTint,
+        row,
+        col,
+        cellsX,
+        cellsY
+      )
+      if (smokeParticles) {
+        this.smokeEffects[key].push(smokeParticles)
+        console.log('💨 Production smoke effect zapnutý', key)
+      }
+    }
+
+    if (buildingData.hasLightEffect) {
+      const lightBlinkSpeed = buildingData.lightBlinkSpeed || 1
+      const lightColor = buildingData.lightColor || '#ffff00'
+      const lightSize = buildingData.lightSize || 1
+      const lightEffect = this.createLightEffect(
+        effectX,
+        effectY,
+        key,
+        lightBlinkSpeed,
+        lightColor,
+        lightSize,
+        row,
+        col,
+        cellsX,
+        cellsY
+      )
+      if (lightEffect) {
+        this.smokeEffects[key].push(lightEffect)
+        console.log('💡 Production light effect zapnutý', key)
+      }
+    }
+  }
+
+  // Skryje produkčné efekty (dym/svetlo)
+  hideProductionEffects(row, col) {
+    let key = `${row}-${col}`
+    const originCellData = cellImages[key]
+    if (originCellData?.isSecondary) {
+      row = originCellData.originRow
+      col = originCellData.originCol
+      key = `${row}-${col}`
+    }
+
+    if (this.smokeEffects && this.smokeEffects[key]) {
+      const effects = Array.isArray(this.smokeEffects[key])
+        ? this.smokeEffects[key]
+        : [this.smokeEffects[key]]
+
+      effects.forEach(effect => effect?.destroy())
+      delete this.smokeEffects[key]
+      console.log('🧹 Production effects vypnuté', key)
+    }
+  }
+
   createShadowTexture() {
     // Vytvoríme gradient textúru pre tieň
     const graphics = this.make.graphics({ x: 0, y: 0, add: false })
@@ -1866,72 +1973,6 @@ class IsoScene extends Phaser.Scene {
         // Uložíme referencie
         this.buildingSprites[key] = buildingSprite
         
-        // Vytvoríme smoke effect ak má budova hasSmokeEffect
-        if (buildingData?.hasSmokeEffect) {
-          const smokeSpeed = buildingData.smokeSpeed || 1
-          const smokeScale = buildingData.smokeScale || 1
-          const smokeAlpha = buildingData.smokeAlpha !== undefined ? buildingData.smokeAlpha : 0.5
-          const smokeTint = buildingData.smokeTint || 1
-          const smokeParticles = this.createSmokeEffect(
-            x + offsetX, 
-            y + TILE_HEIGHT + offsetY - buildingSprite.height * scale, 
-            key, 
-            smokeSpeed, 
-            smokeScale, 
-            smokeAlpha, 
-            smokeTint,
-            row,
-            col,
-            cellsX,
-            cellsY
-          )
-          if (smokeParticles) {
-            // Uložíme referenciu na smoke particles
-            if (!this.smokeEffects) {
-              this.smokeEffects = {}
-            }
-            // Ak už existuje, pridáme do poľa, inak vytvoríme nové pole
-            if (!this.smokeEffects[key]) {
-              this.smokeEffects[key] = []
-            } else if (!Array.isArray(this.smokeEffects[key])) {
-              // Ak je to starý formát (len particles), prekonvertuj na pole
-              this.smokeEffects[key] = [this.smokeEffects[key]]
-            }
-            this.smokeEffects[key].push(smokeParticles)
-            console.log('💨 Smoke effect pridaný k budove', key)
-          }
-        }
-        
-        // Vytvoríme light effect ak má budova hasLightEffect
-        if (buildingData?.hasLightEffect) {
-          const lightBlinkSpeed = buildingData.lightBlinkSpeed || 1
-          const lightColor = buildingData.lightColor || '#ffff00'
-          const lightSize = buildingData.lightSize || 1
-          const lightEffect = this.createLightEffect(
-            x + offsetX, 
-            y + TILE_HEIGHT + offsetY - buildingSprite.height * scale, 
-            key, 
-            lightBlinkSpeed,
-            lightColor,
-            lightSize,
-            row,
-            col,
-            cellsX,
-            cellsY
-          )
-          if (lightEffect) {
-            if (!this.smokeEffects) {
-              this.smokeEffects = {}
-            }
-            if (!this.smokeEffects[key]) {
-              this.smokeEffects[key] = []
-            } else if (!Array.isArray(this.smokeEffects[key])) {
-              this.smokeEffects[key] = [this.smokeEffects[key]]
-            }
-            this.smokeEffects[key].push(lightEffect)
-            console.log('💡 Light effect pridaný k budove', key)
-          }
-        }
         
         // Zoradíme budovy podľa depth (row + col)
         this.sortBuildings()
@@ -2587,6 +2628,14 @@ defineExpose({
   // Skryje indikátor auto-produkcie
   hideAutoProductionIndicator: (row, col) => {
     mainScene?.hideAutoProductionIndicator(row, col)
+  },
+  // Zapne produkčné efekty (dym/svetlo)
+  showProductionEffects: (row, col) => {
+    mainScene?.showProductionEffects(row, col)
+  },
+  // Vypne produkčné efekty (dym/svetlo)
+  hideProductionEffects: (row, col) => {
+    mainScene?.hideProductionEffects(row, col)
   }
 })
 
