@@ -78,6 +78,10 @@ const props = defineProps({
   selectedBuildingCanBuildOnlyInDestination: {
     type: Boolean,
     default: false
+  },
+  alwaysShowEffects: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -1976,6 +1980,11 @@ class IsoScene extends Phaser.Scene {
         
         // Zoradíme budovy podľa depth (row + col)
         this.sortBuildings()
+
+        // V editor mode zobraz produkčné efekty vždy
+        if (props.alwaysShowEffects) {
+          this.showProductionEffects(row, col)
+        }
         
         // Prekreslíme tiene len ak nie sme v batch loading mode
         if (!skipShadows && !this.batchLoading) {
@@ -2651,6 +2660,23 @@ watch(() => props.showNumbering, () => {
 // Watch pre zobrazenie osoby
 watch(showPerson, (newVal) => {
   mainScene?.togglePerson(newVal)
+})
+
+// Watch pre alwaysShowEffects (editor mode)
+watch(() => props.alwaysShowEffects, (enabled) => {
+  if (!mainScene) return
+
+  const keys = Object.keys(cellImages)
+    .filter(key => !cellImages[key]?.isSecondary)
+
+  keys.forEach(key => {
+    const [row, col] = key.split('-').map(Number)
+    if (enabled) {
+      mainScene.showProductionEffects(row, col)
+    } else {
+      mainScene.hideProductionEffects(row, col)
+    }
+  })
 })
 
 // Watch pre road building mode - vyčisti stav keď sa vypne

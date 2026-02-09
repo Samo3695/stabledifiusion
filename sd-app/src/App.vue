@@ -1063,6 +1063,7 @@ const handleCanvasUpdated = () => {
       :carSpawnCount="carSpawnCount"
       :isSettingDestination="isSettingDestination"
       :destinationTiles="destinationTiles"
+      :alwaysShowEffects="viewMode === 'editor'"
       @cell-selected="handleCellSelected"
       @image-placed="(data) => { handleImagePlaced(data); handleCanvasUpdated(); }"
       @toggle-numbering="handleToggleNumbering"
