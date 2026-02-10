@@ -182,7 +182,7 @@ export function deductBuildCost(buildingData, resources, allocatedResources = {}
           console.log(`👷 Work resource vrátené a dealokované: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}, allocated: ${allocatedResources[item.resourceId] || 0}`)
         }
       })
-    }, 3000) // 3 sekundy
+    }, 5000) // 5 sekúnd
   }
 }
 

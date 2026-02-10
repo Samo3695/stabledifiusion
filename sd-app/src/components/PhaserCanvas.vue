@@ -2070,6 +2070,50 @@ class IsoScene extends Phaser.Scene {
         buildingSprite.setScale(scale)
         buildingSprite.setOrigin(0.5, 1) // Spodný stred
         
+        // === ANIMÁCIA STAVBY - len pri manuálnom umiestnení (nie pri načítavaní projektu) ===
+        if (!skipShadows && !this.batchLoading) {
+          // Uložíme si pôvodné rozmery
+          const spriteHeight = buildingSprite.displayHeight
+          const finalY = buildingSprite.y
+          
+          // Vytvoríme rect masku
+          const maskShape = this.make.graphics()
+          maskShape.fillStyle(0xffffff)
+          // Začneme s nulovou výškou (budova neviditeľná)
+          maskShape.fillRect(
+            buildingSprite.x - buildingSprite.displayWidth / 2,
+            finalY,
+            buildingSprite.displayWidth,
+            0
+          )
+          
+          const mask = maskShape.createGeometryMask()
+          buildingSprite.setMask(mask)
+          
+          // Animujeme výšku masky od 0 po plnú výšku
+          this.tweens.addCounter({
+            from: 0,
+            to: spriteHeight,
+            duration: 5000,
+            ease: 'Linear',
+            onUpdate: (tween) => {
+              const height = tween.getValue()
+              maskShape.clear()
+              maskShape.fillStyle(0xffffff)
+              maskShape.fillRect(
+                buildingSprite.x - buildingSprite.displayWidth / 2,
+                finalY - height,
+                buildingSprite.displayWidth,
+                height
+              )
+            },
+            onComplete: () => {
+              // Odstránime masku po dokončení
+              buildingSprite.clearMask(true)
+            }
+          })
+        }
+        
         // Uložíme info o tieni pre renderovanie
         // Fixný offset založený na veľkosti bunky, nie na rozmeroch obrázka
         const baseShadowOffset = TILE_WIDTH * cellsX * 0.4
