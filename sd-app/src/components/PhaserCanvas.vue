@@ -2205,7 +2205,7 @@ class IsoScene extends Phaser.Scene {
                   tempSprite.y = tempSpriteInitialY
                 }
                 // Fáza 2: Pohyb hore kým nie je diamondHeight / 2 od vrchu obrázka
-                else if (height < spriteHeight - diamondHeight / 2) {
+                else if (height < spriteHeight - diamondHeight / 2.2) {
                   // Posúvame tempSprite hore proporcionálne s rastom masky
                   const traveledHeight = height - diamondHeight / 2
                   tempSprite.y = tempSpriteInitialY - traveledHeight
@@ -2213,7 +2213,7 @@ class IsoScene extends Phaser.Scene {
                 // Fáza 3: Čakanie kým sa nevykreslí celá maska
                 else {
                   // tempSprite stojí na pozícii diamondHeight / 2 od vrchnej hranice obrázka
-                  tempSprite.y = tempSpriteInitialY - (spriteHeight - diamondHeight / 2 - diamondHeight / 2)
+                  tempSprite.y = tempSpriteInitialY - (spriteHeight - diamondHeight / 2.2 - diamondHeight / 2)
                 }
               }
             },
