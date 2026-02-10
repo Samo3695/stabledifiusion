@@ -1980,6 +1980,51 @@ class IsoScene extends Phaser.Scene {
     return lightGraphics
   }
 
+  // Vytvorenie stavebného efektu dymu/prachu pre animáciu stavby budovy
+  createConstructionDustEffect(x, y, width, height) {
+    // Skontrolujeme či máme smoke textúru
+    if (!this.textures.exists('smoke')) {
+      console.warn('⚠️ Smoke textúra nie je načítaná pre construction effect')
+      return null
+    }
+    
+    // Vytvoríme časticový systém pre stavebný prach
+    // Rozložíme emiter po celej šírke budovy
+    const particles = this.add.particles(x, y, 'smoke', {
+      // Emitujeme po celej šírke budovy
+      emitZone: {
+        type: 'random',
+        source: new Phaser.Geom.Rectangle(-width/2, -10, width, 20)
+      },
+      // Prach letí nahor a do strán
+      speedY: { min: -60, max: -120 },
+      speedX: { min: -40, max: 40 },
+      // Veľkosť častíc
+      scale: { start: 0.3, end: 1.2 },
+      // Postupne miznú
+      alpha: { start: 0.7, end: 0 },
+      // Krátky život častíc
+      lifespan: 1200,
+      // Hustota emitácie
+      frequency: 60,
+      // Rotácia pre prirodzenejší efekt
+      rotate: { min: 0, max: 360 },
+      // Hnedá/šedá farba pre prach
+      tint: [0x8B7355, 0xA0826D, 0x696969, 0x808080],
+      // Blend mode pre lepší vizuál
+      blendMode: 'ADD',
+      // Gravitácia smerom nahor (prach sa rozptýli)
+      gravityY: -20
+    })
+    
+    // Veľmi vysoký depth aby bol efekt nad všetkým
+    particles.setDepth(999999)
+    
+    console.log(`🏗️ Construction dust effect vytvorený na pozícii [${x}, ${y}], šírka: ${width}`)
+    
+    return particles
+  }
+
   // Pridanie obrázka s tieňom
   addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false, bitmap = null, skipShadows = false, dontDropShadow = false, buildingData = null) {
     console.log('🏗️ addBuildingWithShadow called with dontDropShadow:', dontDropShadow, 'buildingData:', buildingData)
@@ -2090,6 +2135,14 @@ class IsoScene extends Phaser.Scene {
           const mask = maskShape.createGeometryMask()
           buildingSprite.setMask(mask)
           
+          // Vytvoríme efekt stavebného dymu/prachu na vrchu masky
+          const constructionEffects = this.createConstructionDustEffect(
+            buildingSprite.x,
+            finalY - spriteHeight, // Začíname hore pri neviditeľnej budove
+            buildingSprite.displayWidth,
+            spriteHeight
+          )
+          
           // Animujeme výšku masky od 0 po plnú výšku
           this.tweens.addCounter({
             from: 0,
@@ -2106,10 +2159,26 @@ class IsoScene extends Phaser.Scene {
                 buildingSprite.displayWidth,
                 height
               )
+              
+              // Posúvame efekty dymu/prachu s hornou hranou masky
+              if (constructionEffects) {
+                constructionEffects.setPosition(
+                  buildingSprite.x,
+                  finalY - height
+                )
+              }
             },
             onComplete: () => {
               // Odstránime masku po dokončení
               buildingSprite.clearMask(true)
+              
+              // Zastavíme a odstránime časticový efekt
+              if (constructionEffects) {
+                constructionEffects.stop()
+                this.time.delayedCall(2000, () => {
+                  constructionEffects.destroy()
+                })
+              }
             }
           })
         }
