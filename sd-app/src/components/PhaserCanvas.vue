@@ -187,7 +187,7 @@ class IsoScene extends Phaser.Scene {
     this.shadowRenderTexture.setOrigin(0.5, 0.5)
     this.shadowRenderTexture.setPosition(0, GRID_SIZE * TILE_HEIGHT / 2)
     this.shadowRenderTexture.setAlpha(0.25) // Celková priehľadnosť tieňa
-    this.shadowRenderTexture.setDepth(999000) // Najvyšší depth - tiene sú nad všetkým 10000
+    this.shadowRenderTexture.setDepth(0.7) // O trochu väčší depth ako road tiles (0.5) - nad cestami, pod budovami
     
     this.buildingContainer = this.add.container(0, 0)
     this.buildingContainer.setDepth(2)
@@ -2309,6 +2309,13 @@ class IsoScene extends Phaser.Scene {
       
       // Preskočíme road tiles - tie majú fixný depth 0.5
       if (imageData?.isRoadTile) {
+        continue
+      }
+      
+      // Budovy s dontDropShadow majú rovnaký depth ako cesty (0.5)
+      if (imageData?.buildingData?.dontDropShadow) {
+        this.buildingSprites[key].setDepth(0.5)
+        console.log(`🏠 Building ${key}: dontDropShadow=true, depth=0.5 (ako road)`)
         continue
       }
       
