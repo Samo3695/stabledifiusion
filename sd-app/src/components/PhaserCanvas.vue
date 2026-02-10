@@ -925,10 +925,45 @@ class IsoScene extends Phaser.Scene {
         }
       },
       onComplete: () => {
-        if (!shadowInfo) return
-        shadowInfo.alpha = 1
-        shadowInfo.scaleMultiplier = 1
-        this.redrawAllShadows()
+        if (shadowInfo) {
+          shadowInfo.alpha = 1
+          shadowInfo.scaleMultiplier = 1
+          this.redrawAllShadows()
+        }
+        
+        // Plynule zruš smoke efekty keď skončí fly-away animácia
+        if (this.smokeEffects && this.smokeEffects[key]) {
+          const effects = Array.isArray(this.smokeEffects[key])
+            ? this.smokeEffects[key]
+            : [this.smokeEffects[key]]
+          
+          // Fade out efekt pred zničením
+          effects.forEach(effect => {
+            if (effect?.setAlpha) {
+              this.tweens.add({
+                targets: effect,
+                alpha: 0,
+                duration: 500,
+                ease: 'Power2',
+                onComplete: () => {
+                  effect?.destroy()
+                }
+              })
+            } else {
+              effect?.destroy()
+            }
+          })
+          
+          // Vymaž referenciu po fade out
+          this.time.delayedCall(500, () => {
+            delete this.smokeEffects[key]
+          })
+          console.log('💨 Smoke effect fade-out po fly-away', key)
+        }
+        
+        // Zruš fly-away záznam
+        delete this.flyAwayEffects[key]
+        console.log('🛫 Fly-away efekt dokončený', key)
       }
     })
 
