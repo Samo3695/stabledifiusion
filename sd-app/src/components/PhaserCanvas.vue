@@ -2121,6 +2121,35 @@ class IsoScene extends Phaser.Scene {
           const spriteHeight = buildingSprite.displayHeight
           const finalY = buildingSprite.y
           
+          // Vypočítame výšku diamantu tile na izometrickej ploche
+          // Pre multi-cell objekty je výška diamantu väčšia
+          const diamondHeight = (cellsX + cellsY) * (TILE_HEIGHT / 2)
+          
+          // Umiestnime obrazok 0.png na tile pri začiatku animácie
+          const tempBuildingKey = `temp_building_${key}_${Date.now()}`
+          let tempSprite = null
+          let tempSpriteInitialY = 0
+          
+          this.load.image(tempBuildingKey, '/templates/buildings/0.png')
+          this.load.once('complete', () => {
+            tempSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, tempBuildingKey)
+            const tempScale = targetWidth / tempSprite.width
+            tempSprite.setScale(tempScale)
+            tempSprite.setOrigin(0.5, 1)
+            tempSprite.setDepth(buildingSprite.depth)
+            
+            // Uložíme počiatočnú Y pozíciu
+            tempSpriteInitialY = tempSprite.y
+            
+            // Odstránime dočasný sprite po 5 sekundách (po dokončení animácie)
+            this.time.delayedCall(5000, () => {
+              if (tempSprite) {
+                tempSprite.destroy()
+              }
+            })
+          })
+          this.load.start()
+          
           // Vytvoríme rect masku
           const maskShape = this.make.graphics()
           maskShape.fillStyle(0xffffff)
@@ -2166,6 +2195,26 @@ class IsoScene extends Phaser.Scene {
                   buildingSprite.x,
                   finalY - height
                 )
+              }
+              
+              // 3 fázy pohybu tempSprite:
+              if (tempSprite) {
+                // Fáza 1: Čakanie kým maska nedosiahne diamondHeight / 2
+                if (height < diamondHeight / 2) {
+                  // tempSprite stojí na pôvodnej pozícii
+                  tempSprite.y = tempSpriteInitialY
+                }
+                // Fáza 2: Pohyb hore kým nie je diamondHeight / 2 od vrchu obrázka
+                else if (height < spriteHeight - diamondHeight / 2) {
+                  // Posúvame tempSprite hore proporcionálne s rastom masky
+                  const traveledHeight = height - diamondHeight / 2
+                  tempSprite.y = tempSpriteInitialY - traveledHeight
+                }
+                // Fáza 3: Čakanie kým sa nevykreslí celá maska
+                else {
+                  // tempSprite stojí na pozícii diamondHeight / 2 od vrchnej hranice obrázka
+                  tempSprite.y = tempSpriteInitialY - (spriteHeight - diamondHeight / 2 - diamondHeight / 2)
+                }
               }
             },
             onComplete: () => {
