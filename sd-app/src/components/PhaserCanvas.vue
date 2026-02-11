@@ -2156,6 +2156,20 @@ class IsoScene extends Phaser.Scene {
             const tempMask = tempSpriteMaskShape.createGeometryMask()
             tempSprite.setMask(tempMask)
             
+            // Vytvoríme shadowInfo pre tempSprite s nulovou veľkosťou (žiadny tieň na začiatku)
+            this.shadowSprites[tempBuildingKey] = {
+              textureKey: tempBuildingKey,
+              x: x + offsetX,
+              y: y + TILE_HEIGHT + offsetY,
+              scale: tempScale,
+              scaleMultiplier: 0, // Začíname s nulovou veľkosťou tieňa
+              alpha: 1,
+              cellsX,
+              isTree: isTreeTemplate,
+              offsetX: -baseShadowOffset,
+              offsetY: baseShadowOffset * 0.375
+            }
+            
             // Odstránime dočasný sprite po 5 sekundách (po dokončení animácie)
             this.time.delayedCall(5000, () => {
               if (tempSprite) {
@@ -2163,6 +2177,11 @@ class IsoScene extends Phaser.Scene {
               }
               if (tempSpriteMaskShape) {
                 tempSpriteMaskShape.destroy()
+              }
+              // Odstránime aj shadowInfo pre tempSprite
+              if (this.shadowSprites[tempBuildingKey]) {
+                delete this.shadowSprites[tempBuildingKey]
+                this.redrawShadowsAround(row, col)
               }
             })
           })
@@ -2218,6 +2237,7 @@ class IsoScene extends Phaser.Scene {
               // 3 fázy pohybu tempSprite:
               if (tempSprite && tempSpriteMaskShape) {
                 // Fáza 1: Vykresľovanie masky 0.png zdola hore kým maska nedosiahne diamondHeight / 2
+                // V tejto fáze je tieň scaleMultiplier = 0 (žiadny tieň)
                 if (height < diamondHeight / 2) {
                   // tempSprite stojí na pôvodnej pozícii
                   tempSprite.y = tempSpriteInitialY
@@ -2232,8 +2252,17 @@ class IsoScene extends Phaser.Scene {
                     tempSprite.displayWidth,
                     tempMaskHeight
                   )
+                  
+                  // Tieň zostáva neviditeľný pre oba sprite (scaleMultiplier = 0)
+                  if (this.shadowSprites[tempBuildingKey]) {
+                    this.shadowSprites[tempBuildingKey].scaleMultiplier = 0
+                  }
+                  if (this.shadowSprites[key]) {
+                    this.shadowSprites[key].scaleMultiplier = 0
+                  }
                 }
                 // Fáza 2: Pohyb hore kým nie je diamondHeight / 2.2 od vrchu obrázka
+                // V tejto fáze tieň začína rásť od scaleMultiplier 0 po scaleMultiplier 1
                 else if (height < spriteHeight - diamondHeight / 2.2) {
                   // Posúvame tempSprite hore proporcionálne s rastom masky
                   const traveledHeight = height - diamondHeight / 2
@@ -2248,8 +2277,21 @@ class IsoScene extends Phaser.Scene {
                     tempSprite.displayWidth,
                     tempSpriteHeight
                   )
+                  
+                  // Postupne zvyšujeme veľkosť tieňa od 0 do 1 pre oba sprite
+                  const phase2Duration = (spriteHeight - diamondHeight / 2.2) - diamondHeight / 2
+                  const phase2Progress = (height - diamondHeight / 2) / phase2Duration
+                  if (this.shadowSprites[tempBuildingKey]) {
+                    this.shadowSprites[tempBuildingKey].scaleMultiplier = phase2Progress
+                    this.shadowSprites[tempBuildingKey].y = tempSprite.y
+                  }
+                  if (this.shadowSprites[key]) {
+                    this.shadowSprites[key].scaleMultiplier = phase2Progress
+                  }
+                  this.redrawShadowsAround(row, col)
                 }
                 // Fáza 3: Stojí a maska mizne zdola hore
+                // Tieň už zostáva konštantný (scaleMultiplier = 1)
                 else {
                   // tempSprite stojí na pozícii diamondHeight / 2.2 od vrchnej hranice obrázka
                   const finalTempY = tempSpriteInitialY - (spriteHeight - diamondHeight / 2.2 - diamondHeight / 2)
@@ -2267,6 +2309,15 @@ class IsoScene extends Phaser.Scene {
                     tempSprite.displayWidth,
                     remainingMaskHeight
                   )
+                  
+                  // Tieň zostáva na plnej veľkosti pre oba sprite (už sa nemení)
+                  if (this.shadowSprites[tempBuildingKey]) {
+                    this.shadowSprites[tempBuildingKey].scaleMultiplier = 1
+                    this.shadowSprites[tempBuildingKey].y = finalTempY
+                  }
+                  if (this.shadowSprites[key]) {
+                    this.shadowSprites[key].scaleMultiplier = 1
+                  }
                 }
               }
             },
@@ -2300,7 +2351,7 @@ class IsoScene extends Phaser.Scene {
             x: x + offsetX,
             y: y + TILE_HEIGHT + offsetY,
             scale,
-            scaleMultiplier: 1,
+            scaleMultiplier: (!skipShadows && !this.batchLoading) ? 0 : 1, // Začíname s 0 pri animácii
             alpha: 1,
             cellsX, // Veľkosť pre výber správneho offsetu
             isTree: isTreeTemplate, // Špeciálny flag pre stromy
