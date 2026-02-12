@@ -2319,12 +2319,24 @@ class IsoScene extends Phaser.Scene {
               constructMasks.forEach(maskInfo => {
                 let currentHeight = 0
                 
+                // Construct maska začne ísť dole skôr ako fáza 3 pre 0.png
+                const constructPhase3Start = spriteHeight - diamondHeight / 1.5
+                
                 // Ľavý a pravý construct začínajú až po prvej fáze (keď height >= diamondHeight / 2)
-                if (height >= diamondHeight / 2) {
-                  // Animujeme od diamondHeight/2 po spriteHeight
-                  const phase2and3Duration = spriteHeight - diamondHeight / 2
-                  const progressInPhase2and3 = (height - diamondHeight / 2) / phase2and3Duration
-                  currentHeight = progressInPhase2and3 * maskInfo.height
+                // a rastú až do začiatku ich fázy 3
+                if (height >= diamondHeight / 2 && height < constructPhase3Start) {
+                  // Animujeme od diamondHeight/2 po constructPhase3Start
+                  const constructAnimDuration = constructPhase3Start - diamondHeight / 2
+                  const progressInConstruct = (height - diamondHeight / 2) / constructAnimDuration
+                  currentHeight = progressInConstruct * maskInfo.height
+                }
+                // Construct fáza 3: maska ide dole (zmenšuje sa zhora)
+                else if (height >= constructPhase3Start) {
+                  // Vypočítame progress fázy 3 (od 0 do 1)
+                  const phase3Duration = spriteHeight - constructPhase3Start
+                  const phase3Progress = (height - constructPhase3Start) / phase3Duration
+                  // Maska sa zmenšuje od plnej výšky po 0
+                  currentHeight = maskInfo.height * (1 - phase3Progress)
                 }
                 
                 // Horná hrana masky je na rovnakej Y pozícii ako hlavná budova
