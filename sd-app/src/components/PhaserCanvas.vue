@@ -2124,6 +2124,9 @@ class IsoScene extends Phaser.Scene {
         // Preskočíme stavebné animáciu pre budovy s fly-away efektom - tie sa objavia plynule
         const shouldAnimate = !skipShadows && !this.batchLoading && !buildingData?.hasFlyAwayEffect
         
+        // Nastaviteľná rýchlosť animácie stavania (v milisekundách)
+        const BUILDING_ANIMATION_DURATION = 10000
+        
         if (shouldAnimate) {
           // Uložíme si pôvodné rozmery
           const spriteHeight = buildingSprite.displayHeight
@@ -2147,6 +2150,7 @@ class IsoScene extends Phaser.Scene {
             tempSprite.setScale(tempScale)
             tempSprite.setOrigin(0.5, 1)
             tempSprite.setDepth(buildingSprite.depth + 2) // Najvrchnejšia vrstva - nad všetkým
+            tempSprite.setAlpha(1) // Opacity 0.5 pre 0.png
             
             // Uložíme počiatočnú Y pozíciu a výšku
             tempSpriteInitialY = tempSprite.y
@@ -2178,8 +2182,8 @@ class IsoScene extends Phaser.Scene {
               offsetY: baseShadowOffset * 0.375
             }
             
-            // Odstránime dočasný sprite po 5 sekundách (po dokončení animácie)
-            this.time.delayedCall(5000, () => {
+            // Odstránime dočasný sprite po dokončení animácie
+            this.time.delayedCall(BUILDING_ANIMATION_DURATION, () => {
               if (tempSprite) {
                 tempSprite.destroy()
               }
@@ -2245,8 +2249,8 @@ class IsoScene extends Phaser.Scene {
             console.warn('⚠️ Textúra construct.png nebola nájdená')
           }
           
-          // Odstránime construct sprite-y po 5 sekundách
-          this.time.delayedCall(5000, () => {
+          // Odstránime construct sprite-y po dokončení animácie
+          this.time.delayedCall(BUILDING_ANIMATION_DURATION, () => {
             constructSprites.forEach(sprite => {
               if (sprite) sprite.destroy()
             })
@@ -2285,7 +2289,7 @@ class IsoScene extends Phaser.Scene {
           this.tweens.addCounter({
             from: 0,
             to: spriteHeight,
-            duration: 5000,
+            duration: BUILDING_ANIMATION_DURATION,
             ease: 'Linear',
             onUpdate: (tween) => {
               const height = tween.getValue()
@@ -2307,6 +2311,7 @@ class IsoScene extends Phaser.Scene {
               }
               
               // Animujeme masky construct sprite-ov (začínajú až po prvej fáze)
+              // Horná hrana masiek musí byť synchronizovaná s hornou hranou masky hlavnej budovy (finalY - height)
               constructMasks.forEach(maskInfo => {
                 let currentHeight = 0
                 
@@ -2318,14 +2323,23 @@ class IsoScene extends Phaser.Scene {
                   currentHeight = progressInPhase2and3 * maskInfo.height
                 }
                 
+                // Horná hrana masky je na rovnakej Y pozícii ako hlavná budova
+                const maskTopY = finalY - height
+                // Spodná hrana je na pozícii sprite-u
+                const maskBottomY = maskInfo.initialY
+                // Výška masky je rozdiel, ale obmedzená na currentHeight
+                const actualMaskHeight = Math.min(currentHeight, maskBottomY - maskTopY)
+                
                 maskInfo.shape.clear()
                 maskInfo.shape.fillStyle(0xffffff)
-                maskInfo.shape.fillRect(
-                  maskInfo.sprite.x - maskInfo.sprite.displayWidth / 2,
-                  maskInfo.initialY - currentHeight,
-                  maskInfo.sprite.displayWidth,
-                  currentHeight
-                )
+                if (actualMaskHeight > 0) {
+                  maskInfo.shape.fillRect(
+                    maskInfo.sprite.x - maskInfo.sprite.displayWidth / 2,
+                    maskBottomY - actualMaskHeight,
+                    maskInfo.sprite.displayWidth,
+                    actualMaskHeight
+                  )
+                }
               })
               
               // 3 fázy pohybu tempSprite:
