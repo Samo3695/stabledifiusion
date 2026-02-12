@@ -2143,6 +2143,35 @@ class IsoScene extends Phaser.Scene {
           let tempSpriteMaskShape = null
           let tempSpriteHeight = 0
           
+          // Helper funkcia na kreslenie izometrickej masky - definovaná mimo aby bola dostupná vo všetkých callback-och
+          const drawIsometricMask = (graphics, centerX, bottomY, width, height, maxHeight) => {
+            graphics.clear()
+            graphics.fillStyle(0xffffff)
+            if (height <= 0) return
+            
+            // Vypočítame progress (0 až 1)
+            const progress = height / maxHeight
+            
+            // Izometrický diamant rastie zdola hore
+            // Spodný bod je na bottomY, horný bod na bottomY - height
+            // Šírka rastie proporcionálne s výškou
+            const currentWidth = width * progress
+            const currentHeight = height
+            
+            // Stred diamantu je posunutý tak, aby spodný bod ostal na bottomY
+            // a diamant rástol smerom hore
+            const diamondCenterY = bottomY - currentHeight / 2
+            
+            // Nakreslíme izometrický diamant (4 body)
+            graphics.beginPath()
+            graphics.moveTo(centerX, bottomY) // Spodný bod
+            graphics.lineTo(centerX + currentWidth / 2, diamondCenterY) // Pravý bod
+            graphics.lineTo(centerX, bottomY - currentHeight) // Horný bod
+            graphics.lineTo(centerX - currentWidth / 2, diamondCenterY) // Ľavý bod
+            graphics.closePath()
+            graphics.fillPath()
+          }
+          
           this.load.image(tempBuildingKey, '/templates/buildings/0.png')
           this.load.once('complete', () => {
             tempSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, tempBuildingKey)
@@ -2156,15 +2185,10 @@ class IsoScene extends Phaser.Scene {
             tempSpriteInitialY = tempSprite.y
             tempSpriteHeight = tempSprite.displayHeight
             
-            // Vytvoríme masku pre tempSprite
+            // Vytvoríme masku pre tempSprite s izometrickou šikmosťou
             tempSpriteMaskShape = this.make.graphics()
-            tempSpriteMaskShape.fillStyle(0xffffff)
-            tempSpriteMaskShape.fillRect(
-              tempSprite.x - tempSprite.displayWidth / 2,
-              tempSpriteInitialY,
-              tempSprite.displayWidth,
-              0
-            )
+            
+            drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, 0, tempSpriteHeight)
             const tempMask = tempSpriteMaskShape.createGeometryMask()
             tempSprite.setMask(tempMask)
             
@@ -2226,11 +2250,11 @@ class IsoScene extends Phaser.Scene {
               if (tip.name === 'left') {
                 constructSprite.x += constructSprite.displayWidth // Posun doľava o šírku
                 constructSprite.y += 5
-                constructSprite.x -= 5
+                constructSprite.x -= 0
               } else if (tip.name === 'right') {
                 constructSprite.x -= constructSprite.displayWidth // Posun doprava o šírku
                 constructSprite.y += 5
-                constructSprite.x += 5
+                constructSprite.x += 0
               }
               
               // Vytvoríme masku pre construct sprite
@@ -2376,14 +2400,7 @@ class IsoScene extends Phaser.Scene {
                     const phase1Progress = height / phase1Duration
                     const tempMaskHeight = phase1Progress * tempSpriteHeight
                     
-                    tempSpriteMaskShape.clear()
-                    tempSpriteMaskShape.fillStyle(0xffffff)
-                    tempSpriteMaskShape.fillRect(
-                      tempSprite.x - tempSprite.displayWidth / 2,
-                      tempSpriteInitialY - tempMaskHeight,
-                      tempSprite.displayWidth,
-                      tempMaskHeight
-                    )
+                    drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
                   }
                   // Fáza 3: Stojí a maska mizne zdola hore
                   else {
@@ -2392,14 +2409,7 @@ class IsoScene extends Phaser.Scene {
                     const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
                     const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
                     
-                    tempSpriteMaskShape.clear()
-                    tempSpriteMaskShape.fillStyle(0xffffff)
-                    tempSpriteMaskShape.fillRect(
-                      tempSprite.x - tempSprite.displayWidth / 2,
-                      tempSpriteInitialY - tempSpriteHeight,
-                      tempSprite.displayWidth,
-                      remainingMaskHeight
-                    )
+                    drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
                   }
                 }
                 // Pre normálne budovy: všetky 3 fázy
@@ -2412,14 +2422,7 @@ class IsoScene extends Phaser.Scene {
                   
                   // Animujeme masku tempSprite proporcionálne k rastu hlavnej masky
                   const tempMaskHeight = (height / (diamondHeight / 2)) * tempSpriteHeight
-                  tempSpriteMaskShape.clear()
-                  tempSpriteMaskShape.fillStyle(0xffffff)
-                  tempSpriteMaskShape.fillRect(
-                    tempSprite.x - tempSprite.displayWidth / 2,
-                    tempSpriteInitialY - tempMaskHeight,
-                    tempSprite.displayWidth,
-                    tempMaskHeight
-                  )
+                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
                   
                   // Tieň zostáva neviditeľný pre oba sprite (scaleMultiplier = 0)
                   if (this.shadowSprites[tempBuildingKey]) {
@@ -2437,14 +2440,7 @@ class IsoScene extends Phaser.Scene {
                   tempSprite.y = tempSpriteInitialY - traveledHeight
                   
                   // Maska je plná počas pohybu
-                  tempSpriteMaskShape.clear()
-                  tempSpriteMaskShape.fillStyle(0xffffff)
-                  tempSpriteMaskShape.fillRect(
-                    tempSprite.x - tempSprite.displayWidth / 2,
-                    tempSprite.y - tempSpriteHeight,
-                    tempSprite.displayWidth,
-                    tempSpriteHeight
-                  )
+                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSprite.y, tempSprite.displayWidth, tempSpriteHeight, tempSpriteHeight)
                   
                   // Postupne zvyšujeme veľkosť tieňa od 0 do 1 pre oba sprite
                   const phase2Duration = (spriteHeight - diamondHeight / 2.2) - diamondHeight / 2
@@ -2469,14 +2465,7 @@ class IsoScene extends Phaser.Scene {
                   const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
                   const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
                   
-                  tempSpriteMaskShape.clear()
-                  tempSpriteMaskShape.fillStyle(0xffffff)
-                  tempSpriteMaskShape.fillRect(
-                    tempSprite.x - tempSprite.displayWidth / 2,
-                    finalTempY - tempSpriteHeight,
-                    tempSprite.displayWidth,
-                    remainingMaskHeight
-                  )
+                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, finalTempY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
                   
                   // Tieň zostáva na plnej veľkosti pre oba sprite (už sa nemení)
                   if (this.shadowSprites[tempBuildingKey]) {
