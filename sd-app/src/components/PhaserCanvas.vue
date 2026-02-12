@@ -168,6 +168,9 @@ class IsoScene extends Phaser.Scene {
     
     // Načítame smoke textúru pre efekt dymu
     this.load.image('smoke', 'https://labs.phaser.io/assets/particles/white-smoke.png')
+    
+    // Načítame construct.png pre stavebné animácie
+    this.load.image('construct', '/templates/cubes1/contruct.png')
   }
 
   create() {
@@ -839,9 +842,8 @@ class IsoScene extends Phaser.Scene {
       }
     }
 
-    if (buildingData.hasFlyAwayEffect) {
-      this.startFlyAwayEffect(key, buildingSprite)
-    }
+    // Fly-away efekt už nie je súčasťou showProductionEffects
+    // Spúšťa sa samostatne v addBuildingWithShadow po dokončení stavby
   }
 
   // Skryje produkčné efekty (dym/svetlo)
@@ -2017,8 +2019,8 @@ class IsoScene extends Phaser.Scene {
       gravityY: -20
     })
     
-    // Veľmi vysoký depth aby bol efekt nad všetkým
-    particles.setDepth(999999)
+    // Depth bude nastavený zvonka (buildingSprite.depth + 0.2)
+    // particles.setDepth(999999)
     
     console.log(`🏗️ Construction dust effect vytvorený na pozícii [${x}, ${y}], šírka: ${width}`)
     
@@ -2115,8 +2117,14 @@ class IsoScene extends Phaser.Scene {
         buildingSprite.setScale(scale)
         buildingSprite.setOrigin(0.5, 1) // Spodný stred
         
+        // Premenná pre construct sprite-y - musí byť dostupná aj mimo shouldAnimate bloku
+        let constructSprites = []
+        
         // === ANIMÁCIA STAVBY - len pri manuálnom umiestnení (nie pri načítavaní projektu) ===
-        if (!skipShadows && !this.batchLoading) {
+        // Preskočíme stavebné animáciu pre budovy s fly-away efektom - tie sa objavia plynule
+        const shouldAnimate = !skipShadows && !this.batchLoading && !buildingData?.hasFlyAwayEffect
+        
+        if (shouldAnimate) {
           // Uložíme si pôvodné rozmery
           const spriteHeight = buildingSprite.displayHeight
           const finalY = buildingSprite.y
@@ -2138,7 +2146,7 @@ class IsoScene extends Phaser.Scene {
             const tempScale = targetWidth / tempSprite.width
             tempSprite.setScale(tempScale)
             tempSprite.setOrigin(0.5, 1)
-            tempSprite.setDepth(buildingSprite.depth)
+            tempSprite.setDepth(buildingSprite.depth + 2) // Najvrchnejšia vrstva - nad všetkým
             
             // Uložíme počiatočnú Y pozíciu a výšku
             tempSpriteInitialY = tempSprite.y
@@ -2187,7 +2195,67 @@ class IsoScene extends Phaser.Scene {
           })
           this.load.start()
           
-          // Vytvoríme rect masku
+          // === CONSTRUCT SPRITES V 3 CÍPOCH DIAMANTU ===
+          // Vytvoríme 3 construct.png sprite-y s maskami
+          // constructSprites je už deklarovaný vyššie (mimo bloku)
+          const constructMasks = []
+          
+          // Vypočítame pozície 3 cípov izometrického diamantu pre multi-cell objekty
+          // Pre väčšie tile rozmery treba posunúť origin vyššie: 2x2 o 1 tile, 3x3 o 2 tile, 4x4 o 3 tile atď.
+          const originYOffset = -(Math.max(cellsX, cellsY) - 1) * TILE_HEIGHT
+          const diamondTips = [
+            { name: 'left', x: x + offsetX - (cellsY * TILE_WIDTH) / 2, y: y + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 4 }, // Ľavý cíp
+            { name: 'bottom', x: x + offsetX, y: y + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 2 }, // Spodný cíp
+            { name: 'right', x: x + offsetX + (cellsY * TILE_WIDTH) / 2, y: y + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 4 } // Pravý cíp
+          ]
+          
+          // Vytvoríme 3 construct sprite-y (len ak textúra existuje)
+          if (this.textures.exists('construct')) {
+            diamondTips.forEach((tip, index) => {
+              const constructSprite = this.add.sprite(tip.x, tip.y, 'construct')
+              const constructScale = (TILE_WIDTH * 0.2) / constructSprite.width // 10x menšia šírka
+              constructSprite.setScale(constructScale)
+              constructSprite.setOrigin(0.5, 1)
+              // Depth sa nastaví neskôr, po sortBuildings()
+              
+              // Posunieme ľavý a pravý construct o ich šírku
+              if (tip.name === 'left') {
+                constructSprite.x += constructSprite.displayWidth // Posun doľava o šírku
+              } else if (tip.name === 'right') {
+                constructSprite.x -= constructSprite.displayWidth // Posun doprava o šírku
+              }
+              
+              // Vytvoríme masku pre construct sprite
+              const constructMaskShape = this.make.graphics()
+              constructMaskShape.fillStyle(0xffffff)
+              constructMaskShape.fillRect(
+                constructSprite.x - constructSprite.displayWidth / 2,
+                constructSprite.y,
+                constructSprite.displayWidth,
+                0
+              )
+              const constructMask = constructMaskShape.createGeometryMask()
+              constructSprite.setMask(constructMask)
+              
+              constructSprites.push(constructSprite)
+              // Ukladame spriteHeight (výšku budovy) namiesto constructSprite.displayHeight
+              constructMasks.push({ shape: constructMaskShape, sprite: constructSprite, height: spriteHeight, initialY: constructSprite.y })
+            })
+          } else {
+            console.warn('⚠️ Textúra construct.png nebola nájdená')
+          }
+          
+          // Odstránime construct sprite-y po 5 sekundách
+          this.time.delayedCall(5000, () => {
+            constructSprites.forEach(sprite => {
+              if (sprite) sprite.destroy()
+            })
+            constructMasks.forEach(maskInfo => {
+              if (maskInfo.shape) maskInfo.shape.destroy()
+            })
+          })
+          
+          // Vytvoríme rect masku pre hlavnú budovu
           const maskShape = this.make.graphics()
           maskShape.fillStyle(0xffffff)
           // Začneme s nulovou výškou (budova neviditeľná)
@@ -2208,6 +2276,10 @@ class IsoScene extends Phaser.Scene {
             buildingSprite.displayWidth,
             spriteHeight
           )
+          // Nastavenie depth pre dym - medzi construct a 0.png (3. vrstva)
+          if (constructionEffects) {
+            constructionEffects.setDepth(buildingSprite.depth + 0.2)
+          }
           
           // Animujeme výšku masky od 0 po plnú výšku
           this.tweens.addCounter({
@@ -2233,6 +2305,28 @@ class IsoScene extends Phaser.Scene {
                   finalY - height
                 )
               }
+              
+              // Animujeme masky construct sprite-ov (začínajú až po prvej fáze)
+              constructMasks.forEach(maskInfo => {
+                let currentHeight = 0
+                
+                // Ľavý a pravý construct začínajú až po prvej fáze (keď height >= diamondHeight / 2)
+                if (height >= diamondHeight / 2) {
+                  // Animujeme od diamondHeight/2 po spriteHeight
+                  const phase2and3Duration = spriteHeight - diamondHeight / 2
+                  const progressInPhase2and3 = (height - diamondHeight / 2) / phase2and3Duration
+                  currentHeight = progressInPhase2and3 * maskInfo.height
+                }
+                
+                maskInfo.shape.clear()
+                maskInfo.shape.fillStyle(0xffffff)
+                maskInfo.shape.fillRect(
+                  maskInfo.sprite.x - maskInfo.sprite.displayWidth / 2,
+                  maskInfo.initialY - currentHeight,
+                  maskInfo.sprite.displayWidth,
+                  currentHeight
+                )
+              })
               
               // 3 fázy pohybu tempSprite:
               if (tempSprite && tempSpriteMaskShape) {
@@ -2351,7 +2445,7 @@ class IsoScene extends Phaser.Scene {
             x: x + offsetX,
             y: y + TILE_HEIGHT + offsetY,
             scale,
-            scaleMultiplier: (!skipShadows && !this.batchLoading) ? 0 : 1, // Začíname s 0 pri animácii
+            scaleMultiplier: shouldAnimate ? 0 : 1, // Začíname s 0 len pri stavebnej animácii
             alpha: 1,
             cellsX, // Veľkosť pre výber správneho offsetu
             isTree: isTreeTemplate, // Špeciálny flag pre stromy
@@ -2369,10 +2463,34 @@ class IsoScene extends Phaser.Scene {
         
         // Zoradíme budovy podľa depth (row + col)
         this.sortBuildings()
+        
+        // Nastavíme depth pre construct sprite-y AŽ PO sortBuildings()
+        if (constructSprites && constructSprites.length > 0) {
+          const finalBuildingDepth = buildingSprite.depth
+          constructSprites.forEach(sprite => {
+            sprite.setDepth(finalBuildingDepth + 1)
+          })
+          console.log(`🔨 Construct sprites depth nastavený na ${finalBuildingDepth + 1} (budova má ${finalBuildingDepth})`)
+        }
 
-        // V editor mode zobraz produkčné efekty vždy
+        // Fly-away efekt je samostatná logika - spúšťa sa automaticky len pri budovách s hasFlyAwayEffect
+        // Budovy s fly-away sa objavia plynule BEZ stavebnej animácie a spustia fly-away hneď
+        if (buildingData?.hasFlyAwayEffect) {
+          // Spustíme fly-away okamžite (bez čakania, pretože nebola stavebná animácia)
+          this.startFlyAwayEffect(key, buildingSprite)
+        }
+
+        // V editor mode zobraz ostatné produkčné efekty (dym, svetlo - BEZ fly-away)
         if (props.alwaysShowEffects) {
-          this.showProductionEffects(row, col)
+          if (shouldAnimate) {
+            // Ak prebehla animácia stavby, odložíme produkčné efekty o 5 sekúnd
+            this.time.delayedCall(5000, () => {
+              this.showProductionEffects(row, col)
+            })
+          } else {
+            // Žiadna animácia stavby - zobrazíme efekty hneď
+            this.showProductionEffects(row, col)
+          }
         }
         
         // Prekreslíme tiene len ak nie sme v batch loading mode
