@@ -1362,7 +1362,7 @@ class IsoScene extends Phaser.Scene {
     this.hoverPreviewSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
     
     // Nastavíme veľkosť
-    const targetWidth = TILE_WIDTH * cellsX * 1.02
+    const targetWidth = TILE_WIDTH * cellsX * 0.95
     const scale = targetWidth / this.hoverPreviewSprite.width
     this.hoverPreviewSprite.setScale(scale)
     this.hoverPreviewSprite.setOrigin(0.5, 1)
@@ -2112,7 +2112,7 @@ class IsoScene extends Phaser.Scene {
         const buildingSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
         
         // Nastavíme veľkosť - zvýšená aby pokrývala celú šírku izometrického diamantu
-        const targetWidth = TILE_WIDTH * cellsX * 1.02
+        const targetWidth = TILE_WIDTH * cellsX * 0.95
         const scale = targetWidth / buildingSprite.width
         buildingSprite.setScale(scale)
         buildingSprite.setOrigin(0.5, 1) // Spodný stred
@@ -2213,8 +2213,8 @@ class IsoScene extends Phaser.Scene {
             { name: 'right', x: x + offsetX + (cellsY * TILE_WIDTH) / 2, y: y + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 4 } // Pravý cíp
           ]
           
-          // Vytvoríme 3 construct sprite-y (len ak textúra existuje)
-          if (this.textures.exists('construct')) {
+          // Vytvoríme 3 construct sprite-y (len ak textúra existuje a budova nemá dontDropShadow)
+          if (this.textures.exists('construct') && !dontDropShadow) {
             diamondTips.forEach((tip, index) => {
               const constructSprite = this.add.sprite(tip.x, tip.y, 'construct')
               const constructScale = (TILE_WIDTH * 0.2) / constructSprite.width // 10x menšia šírka
@@ -2316,11 +2316,16 @@ class IsoScene extends Phaser.Scene {
               
               // Animujeme masky construct sprite-ov (začínajú až po prvej fáze)
               // Horná hrana masiek musí byť synchronizovaná s hornou hranou masky hlavnej budovy (finalY - height)
+              // Preskakujeme pre budovy s dontDropShadow
+              if (!dontDropShadow) {
               constructMasks.forEach(maskInfo => {
                 let currentHeight = 0
                 
-                // Construct maska začne ísť dole skôr ako fáza 3 pre 0.png
-                const constructPhase3Start = spriteHeight - diamondHeight / 1.5
+                // Construct maska začne ísť dole trochu skôr ako fáza 3 pre 0.png
+                // Pre budovy s dontDropShadow používame hodnotu 0.5
+                const constructPhase3Start = dontDropShadow 
+                  ? spriteHeight - diamondHeight / 0.5
+                  : spriteHeight - diamondHeight / 1.2
                 
                 // Ľavý a pravý construct začínajú až po prvej fáze (keď height >= diamondHeight / 2)
                 // a rastú až do začiatku ich fázy 3
@@ -2357,9 +2362,48 @@ class IsoScene extends Phaser.Scene {
                   )
                 }
               })
+              } // Koniec if (!dontDropShadow)
               
               // 3 fázy pohybu tempSprite:
               if (tempSprite && tempSpriteMaskShape) {
+                // Pre budovy s dontDropShadow: len fáza 1 a fáza 3 (bez pohybu hore)
+                if (dontDropShadow) {
+                  // Fáza 1: Vykresľovanie masky 0.png zdola hore do plnej výšky
+                  if (height < spriteHeight - diamondHeight / 2.2) {
+                    tempSprite.y = tempSpriteInitialY
+                    
+                    const phase1Duration = spriteHeight - diamondHeight / 2.2
+                    const phase1Progress = height / phase1Duration
+                    const tempMaskHeight = phase1Progress * tempSpriteHeight
+                    
+                    tempSpriteMaskShape.clear()
+                    tempSpriteMaskShape.fillStyle(0xffffff)
+                    tempSpriteMaskShape.fillRect(
+                      tempSprite.x - tempSprite.displayWidth / 2,
+                      tempSpriteInitialY - tempMaskHeight,
+                      tempSprite.displayWidth,
+                      tempMaskHeight
+                    )
+                  }
+                  // Fáza 3: Stojí a maska mizne zdola hore
+                  else {
+                    tempSprite.y = tempSpriteInitialY
+                    
+                    const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
+                    const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
+                    
+                    tempSpriteMaskShape.clear()
+                    tempSpriteMaskShape.fillStyle(0xffffff)
+                    tempSpriteMaskShape.fillRect(
+                      tempSprite.x - tempSprite.displayWidth / 2,
+                      tempSpriteInitialY - tempSpriteHeight,
+                      tempSprite.displayWidth,
+                      remainingMaskHeight
+                    )
+                  }
+                }
+                // Pre normálne budovy: všetky 3 fázy
+                else {
                 // Fáza 1: Vykresľovanie masky 0.png zdola hore kým maska nedosiahne diamondHeight / 2
                 // V tejto fáze je tieň scaleMultiplier = 0 (žiadny tieň)
                 if (height < diamondHeight / 2) {
@@ -2443,6 +2487,7 @@ class IsoScene extends Phaser.Scene {
                     this.shadowSprites[key].scaleMultiplier = 1
                   }
                 }
+                } // Koniec else (normálne budovy)
               }
             },
             onComplete: () => {
