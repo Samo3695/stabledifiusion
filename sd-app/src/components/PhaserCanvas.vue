@@ -2172,7 +2172,7 @@ class IsoScene extends Phaser.Scene {
             graphics.fillPath()
           }
           
-          this.load.image(tempBuildingKey, '/templates/buildings/0.png')
+          this.load.image(tempBuildingKey, '/templates/cubes1/0.png')
           this.load.once('complete', () => {
             tempSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, tempBuildingKey)
             const tempScale = targetWidth / tempSprite.width
@@ -2402,14 +2402,16 @@ class IsoScene extends Phaser.Scene {
                     
                     drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
                   }
-                  // Fáza 3: Stojí a maska mizne zdola hore
+                  // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
                   else {
                     tempSprite.y = tempSpriteInitialY
                     
                     const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
                     const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
+                    // Posúvame bottomY hore aby sa maska odkrývala zhora dole
+                    const newBottomY = tempSpriteInitialY - (tempSpriteHeight - remainingMaskHeight)
                     
-                    drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
+                    drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
                   }
                 }
                 // Pre normálne budovy: všetky 3 fázy
@@ -2454,18 +2456,20 @@ class IsoScene extends Phaser.Scene {
                   }
                   this.redrawShadowsAround(row, col)
                 }
-                // Fáza 3: Stojí a maska mizne zdola hore
+                // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
                 // Tieň už zostáva konštantný (scaleMultiplier = 1)
                 else {
                   // tempSprite stojí na pozícii diamondHeight / 2.2 od vrchnej hranice obrázka
                   const finalTempY = tempSpriteInitialY - (spriteHeight - diamondHeight / 2.2 - diamondHeight / 2)
                   tempSprite.y = finalTempY
                   
-                  // Animujeme masku tempSprite - mizne zdola hore (spodná hrana ide hore)
+                  // Animujeme masku tempSprite - mizne zhora dole (horná hrana ide dole)
                   const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
                   const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
+                  // Posúvame bottomY hore aby sa maska odkrývala zhora dole
+                  const newBottomY = finalTempY - (tempSpriteHeight - remainingMaskHeight)
                   
-                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, finalTempY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
+                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
                   
                   // Tieň zostáva na plnej veľkosti pre oba sprite (už sa nemení)
                   if (this.shadowSprites[tempBuildingKey]) {
