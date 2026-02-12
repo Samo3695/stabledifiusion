@@ -1362,7 +1362,7 @@ class IsoScene extends Phaser.Scene {
     this.hoverPreviewSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
     
     // Nastavíme veľkosť
-    const targetWidth = TILE_WIDTH * cellsX * 0.9
+    const targetWidth = TILE_WIDTH * cellsX * 1.02
     const scale = targetWidth / this.hoverPreviewSprite.width
     this.hoverPreviewSprite.setScale(scale)
     this.hoverPreviewSprite.setOrigin(0.5, 1)
@@ -2111,8 +2111,8 @@ class IsoScene extends Phaser.Scene {
         // Vytvoríme sprite pre budovu (normálny flow)
         const buildingSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, textureKey)
         
-        // Nastavíme veľkosť - zmenšená pre správne rozmery
-        const targetWidth = TILE_WIDTH * cellsX * 0.9
+        // Nastavíme veľkosť - zvýšená aby pokrývala celú šírku izometrického diamantu
+        const targetWidth = TILE_WIDTH * cellsX * 1.02
         const scale = targetWidth / buildingSprite.width
         buildingSprite.setScale(scale)
         buildingSprite.setOrigin(0.5, 1) // Spodný stred
@@ -2225,8 +2225,12 @@ class IsoScene extends Phaser.Scene {
               // Posunieme ľavý a pravý construct o ich šírku
               if (tip.name === 'left') {
                 constructSprite.x += constructSprite.displayWidth // Posun doľava o šírku
+                constructSprite.y += 5
+                constructSprite.x -= 5
               } else if (tip.name === 'right') {
                 constructSprite.x -= constructSprite.displayWidth // Posun doprava o šírku
+                constructSprite.y += 5
+                constructSprite.x += 5
               }
               
               // Vytvoríme masku pre construct sprite
