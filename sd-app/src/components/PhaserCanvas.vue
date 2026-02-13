@@ -1260,8 +1260,16 @@ class IsoScene extends Phaser.Scene {
       
       const { x, y } = this.gridToIso(this.hoveredCell.row, this.hoveredCell.col)
       
-      // Semi-transparent modrý hover pre road building
-      this.hoverGraphics.fillStyle(0x3b82f6, 0.4)
+      // Kontrola či susedí s existujúcou cestou
+      const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
+      const hasAdjacentRoad = this.hasAdjacentRoad(this.hoveredCell.row, this.hoveredCell.col)
+      const canPlaceRoad = !hasSomeRoads || hasAdjacentRoad
+      
+      // Semi-transparent modrý hover pre road building (červený ak nemožno postaviť)
+      const roadColor = canPlaceRoad ? 0x3b82f6 : 0xff0000
+      const roadAlpha = canPlaceRoad ? 0.4 : 0.3
+      
+      this.hoverGraphics.fillStyle(roadColor, roadAlpha)
       this.hoverGraphics.beginPath()
       this.hoverGraphics.moveTo(x, y)
       this.hoverGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
@@ -1270,7 +1278,7 @@ class IsoScene extends Phaser.Scene {
       this.hoverGraphics.closePath()
       this.hoverGraphics.fillPath()
       
-      this.hoverGraphics.lineStyle(2, 0x3b82f6, 0.8)
+      this.hoverGraphics.lineStyle(2, roadColor, 0.8)
       this.hoverGraphics.strokePath()
       
       return
@@ -1288,9 +1296,14 @@ class IsoScene extends Phaser.Scene {
     // Skontrolujeme kolíziu
     const hasCollision = this.checkCollision(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
     
-    // Určíme farbu
-    let fillColor = props.deleteMode ? 0xff0000 : (hasCollision ? 0xff0000 : 0x667eea)
-    let alpha = props.deleteMode ? 0.5 : (hasCollision ? 0.3 : 0.5)
+    // Skontrolujeme či budova susedí s cestou
+    const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
+    const hasAdjacentToRoad = !hasSomeRoads || this.hasBuildingAdjacentToRoad(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
+    
+    // Určíme farbu - červená ak je kolízia alebo ak nesusedí s cestou
+    const isInvalid = hasCollision || !hasAdjacentToRoad
+    let fillColor = props.deleteMode ? 0xff0000 : (isInvalid ? 0xff0000 : 0x667eea)
+    let alpha = props.deleteMode ? 0.5 : (isInvalid ? 0.3 : 0.5)
     
     // Nakreslíme hover pre všetky políčka
     const cells = this.getAffectedCells(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
@@ -1307,7 +1320,7 @@ class IsoScene extends Phaser.Scene {
       this.hoverGraphics.closePath()
       this.hoverGraphics.fillPath()
       
-      this.hoverGraphics.lineStyle(3, hasCollision ? 0xff0000 : 0x667eea, 1)
+      this.hoverGraphics.lineStyle(3, isInvalid ? 0xff0000 : 0x667eea, 1)
       this.hoverGraphics.strokePath()
     }
     
@@ -1497,6 +1510,42 @@ class IsoScene extends Phaser.Scene {
             return true
           }
         }
+      }
+    }
+    
+    return false
+  }
+  
+  // Kontrola či bunka susedí s existujúcou cestou
+  hasAdjacentRoad(row, col) {
+    // Kontrola 4 susedných buniek (hore, dole, vľavo, vpravo)
+    const adjacentCells = [
+      { row: row - 1, col: col }, // hore
+      { row: row + 1, col: col }, // dole
+      { row: row, col: col - 1 }, // vľavo
+      { row: row, col: col + 1 }  // vpravo
+    ]
+    
+    for (const cell of adjacentCells) {
+      const key = `${cell.row}-${cell.col}`
+      const cellData = cellImages[key]
+      if (cellData && cellData.isRoadTile) {
+        return true
+      }
+    }
+    
+    return false
+  }
+  
+  // Kontrola či akýkoľvek tile budovy (multi-cell) susedí s cestou
+  hasBuildingAdjacentToRoad(row, col, cellsX, cellsY) {
+    // Zistíme všetky bunky, ktoré budova zaberá
+    const affectedCells = this.getAffectedCells(row, col, cellsX, cellsY)
+    
+    // Skontrolujeme či aspoň jedna z týchto buniek susedí s cestou
+    for (const cell of affectedCells) {
+      if (this.hasAdjacentRoad(cell.row, cell.col)) {
+        return true
       }
     }
     
@@ -1812,6 +1861,14 @@ class IsoScene extends Phaser.Scene {
         if (props.roadBuildingMode) {
           if (!this.roadStartCell) {
             // Prvý klik - nastav štartovací bod
+            // Kontrola či je to prvá cesta alebo či susedí s existujúcou cestou
+            const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
+            
+            if (hasSomeRoads && !this.hasAdjacentRoad(cell.row, cell.col)) {
+              console.log('❌ Cesta musí susediť s existujúcou cestou!')
+              return
+            }
+            
             this.roadStartCell = { row: cell.row, col: cell.col }
             this.roadPath = [{ row: cell.row, col: cell.col, direction: 'horizontal' }]
             this.drawRoadPath()
@@ -1837,6 +1894,13 @@ class IsoScene extends Phaser.Scene {
           
           if (this.checkCollision(cell.row, cell.col, cellsX, cellsY)) {
             console.log('❌ Kolízia!')
+            return
+          }
+          
+          // Kontrola či budova susedí s cestou
+          const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
+          if (hasSomeRoads && !this.hasBuildingAdjacentToRoad(cell.row, cell.col, cellsX, cellsY)) {
+            console.log('❌ Budova musí susediť s cestou!')
             return
           }
         }
