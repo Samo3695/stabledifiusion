@@ -4,8 +4,20 @@
  */
 
 let roadTiles = []
+let roadTileSet = new Set() // Pre rýchle vyhľadávanie
 let TILE_WIDTH = 64
 let TILE_HEIGHT = 32
+
+// Sledovanie smeru pre každé auto (carId -> { dRow, dCol })
+const carDirections = new Map()
+
+function buildRoadTileSet() {
+  roadTileSet = new Set(roadTiles.map(t => `${t.row},${t.col}`))
+}
+
+function isRoadTile(row, col) {
+  return roadTileSet.has(`${row},${col}`)
+}
 
 // Prijímanie správ z hlavného vlákna
 self.onmessage = function(e) {
@@ -13,61 +25,102 @@ self.onmessage = function(e) {
   
   switch (type) {
     case 'init':
-      // Inicializácia worker-a s konfiguráciou
       TILE_WIDTH = data.TILE_WIDTH
       TILE_HEIGHT = data.TILE_HEIGHT
       roadTiles = data.roadTiles
+      buildRoadTileSet()
       self.postMessage({ type: 'initialized' })
       break
       
     case 'updateRoadTiles':
-      // Aktualizácia road tiles keď sa pridajú/odstránia
       roadTiles = data.roadTiles
+      buildRoadTileSet()
       break
       
-    case 'findNextMove':
-      // Vypočítaj ďalší pohyb pre auto
-      const nextMove = findNextMove(data.currentCell)
+    case 'findNextMove': {
+      const result = findNextMove(data.carId, data.currentCell)
       self.postMessage({
         type: 'nextMove',
         data: {
           carId: data.carId,
-          target: nextMove
+          target: result
         }
       })
       break
+    }
       
-    case 'batchFindNextMove':
-      // Vypočítaj ďalší pohyb pre viacero áut naraz
+    case 'batchFindNextMove': {
       const moves = data.cars.map(car => ({
         carId: car.id,
-        target: findNextMove(car.currentCell)
+        target: findNextMove(car.id, car.currentCell)
       }))
       self.postMessage({
         type: 'batchNextMoves',
         data: moves
       })
       break
+    }
   }
 }
 
 /**
  * Nájde ďalší tile kam sa má auto presunúť
+ * Na rovnej ceste pokračuje rovno, smer mení len na križovatkách/zátačkách
  */
-function findNextMove(currentCell) {
-  // Nájdeme susedné road tiles
+function findNextMove(carId, currentCell) {
   const adjacent = findAdjacentRoadTiles(currentCell.row, currentCell.col)
   
   if (adjacent.length === 0) {
-    // Žiadne susedné road tiles - vrátime náhodný
+    // Žiadne susedné road tiles - teleport na náhodný
+    carDirections.delete(carId)
     if (roadTiles.length > 0) {
       return roadTiles[Math.floor(Math.random() * roadTiles.length)]
     }
     return null
   }
   
-  // Vyberieme náhodný susedný tile
-  return adjacent[Math.floor(Math.random() * adjacent.length)]
+  const prevDir = carDirections.get(carId)
+  
+  if (!prevDir) {
+    // Auto ešte nemá smer - vyberieme náhodný
+    const chosen = adjacent[Math.floor(Math.random() * adjacent.length)]
+    carDirections.set(carId, {
+      dRow: chosen.row - currentCell.row,
+      dCol: chosen.col - currentCell.col
+    })
+    return chosen
+  }
+  
+  // Skúsime pokračovať rovno v aktuálnom smere
+  const straightRow = currentCell.row + prevDir.dRow
+  const straightCol = currentCell.col + prevDir.dCol
+  const canGoStraight = adjacent.find(t => t.row === straightRow && t.col === straightCol)
+  
+  if (canGoStraight) {
+    // Rovná cesta - pokračujeme rovno, nemení sa smer
+    return canGoStraight
+  }
+  
+  // Nemôžeme ísť rovno = križovatka, zátačka alebo slepá ulička
+  // Vyfiltrujeme opačný smer (nechceme sa otáčať ak máme inú možnosť)
+  const backRow = currentCell.row - prevDir.dRow
+  const backCol = currentCell.col - prevDir.dCol
+  const nonBackward = adjacent.filter(t => !(t.row === backRow && t.col === backCol))
+  
+  let chosen
+  if (nonBackward.length > 0) {
+    // Na zátačke/križovatke vyberieme náhodný smer (okrem otočenia)
+    chosen = nonBackward[Math.floor(Math.random() * nonBackward.length)]
+  } else {
+    // Slepá ulička - musíme sa otočiť
+    chosen = adjacent[Math.floor(Math.random() * adjacent.length)]
+  }
+  
+  carDirections.set(carId, {
+    dRow: chosen.row - currentCell.row,
+    dCol: chosen.col - currentCell.col
+  })
+  return chosen
 }
 
 /**

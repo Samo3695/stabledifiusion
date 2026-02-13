@@ -17,6 +17,9 @@ export class CarManager {
     this.moveDuration = config.moveDuration || 60600 // ms (spomalené o polovicu)
     this.initialDelayRange = config.initialDelayRange || [0, 4000] // [min, max] ms
     
+    // Offset pre jazdné pruhy - autá jazdia vpravo od stredu cesty
+    this.LANE_OFFSET = config.laneOffset || 5
+    
     // Web Worker pre výpočty pohybu
     this.worker = new Worker(new URL('./carWorker.js', import.meta.url), { type: 'module' })
     this.workerReady = false
@@ -148,7 +151,8 @@ export class CarManager {
       currentCell: { row, col },
       targetCell: null,
       moveTween: null,
-      moveTimer: null
+      moveTimer: null,
+      currentLaneOffset: { x: 0, y: 0 } // Aktuálny offset pruhu
     }
 
     this.cars.push(car)
@@ -306,6 +310,31 @@ export class CarManager {
   /**
    * Presunie auto na zadaný tile (vypočítaný worker-om)
    */
+  /**
+   * Vypočíta offset jazdného pruhu podľa smeru jazdy
+   * Autá jazdia vpravo od stredu - perpendikularný offset k smeru pohybu
+   */
+  getLaneOffset(deltaRow, deltaCol) {
+    const R = this.LANE_OFFSET * 1.3  // Pravý pruh - viac od stredu
+    const Lf = this.LANE_OFFSET * 0.5  // Ľavý pruh - bližšie k stredu
+    
+    // Perpendikularný offset k smeru pohybu v izometrickom priestore
+    // Row os: row+ spodný pruh (väčší offset), row- horný pruh (menší offset)
+    // Col os: col+ horný pruh (menší offset, bližšie k stredu), col- spodný pruh (väčší offset, ďalej dole)
+    if (deltaRow > 0) {
+      return { x: R * 0.45, y: R * 0.9 }
+    } else if (deltaRow < 0) {
+      return { x: -Lf * 0.45, y: -Lf * 0.9 }
+    } else if (deltaCol > 0) {
+      // Horné autá (col+) - bližšie k stredu
+      return { x: Lf * 0.45, y: -Lf * 0.9 }
+    } else if (deltaCol < 0) {
+      // Spodné autá (col-) - ďalej od stredu dole
+      return { x: -R * 0.45, y: R * 0.9 }
+    }
+    return { x: 0, y: 0 }
+  }
+
   moveCarToTarget(car, target) {
     if (!car || !car.sprite || !target) return
     
@@ -316,45 +345,72 @@ export class CarManager {
     const deltaCol = target.col - car.currentCell.col
     
     // Nastav správnu textúru podľa smeru pohybu
-    // Ak sa mení row (pohyb po Y izometrickej ploche) = car1 (car-dawn-top-right.png)
-    // Ak sa mení col (pohyb po X izometrickej ploche) = car2 (car-down-top-left.png)
     if (deltaCol !== 0 && deltaRow === 0) {
-      // Pohyb po col (X osi) - použiť car2
       car.sprite.setTexture('car2')
       car.shadow.setTexture('car2')
     } else if (deltaRow !== 0 && deltaCol === 0) {
-      // Pohyb po row (Y osi) - použiť car1
       car.sprite.setTexture('car1')
       car.shadow.setTexture('car1')
     }
     
-    // Animujeme pohyb
-    car.moveTween = this.scene.tweens.add({
-      targets: car.sprite,
-      x: targetX,
-      y: targetY + this.TILE_HEIGHT / 2,
-      duration: this.moveDuration,
-      ease: 'Linear',
-      onUpdate: () => {
-        // Aktualizujeme pozíciu tieňa počas pohybu
-        const shadowOffsetX = 4
-        const shadowOffsetY = 2
-        car.shadow.setPosition(car.sprite.x + shadowOffsetX, car.sprite.y + shadowOffsetY)
-        
-        // Aktualizujeme depth počas pohybu pre plynulé zobrazovanie za budovami
-        const currentPos = this.isoToGrid(car.sprite.x, car.sprite.y - this.TILE_HEIGHT / 2)
-        const newDepth = 99 + (currentPos.row + currentPos.col)
-        car.sprite.setDepth(newDepth)
-      },
-      onComplete: () => {
-        car.currentCell = target
-        // Nastavíme finálny depth
-        const finalDepth = 99 + (target.row + target.col)
-        car.sprite.setDepth(finalDepth)
-        // Okamžite požiadame o ďalší pohyb
-        this.requestNextMove(car)
-      }
-    })
+    // Vypočítame nový offset jazdného pruhu podľa smeru
+    const newLaneOffset = this.getLaneOffset(deltaRow, deltaCol)
+    const oldLaneOffset = car.currentLaneOffset || { x: 0, y: 0 }
+    
+    // Zistíme či sa pruh zmenil
+    const laneChanged = (Math.abs(newLaneOffset.x - oldLaneOffset.x) > 0.1 || Math.abs(newLaneOffset.y - oldLaneOffset.y) > 0.1)
+    
+    const startForwardMove = () => {
+      // Uložíme aktuálny lane offset
+      car.currentLaneOffset = { ...newLaneOffset }
+      
+      // Pohyb vpred s lane offsetom
+      car.moveTween = this.scene.tweens.add({
+        targets: car.sprite,
+        x: targetX + newLaneOffset.x,
+        y: targetY + this.TILE_HEIGHT / 2 + newLaneOffset.y,
+        duration: this.moveDuration,
+        ease: 'Linear',
+        onUpdate: () => {
+          const shadowOffsetX = 4
+          const shadowOffsetY = 2
+          car.shadow.setPosition(car.sprite.x + shadowOffsetX, car.sprite.y + shadowOffsetY)
+          
+          const currentPos = this.isoToGrid(car.sprite.x, car.sprite.y - this.TILE_HEIGHT / 2)
+          const newDepth = 99 + (currentPos.row + currentPos.col)
+          car.sprite.setDepth(newDepth)
+        },
+        onComplete: () => {
+          car.currentCell = target
+          const finalDepth = 99 + (target.row + target.col)
+          car.sprite.setDepth(finalDepth)
+          this.requestNextMove(car)
+        }
+      })
+    }
+    
+    if (laneChanged) {
+      // Najprv sa presunieme do správneho pruhu (kolmo na smer jazdy)
+      car.moveTween = this.scene.tweens.add({
+        targets: car.sprite,
+        x: car.sprite.x - oldLaneOffset.x + newLaneOffset.x,
+        y: car.sprite.y - oldLaneOffset.y + newLaneOffset.y,
+        duration: 300,
+        ease: 'Sine.easeInOut',
+        onUpdate: () => {
+          const shadowOffsetX = 4
+          const shadowOffsetY = 2
+          car.shadow.setPosition(car.sprite.x + shadowOffsetX, car.sprite.y + shadowOffsetY)
+        },
+        onComplete: () => {
+          // Až potom sa pohne vpred
+          startForwardMove()
+        }
+      })
+    } else {
+      // Pruh sa nezmenil, ideme rovno vpred
+      startForwardMove()
+    }
   }
 
   /**
