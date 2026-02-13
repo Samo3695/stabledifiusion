@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import Phaser from 'phaser'
 import { PersonManager } from '../utils/personManager.js'
 import { CarManager } from '../utils/carManager.js'
+import { startBuildingAnimation } from '../utils/buildingAnimationService.js'
 
 const props = defineProps({
   images: Array,
@@ -2117,384 +2118,27 @@ class IsoScene extends Phaser.Scene {
         buildingSprite.setScale(scale)
         buildingSprite.setOrigin(0.5, 1) // Spodný stred
         
-        // Premenná pre construct sprite-y - musí byť dostupná aj mimo shouldAnimate bloku
-        let constructSprites = []
-        
         // === ANIMÁCIA STAVBY - len pri manuálnom umiestnení (nie pri načítavaní projektu) ===
         // Preskočíme stavebné animáciu pre budovy s fly-away efektom - tie sa objavia plynule
         const shouldAnimate = !skipShadows && !this.batchLoading && !buildingData?.hasFlyAwayEffect
         
-        // Nastaviteľná rýchlosť animácie stavania (v milisekundách)
-        const BUILDING_ANIMATION_DURATION = 10000
-        
         if (shouldAnimate) {
-          // Uložíme si pôvodné rozmery
-          const spriteHeight = buildingSprite.displayHeight
-          const finalY = buildingSprite.y
-          
-          // Vypočítame výšku diamantu tile na izometrickej ploche
-          // Pre multi-cell objekty je výška diamantu väčšia
-          const diamondHeight = (cellsX + cellsY) * (TILE_HEIGHT / 2)
-          
-          // Umiestnime obrazok 0.png na tile pri začiatku animácie
-          const tempBuildingKey = `temp_building_${key}_${Date.now()}`
-          let tempSprite = null
-          let tempSpriteInitialY = 0
-          let tempSpriteMaskShape = null
-          let tempSpriteHeight = 0
-          
-          // Helper funkcia na kreslenie izometrickej masky - definovaná mimo aby bola dostupná vo všetkých callback-och
-          const drawIsometricMask = (graphics, centerX, bottomY, width, height, maxHeight) => {
-            graphics.clear()
-            graphics.fillStyle(0xffffff)
-            if (height <= 0) return
-            
-            // Vypočítame progress (0 až 1)
-            const progress = height / maxHeight
-            
-            // Izometrický diamant rastie zdola hore
-            // Spodný bod je na bottomY, horný bod na bottomY - height
-            // Šírka rastie proporcionálne s výškou
-            const currentWidth = width * progress
-            const currentHeight = height
-            
-            // Stred diamantu je posunutý tak, aby spodný bod ostal na bottomY
-            // a diamant rástol smerom hore
-            const diamondCenterY = bottomY - currentHeight / 2
-            
-            // Nakreslíme izometrický diamant (4 body)
-            graphics.beginPath()
-            graphics.moveTo(centerX, bottomY) // Spodný bod
-            graphics.lineTo(centerX + currentWidth / 2, diamondCenterY) // Pravý bod
-            graphics.lineTo(centerX, bottomY - currentHeight) // Horný bod
-            graphics.lineTo(centerX - currentWidth / 2, diamondCenterY) // Ľavý bod
-            graphics.closePath()
-            graphics.fillPath()
-          }
-          
-          this.load.image(tempBuildingKey, '/templates/cubes1/0.png')
-          this.load.once('complete', () => {
-            tempSprite = this.add.sprite(x + offsetX, y + TILE_HEIGHT + offsetY, tempBuildingKey)
-            const tempScale = targetWidth / tempSprite.width
-            tempSprite.setScale(tempScale)
-            tempSprite.setOrigin(0.5, 1)
-            tempSprite.setDepth(buildingSprite.depth + 2) // Najvrchnejšia vrstva - nad všetkým
-            tempSprite.setAlpha(1) // Opacity 0.5 pre 0.png
-            
-            // Uložíme počiatočnú Y pozíciu a výšku
-            tempSpriteInitialY = tempSprite.y
-            tempSpriteHeight = tempSprite.displayHeight
-            
-            // Vytvoríme masku pre tempSprite s izometrickou šikmosťou
-            tempSpriteMaskShape = this.make.graphics()
-            
-            drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, 0, tempSpriteHeight)
-            const tempMask = tempSpriteMaskShape.createGeometryMask()
-            tempSprite.setMask(tempMask)
-            
-            // Vytvoríme shadowInfo pre tempSprite s nulovou veľkosťou (žiadny tieň na začiatku)
-            this.shadowSprites[tempBuildingKey] = {
-              textureKey: tempBuildingKey,
-              x: x + offsetX,
-              y: y + TILE_HEIGHT + offsetY,
-              scale: tempScale,
-              scaleMultiplier: 0, // Začíname s nulovou veľkosťou tieňa
-              alpha: 1,
-              cellsX,
-              isTree: isTreeTemplate,
-              offsetX: -baseShadowOffset,
-              offsetY: baseShadowOffset * 0.375
-            }
-            
-            // Odstránime dočasný sprite po dokončení animácie
-            this.time.delayedCall(BUILDING_ANIMATION_DURATION, () => {
-              if (tempSprite) {
-                tempSprite.destroy()
-              }
-              if (tempSpriteMaskShape) {
-                tempSpriteMaskShape.destroy()
-              }
-              // Odstránime aj shadowInfo pre tempSprite
-              if (this.shadowSprites[tempBuildingKey]) {
-                delete this.shadowSprites[tempBuildingKey]
-                this.redrawShadowsAround(row, col)
-              }
-            })
-          })
-          this.load.start()
-          
-          // === CONSTRUCT SPRITES V 3 CÍPOCH DIAMANTU ===
-          // Vytvoríme 3 construct.png sprite-y s maskami
-          // constructSprites je už deklarovaný vyššie (mimo bloku)
-          const constructMasks = []
-          
-          // Vypočítame pozície 3 cípov izometrického diamantu pre multi-cell objekty
-          // Pre väčšie tile rozmery treba posunúť origin vyššie: 2x2 o 1 tile, 3x3 o 2 tile, 4x4 o 3 tile atď.
-          const originYOffset = -(Math.max(cellsX, cellsY) - 1) * TILE_HEIGHT
-          const diamondTips = [
-            { name: 'left', x: x + offsetX - (cellsY * TILE_WIDTH) / 2, y: y + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 4 }, // Ľavý cíp
-            { name: 'bottom', x: x + offsetX, y: y + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 2 }, // Spodný cíp
-            { name: 'right', x: x + offsetX + (cellsY * TILE_WIDTH) / 2, y: y + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 4 } // Pravý cíp
-          ]
-          
-          // Vytvoríme 3 construct sprite-y (len ak textúra existuje a budova nemá dontDropShadow)
-          if (this.textures.exists('construct') && !dontDropShadow) {
-            diamondTips.forEach((tip, index) => {
-              const constructSprite = this.add.sprite(tip.x, tip.y, 'construct')
-              const constructScale = (TILE_WIDTH * 0.2) / constructSprite.width // 10x menšia šírka
-              constructSprite.setScale(constructScale)
-              constructSprite.setOrigin(0.5, 1)
-              // Depth sa nastaví neskôr, po sortBuildings()
-              
-              // Posunieme ľavý a pravý construct o ich šírku
-              if (tip.name === 'left') {
-                constructSprite.x += constructSprite.displayWidth // Posun doľava o šírku
-                constructSprite.y += 5
-                constructSprite.x -= 0
-              } else if (tip.name === 'right') {
-                constructSprite.x -= constructSprite.displayWidth // Posun doprava o šírku
-                constructSprite.y += 5
-                constructSprite.x += 0
-              }
-              
-              // Vytvoríme masku pre construct sprite
-              const constructMaskShape = this.make.graphics()
-              constructMaskShape.fillStyle(0xffffff)
-              constructMaskShape.fillRect(
-                constructSprite.x - constructSprite.displayWidth / 2,
-                constructSprite.y,
-                constructSprite.displayWidth,
-                0
-              )
-              const constructMask = constructMaskShape.createGeometryMask()
-              constructSprite.setMask(constructMask)
-              
-              constructSprites.push(constructSprite)
-              // Ukladame spriteHeight (výšku budovy) namiesto constructSprite.displayHeight
-              constructMasks.push({ shape: constructMaskShape, sprite: constructSprite, height: spriteHeight, initialY: constructSprite.y })
-            })
-          } else {
-            console.warn('⚠️ Textúra construct.png nebola nájdená')
-          }
-          
-          // Odstránime construct sprite-y po dokončení animácie
-          this.time.delayedCall(BUILDING_ANIMATION_DURATION, () => {
-            constructSprites.forEach(sprite => {
-              if (sprite) sprite.destroy()
-            })
-            constructMasks.forEach(maskInfo => {
-              if (maskInfo.shape) maskInfo.shape.destroy()
-            })
-          })
-          
-          // Vytvoríme rect masku pre hlavnú budovu
-          const maskShape = this.make.graphics()
-          maskShape.fillStyle(0xffffff)
-          // Začneme s nulovou výškou (budova neviditeľná)
-          maskShape.fillRect(
-            buildingSprite.x - buildingSprite.displayWidth / 2,
-            finalY,
-            buildingSprite.displayWidth,
-            0
-          )
-          
-          const mask = maskShape.createGeometryMask()
-          buildingSprite.setMask(mask)
-          
-          // Vytvoríme efekt stavebného dymu/prachu na vrchu masky
-          const constructionEffects = this.createConstructionDustEffect(
-            buildingSprite.x,
-            finalY - spriteHeight, // Začíname hore pri neviditeľnej budove
-            buildingSprite.displayWidth,
-            spriteHeight
-          )
-          // Nastavenie depth pre dym - medzi construct a 0.png (3. vrstva)
-          if (constructionEffects) {
-            constructionEffects.setDepth(buildingSprite.depth + 0.2)
-          }
-          
-          // Animujeme výšku masky od 0 po plnú výšku
-          this.tweens.addCounter({
-            from: 0,
-            to: spriteHeight,
-            duration: BUILDING_ANIMATION_DURATION,
-            ease: 'Linear',
-            onUpdate: (tween) => {
-              const height = tween.getValue()
-              maskShape.clear()
-              maskShape.fillStyle(0xffffff)
-              maskShape.fillRect(
-                buildingSprite.x - buildingSprite.displayWidth / 2,
-                finalY - height,
-                buildingSprite.displayWidth,
-                height
-              )
-              
-              // Posúvame efekty dymu/prachu s hornou hranou masky
-              if (constructionEffects) {
-                constructionEffects.setPosition(
-                  buildingSprite.x,
-                  finalY - height
-                )
-              }
-              
-              // Animujeme masky construct sprite-ov (začínajú až po prvej fáze)
-              // Horná hrana masiek musí byť synchronizovaná s hornou hranou masky hlavnej budovy (finalY - height)
-              // Preskakujeme pre budovy s dontDropShadow
-              if (!dontDropShadow) {
-              constructMasks.forEach(maskInfo => {
-                let currentHeight = 0
-                
-                // Construct maska začne ísť dole trochu skôr ako fáza 3 pre 0.png
-                // Pre budovy s dontDropShadow používame hodnotu 0.5
-                const constructPhase3Start = dontDropShadow 
-                  ? spriteHeight - diamondHeight / 0.5
-                  : spriteHeight - diamondHeight / 1.2
-                
-                // Ľavý a pravý construct začínajú až po prvej fáze (keď height >= diamondHeight / 2)
-                // a rastú až do začiatku ich fázy 3
-                if (height >= diamondHeight / 2 && height < constructPhase3Start) {
-                  // Animujeme od diamondHeight/2 po constructPhase3Start
-                  const constructAnimDuration = constructPhase3Start - diamondHeight / 2
-                  const progressInConstruct = (height - diamondHeight / 2) / constructAnimDuration
-                  currentHeight = progressInConstruct * maskInfo.height
-                }
-                // Construct fáza 3: maska ide dole (zmenšuje sa zhora)
-                else if (height >= constructPhase3Start) {
-                  // Vypočítame progress fázy 3 (od 0 do 1)
-                  const phase3Duration = spriteHeight - constructPhase3Start
-                  const phase3Progress = (height - constructPhase3Start) / phase3Duration
-                  // Maska sa zmenšuje od plnej výšky po 0
-                  currentHeight = maskInfo.height * (1 - phase3Progress)
-                }
-                
-                // Horná hrana masky je na rovnakej Y pozícii ako hlavná budova
-                const maskTopY = finalY - height
-                // Spodná hrana je na pozícii sprite-u
-                const maskBottomY = maskInfo.initialY
-                // Výška masky je rozdiel, ale obmedzená na currentHeight
-                const actualMaskHeight = Math.min(currentHeight, maskBottomY - maskTopY)
-                
-                maskInfo.shape.clear()
-                maskInfo.shape.fillStyle(0xffffff)
-                if (actualMaskHeight > 0) {
-                  maskInfo.shape.fillRect(
-                    maskInfo.sprite.x - maskInfo.sprite.displayWidth / 2,
-                    maskBottomY - actualMaskHeight,
-                    maskInfo.sprite.displayWidth,
-                    actualMaskHeight
-                  )
-                }
-              })
-              } // Koniec if (!dontDropShadow)
-              
-              // 3 fázy pohybu tempSprite:
-              if (tempSprite && tempSpriteMaskShape) {
-                // Pre budovy s dontDropShadow: len fáza 1 a fáza 3 (bez pohybu hore)
-                if (dontDropShadow) {
-                  // Fáza 1: Vykresľovanie masky 0.png zdola hore do plnej výšky
-                  if (height < spriteHeight - diamondHeight / 2.2) {
-                    tempSprite.y = tempSpriteInitialY
-                    
-                    const phase1Duration = spriteHeight - diamondHeight / 2.2
-                    const phase1Progress = height / phase1Duration
-                    const tempMaskHeight = phase1Progress * tempSpriteHeight
-                    
-                    drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
-                  }
-                  // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
-                  else {
-                    tempSprite.y = tempSpriteInitialY
-                    
-                    const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
-                    const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
-                    // Posúvame bottomY hore aby sa maska odkrývala zhora dole
-                    const newBottomY = tempSpriteInitialY - (tempSpriteHeight - remainingMaskHeight)
-                    
-                    drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
-                  }
-                }
-                // Pre normálne budovy: všetky 3 fázy
-                else {
-                // Fáza 1: Vykresľovanie masky 0.png zdola hore kým maska nedosiahne diamondHeight / 2
-                // V tejto fáze je tieň scaleMultiplier = 0 (žiadny tieň)
-                if (height < diamondHeight / 2) {
-                  // tempSprite stojí na pôvodnej pozícii
-                  tempSprite.y = tempSpriteInitialY
-                  
-                  // Animujeme masku tempSprite proporcionálne k rastu hlavnej masky
-                  const tempMaskHeight = (height / (diamondHeight / 2)) * tempSpriteHeight
-                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
-                  
-                  // Tieň zostáva neviditeľný pre oba sprite (scaleMultiplier = 0)
-                  if (this.shadowSprites[tempBuildingKey]) {
-                    this.shadowSprites[tempBuildingKey].scaleMultiplier = 0
-                  }
-                  if (this.shadowSprites[key]) {
-                    this.shadowSprites[key].scaleMultiplier = 0
-                  }
-                }
-                // Fáza 2: Pohyb hore kým nie je diamondHeight / 2.2 od vrchu obrázka
-                // V tejto fáze tieň začína rásť od scaleMultiplier 0 po scaleMultiplier 1
-                else if (height < spriteHeight - diamondHeight / 2.2) {
-                  // Posúvame tempSprite hore proporcionálne s rastom masky
-                  const traveledHeight = height - diamondHeight / 2
-                  tempSprite.y = tempSpriteInitialY - traveledHeight
-                  
-                  // Maska je plná počas pohybu
-                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSprite.y, tempSprite.displayWidth, tempSpriteHeight, tempSpriteHeight)
-                  
-                  // Postupne zvyšujeme veľkosť tieňa od 0 do 1 pre oba sprite
-                  const phase2Duration = (spriteHeight - diamondHeight / 2.2) - diamondHeight / 2
-                  const phase2Progress = (height - diamondHeight / 2) / phase2Duration
-                  if (this.shadowSprites[tempBuildingKey]) {
-                    this.shadowSprites[tempBuildingKey].scaleMultiplier = phase2Progress
-                    this.shadowSprites[tempBuildingKey].y = tempSprite.y
-                  }
-                  if (this.shadowSprites[key]) {
-                    this.shadowSprites[key].scaleMultiplier = phase2Progress
-                  }
-                  this.redrawShadowsAround(row, col)
-                }
-                // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
-                // Tieň už zostáva konštantný (scaleMultiplier = 1)
-                else {
-                  // tempSprite stojí na pozícii diamondHeight / 2.2 od vrchnej hranice obrázka
-                  const finalTempY = tempSpriteInitialY - (spriteHeight - diamondHeight / 2.2 - diamondHeight / 2)
-                  tempSprite.y = finalTempY
-                  
-                  // Animujeme masku tempSprite - mizne zhora dole (horná hrana ide dole)
-                  const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
-                  const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
-                  // Posúvame bottomY hore aby sa maska odkrývala zhora dole
-                  const newBottomY = finalTempY - (tempSpriteHeight - remainingMaskHeight)
-                  
-                  drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
-                  
-                  // Tieň zostáva na plnej veľkosti pre oba sprite (už sa nemení)
-                  if (this.shadowSprites[tempBuildingKey]) {
-                    this.shadowSprites[tempBuildingKey].scaleMultiplier = 1
-                    this.shadowSprites[tempBuildingKey].y = finalTempY
-                  }
-                  if (this.shadowSprites[key]) {
-                    this.shadowSprites[key].scaleMultiplier = 1
-                  }
-                }
-                } // Koniec else (normálne budovy)
-              }
-            },
-            onComplete: () => {
-              // Odstránime masku po dokončení
-              buildingSprite.clearMask(true)
-              
-              // Zastavíme a odstránime časticový efekt
-              if (constructionEffects) {
-                constructionEffects.stop()
-                this.time.delayedCall(2000, () => {
-                  constructionEffects.destroy()
-                })
-              }
-            }
+          startBuildingAnimation(this, {
+            buildingSprite,
+            key,
+            x,
+            y,
+            offsetX,
+            offsetY,
+            targetWidth,
+            cellsX,
+            cellsY,
+            dontDropShadow,
+            shadowSprites: this.shadowSprites,
+            redrawShadowsAround: this.redrawShadowsAround.bind(this),
+            sortBuildings: this.sortBuildings.bind(this),
+            row,
+            col
           })
         }
         
@@ -2531,15 +2175,6 @@ class IsoScene extends Phaser.Scene {
         
         // Zoradíme budovy podľa depth (row + col)
         this.sortBuildings()
-        
-        // Nastavíme depth pre construct sprite-y AŽ PO sortBuildings()
-        if (constructSprites && constructSprites.length > 0) {
-          const finalBuildingDepth = buildingSprite.depth
-          constructSprites.forEach(sprite => {
-            sprite.setDepth(finalBuildingDepth + 1)
-          })
-          console.log(`🔨 Construct sprites depth nastavený na ${finalBuildingDepth + 1} (budova má ${finalBuildingDepth})`)
-        }
 
         // Fly-away efekt je samostatná logika - spúšťa sa automaticky len pri budovách s hasFlyAwayEffect
         // Budovy s fly-away sa objavia plynule BEZ stavebnej animácie a spustia fly-away hneď
