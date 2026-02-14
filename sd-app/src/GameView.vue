@@ -572,6 +572,26 @@ const handleLoadProject = async (projectData) => {
         console.log('   - počet kľúčov:', loadedData.buildingProductionStates ? Object.keys(loadedData.buildingProductionStates).length : 0)
       }
       
+      // Spawn cars a persons podľa resources s vehicleAnimation/personAnimation
+      setTimeout(() => {
+        if (canvasRef.value && resources.value.length > 0) {
+          // Spawn cars pre resources s vehicleAnimation: true
+          resources.value.forEach(resource => {
+            if (resource.vehicleAnimation && resource.amount > 0) {
+              console.log(`🚗 Spawning ${resource.amount} cars pre resource '${resource.name}'`)
+              canvasRef.value.spawnCarsOnAllRoads(resource.amount)
+            }
+          })
+          // Spawn persons pre resources s personAnimation: true
+          resources.value.forEach(resource => {
+            if (resource.personAnimation && resource.amount > 0) {
+              console.log(`🚶 Spawning ${resource.amount} persons pre resource '${resource.name}'`)
+              canvasRef.value.spawnPersonsOnAllRoads(resource.amount)
+            }
+          })
+        }
+      }, 800)
+
       // Ukončenie loading state
       setTimeout(() => {
         isLoading.value = false

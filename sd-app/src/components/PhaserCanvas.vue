@@ -3067,6 +3067,38 @@ defineExpose({
   // Skryje ikony work-force alokácií
   hideWorkforceAllocations: () => {
     mainScene?.hideWorkforceAllocations()
+  },
+  // Spawn cars náhodne na road tiles
+  spawnCarsOnAllRoads: (totalCount) => {
+    if (!mainScene || !mainScene.carManager || totalCount <= 0) return
+    // Nájdi všetky road tiles
+    const roadKeys = Object.entries(cellImages)
+      .filter(([key, data]) => data.isRoadTile && !data.isSecondary)
+      .map(([key]) => key)
+    if (roadKeys.length === 0) return
+    console.log(`🚗 Spawning ${totalCount} cars na ${roadKeys.length} road tiles`)
+    // Rozdeľ autá náhodne medzi road tiles
+    for (let i = 0; i < totalCount; i++) {
+      const randomKey = roadKeys[Math.floor(Math.random() * roadKeys.length)]
+      const [row, col] = randomKey.split('-').map(Number)
+      mainScene.createCarsAt(row, col, 1)
+    }
+  },
+  // Spawn persons náhodne na road tiles
+  spawnPersonsOnAllRoads: (totalCount) => {
+    if (!mainScene || !mainScene.personManager || totalCount <= 0) return
+    // Nájdi všetky road tiles
+    const roadKeys = Object.entries(cellImages)
+      .filter(([key, data]) => data.isRoadTile && !data.isSecondary)
+      .map(([key]) => key)
+    if (roadKeys.length === 0) return
+    console.log(`🚶 Spawning ${totalCount} persons na ${roadKeys.length} road tiles`)
+    // Rozdeľ osoby náhodne medzi road tiles
+    for (let i = 0; i < totalCount; i++) {
+      const randomKey = roadKeys[Math.floor(Math.random() * roadKeys.length)]
+      const [row, col] = randomKey.split('-').map(Number)
+      mainScene.createPersonsAt(row, col, 1)
+    }
   }
 })
 

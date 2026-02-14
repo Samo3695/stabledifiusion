@@ -14,7 +14,7 @@ export class CarManager {
     this.carCount = config.carCount || 20
     this.TILE_WIDTH = config.TILE_WIDTH || 64
     this.TILE_HEIGHT = config.TILE_HEIGHT || 32
-    this.moveDuration = config.moveDuration || 60600 // ms (spomalené o polovicu)
+    this.moveDuration = config.moveDuration || 90300 // ms (2x rýchlejšie)
     this.initialDelayRange = config.initialDelayRange || [0, 4000] // [min, max] ms
     
     // Offset pre jazdné pruhy - autá jazdia vpravo od stredu cesty

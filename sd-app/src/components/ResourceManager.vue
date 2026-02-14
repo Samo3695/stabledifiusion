@@ -22,7 +22,9 @@ const addResource = () => {
     name: newResourceName.value.trim(),
     amount: 0,
     icon: null, // Base64 ikonka
-    workResource: false // Či je to work resource
+    workResource: false, // Či je to work resource
+    vehicleAnimation: false, // Či je to vehicle animation
+    personAnimation: false // Či je to person animation
   }
   
   resources.value.push(newResource)
@@ -97,6 +99,22 @@ const toggleWorkResource = (id) => {
   const resource = resources.value.find(r => r.id === id)
   if (resource) {
     resource.workResource = !resource.workResource
+    emitUpdate()
+  }
+}
+
+const toggleVehicleAnimation = (id) => {
+  const resource = resources.value.find(r => r.id === id)
+  if (resource) {
+    resource.vehicleAnimation = !resource.vehicleAnimation
+    emitUpdate()
+  }
+}
+
+const togglePersonAnimation = (id) => {
+  const resource = resources.value.find(r => r.id === id)
+  if (resource) {
+    resource.personAnimation = !resource.personAnimation
     emitUpdate()
   }
 }
@@ -184,6 +202,24 @@ const toggleWorkResource = (id) => {
                   class="work-checkbox"
                 />
                 <span class="work-label">👷 Work</span>
+              </label>
+              <label v-if="resource.workResource" class="work-resource-toggle vehicle-toggle" :title="'Vehicle Animation: ' + (resource.vehicleAnimation ? 'Áno' : 'Nie')">
+                <input
+                  type="checkbox"
+                  :checked="resource.vehicleAnimation"
+                  @change="toggleVehicleAnimation(resource.id)"
+                  class="work-checkbox"
+                />
+                <span class="work-label">🚗 Vehicle</span>
+              </label>
+              <label v-if="resource.workResource" class="work-resource-toggle person-toggle" :title="'Person Animation: ' + (resource.personAnimation ? 'Áno' : 'Nie')">
+                <input
+                  type="checkbox"
+                  :checked="resource.personAnimation"
+                  @change="togglePersonAnimation(resource.id)"
+                  class="work-checkbox"
+                />
+                <span class="work-label">🧑 Person</span>
               </label>
               <input
                 type="number"
@@ -467,6 +503,24 @@ const toggleWorkResource = (id) => {
 
 .work-resource-toggle:has(.work-checkbox:checked) .work-label {
   color: #667eea;
+}
+
+.vehicle-toggle:has(.work-checkbox:checked) {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: #10b981;
+}
+
+.vehicle-toggle:has(.work-checkbox:checked) .work-label {
+  color: #10b981;
+}
+
+.person-toggle:has(.work-checkbox:checked) {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: #f59e0b;
+}
+
+.person-toggle:has(.work-checkbox:checked) .work-label {
+  color: #f59e0b;
 }
 
 .amount-input {
