@@ -52,8 +52,9 @@ const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každ
 const allocatedResources = ref({}) // Tracking alokovaných work force resources { resourceId: amount }
 const workforceAllocations = ref({}) // Detailný tracking alokácií { resourceId: [{row, col, amount, type: 'build'|'production', buildingName}] }
 const productionProgress = ref({}) // Progress pre každú budovu { 'row-col': 0-100 }
-const animatingBuildings = ref(new Set()) // Budovy aktuálne v stavebnej animácii
+const animatingBuildings = ref(new Map()) // Budovy aktuálne v stavebnej animácii: Map<'row-col', 'waiting'|'building'>
 const BUILDING_ANIMATION_DURATION = 10000 // ms - musí byť rovnaká ako v buildingAnimationService.js
+const pendingBuildAllocations = ref({}) // Čakajúce alokácie work-force pre budovy v animácii: { 'row-col': allocatedWorkItems }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
 const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybranú budovu
 const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
@@ -91,6 +92,13 @@ const currentBuildingIsAnimating = computed(() => {
   if (!clickedBuilding.value) return false
   const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
   return animatingBuildings.value.has(key)
+})
+
+// Computed property pre stav animácie kliknutej budovy: 'waiting' | 'building' | null
+const currentBuildingAnimState = computed(() => {
+  if (!clickedBuilding.value) return null
+  const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
+  return animatingBuildings.value.get(key) || null
 })
 
 // Computed properties pre usedResources a producedResources - používa resourceCalculator service
@@ -270,25 +278,15 @@ const handleCellSelected = ({ row, col }) => {
         const col = canvasRef.value ? selectedCell.value.col : 0
         const allocatedWorkItems = deductBuildCost(selectedImage.buildingData, row, col)
         
-        // Označ budovu ako animujúcu (stavebná animácia trvá 10s)
+        // Označ budovu ako animujúcu (stav sa upresní cez building-state-changed event)
         const animKey = `${row}-${col}`
-        animatingBuildings.value.add(animKey)
-        console.log(`🏗️ Budova ${animKey} začína stavebnú animáciu (${BUILDING_ANIMATION_DURATION}ms)`)
+        animatingBuildings.value.set(animKey, 'building')
+        console.log(`🏗️ Budova ${animKey} začína stavebnú animáciu`)
         
-        // Po dokončení animácie: vráť work-force a spusti auto produkciu
-        setTimeout(() => {
-          // Vráť work-force
-          if (allocatedWorkItems && allocatedWorkItems.length > 0) {
-            returnBuildWorkforce(allocatedWorkItems, resources.value, allocatedResources.value, workforceAllocations.value, row, col)
-          }
-          
-          // Odstráň z animujúcich
-          animatingBuildings.value.delete(animKey)
-          console.log(`✅ Budova ${animKey} dokončila stavebnú animáciu, spúšťam auto produkciu`)
-          
-          // Spusti auto produkciu pre túto budovu
-          startAutoProductionForBuilding(row, col)
-        }, BUILDING_ANIMATION_DURATION)
+        // Uložíme alokované work items - budú vrátené keď animácia skutočne dokončí (cez event)
+        if (allocatedWorkItems && allocatedWorkItems.length > 0) {
+          pendingBuildAllocations.value[animKey] = allocatedWorkItems
+        }
       }
       
       const isRoadTile = selectedImageId.value.startsWith('road_tile_')
@@ -1141,6 +1139,32 @@ const handleBuildingDeleted = ({ buildingData }) => {
   }
 }
 
+// Handler pre zmenu stavu stavby budovy (waiting/building)
+const handleBuildingStateChanged = ({ row, col, state }) => {
+  const key = `${row}-${col}`
+  animatingBuildings.value.set(key, state)
+  console.log(`🏗️ Budova [${row}, ${col}] stav: ${state}`)
+}
+
+// Handler pre dokončenie stavebnej animácie budovy (skutočné dokončenie, rešpektuje pauzy)
+const handleBuildingConstructionComplete = ({ row, col }) => {
+  const key = `${row}-${col}`
+  
+  // Vráť work-force ak boli alokované
+  const allocatedWorkItems = pendingBuildAllocations.value[key]
+  if (allocatedWorkItems && allocatedWorkItems.length > 0) {
+    returnBuildWorkforce(allocatedWorkItems, resources.value, allocatedResources.value, workforceAllocations.value, row, col)
+    delete pendingBuildAllocations.value[key]
+  }
+  
+  // Odstráň z animujúcich
+  animatingBuildings.value.delete(key)
+  console.log(`✅ Budova ${key} skutočne dokončená, spúšťam auto produkciu`)
+  
+  // Spusti auto produkciu pre túto budovu
+  startAutoProductionForBuilding(row, col)
+}
+
 // Zatvorenie modalu
 const closeBuildingModal = () => {
   showBuildingModal.value = false
@@ -1486,6 +1510,8 @@ const handleShowAllocations = (resourceId) => {
       @road-placed="handleRoadPlaced"
       @building-clicked="handleBuildingClicked"
       @building-deleted="handleBuildingDeleted"
+      @building-state-changed="handleBuildingStateChanged"
+      @building-construction-complete="handleBuildingConstructionComplete"
     />
     
     <!-- Header -->
@@ -1626,8 +1652,19 @@ const handleShowAllocations = (resourceId) => {
         <!-- Production Controls - zobrazí sa aj pre budovy bez produkcie, ak majú operationalCost -->
         <div v-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
           
+          <!-- Čaká na pracovnú silu -->
+          <template v-if="currentBuildingAnimState === 'waiting'">
+            <h3>🚚 Čaká na pracovnú silu...</h3>
+            <div class="build-in-progress">
+              <div class="build-progress-animation waiting">
+                <div class="build-progress-bar waiting-bar"></div>
+              </div>
+              <p class="build-progress-text">Čaká sa na príchod pracovnej sily. Stavba začne po príchode auta.</p>
+            </div>
+          </template>
+          
           <!-- Stavba prebieha -->
-          <template v-if="currentBuildingIsAnimating">
+          <template v-else-if="currentBuildingAnimState === 'building'">
             <h3>🏗️ Stavba prebieha...</h3>
             <div class="build-in-progress">
               <div class="build-progress-animation">
@@ -2256,6 +2293,22 @@ header {
 @keyframes build-progress-slide {
   0% { margin-left: -30%; }
   100% { margin-left: 100%; }
+}
+
+.build-progress-animation.waiting {
+  background: #fef3c7;
+}
+
+.build-progress-bar.waiting-bar {
+  background: linear-gradient(90deg, #f59e0b, #d97706, #f59e0b);
+  background-size: 200% 100%;
+  animation: build-progress-pulse 2s ease-in-out infinite;
+}
+
+@keyframes build-progress-pulse {
+  0% { opacity: 0.4; margin-left: 0; width: 100%; }
+  50% { opacity: 1; margin-left: 0; width: 100%; }
+  100% { opacity: 0.4; margin-left: 0; width: 100%; }
 }
 
 .build-progress-text {

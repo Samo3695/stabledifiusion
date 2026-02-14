@@ -33,7 +33,9 @@ function drawIsometricMask(graphics, centerX, bottomY, width, height, maxHeight)
  * Spustí animáciu stavania budovy
  * @param {Object} scene - Phaser scéna (this z PhaserCanvas)
  * @param {Object} params - Parametre animácie
- * @returns {Array} constructSprites - Pole construct sprite-ov (na neskoršie nastavenie depth)
+ * @returns {Object} - { constructSprites, animationControl }
+ *   constructSprites - Pole construct sprite-ov (na neskoršie nastavenie depth)
+ *   animationControl - { pause(), resume(), isPaused } pre pozastavenie/obnovenie animácie
  */
 export function startBuildingAnimation(scene, params) {
   const {
@@ -53,8 +55,32 @@ export function startBuildingAnimation(scene, params) {
     redrawShadowsAround,
     row,
     col,
-    createConstructionDustEffect
+    createConstructionDustEffect,
+    waitForCar = false, // Ak true, animácia sa zastaví po fáze 1 a čaká na resumeAnimation()
+    onAnimationComplete = null, // Callback keď animácia skutočne dobehne (rešpektuje pauzy)
+    onWaitingForCar = null // Callback keď animácia čaká na auto (fáza 1 dokončená)
   } = params
+  
+  // Kontrolný objekt pre pause/resume
+  const animationControl = {
+    isPaused: false,
+    _tween: null,
+    _hasPaused: false,
+    pause() {
+      if (this._tween && !this.isPaused) {
+        this._tween.pause()
+        this.isPaused = true
+        console.log(`⏸️ Animácia stavby pozastavená pre [${row}, ${col}]`)
+      }
+    },
+    resume() {
+      if (this._tween && this.isPaused) {
+        this._tween.resume()
+        this.isPaused = false
+        console.log(`▶️ Animácia stavby obnovená pre [${row}, ${col}]`)
+      }
+    }
+  }
   
   // Uložíme si pôvodné rozmery
   const spriteHeight = buildingSprite.displayHeight
@@ -103,19 +129,7 @@ export function startBuildingAnimation(scene, params) {
       offsetY: baseShadowOffset * 0.375
     }
     
-    // Odstránime dočasný sprite po dokončení animácie
-    scene.time.delayedCall(BUILDING_ANIMATION_DURATION, () => {
-      if (tempSprite) {
-        tempSprite.destroy()
-      }
-      if (tempSpriteMaskShape) {
-        tempSpriteMaskShape.destroy()
-      }
-      if (shadowSprites[tempBuildingKey]) {
-        delete shadowSprites[tempBuildingKey]
-        redrawShadowsAround(row, col)
-      }
-    })
+    // Cleanup tempSprite sa vykoná v onComplete hlavného tweenu (nie cez delayedCall)
   })
   scene.load.start()
   
@@ -166,15 +180,7 @@ export function startBuildingAnimation(scene, params) {
     console.warn('⚠️ Textúra construct.png nebola nájdená')
   }
   
-  // Odstránime construct sprite-y po dokončení animácie
-  scene.time.delayedCall(BUILDING_ANIMATION_DURATION, () => {
-    constructSprites.forEach(sprite => {
-      if (sprite) sprite.destroy()
-    })
-    constructMasks.forEach(maskInfo => {
-      if (maskInfo.shape) maskInfo.shape.destroy()
-    })
-  })
+  // Cleanup construct sprite-ov sa vykoná v onComplete hlavného tweenu (nie cez delayedCall)
   
   // Vytvoríme rect masku pre hlavnú budovu
   const maskShape = scene.make.graphics()
@@ -200,13 +206,25 @@ export function startBuildingAnimation(scene, params) {
   }
   
   // Animujeme výšku masky od 0 po plnú výšku
-  scene.tweens.addCounter({
+  const mainTween = scene.tweens.addCounter({
     from: 0,
     to: spriteHeight,
     duration: BUILDING_ANIMATION_DURATION,
     ease: 'Linear',
     onUpdate: (tween) => {
       const height = tween.getValue()
+      
+      // Ak čakáme na auto a dosiahli sme koniec fázy 1 - pozastavíme okamžite
+      if (waitForCar && !animationControl._hasPaused && height >= diamondHeight / 2) {
+        animationControl._hasPaused = true
+        // Pauza priamo v tomto frame - tween.pause() funguje aj v onUpdate
+        tween.pause()
+        animationControl.isPaused = true
+        console.log(`⏸️ Animácia stavby pozastavená pre [${row}, ${col}] na výške ${height.toFixed(1)}`)
+        // Oznámime že animácia čaká na auto
+        if (onWaitingForCar) onWaitingForCar()
+      }
+      
       maskShape.clear()
       maskShape.fillStyle(0xffffff)
       maskShape.fillRect(
@@ -352,9 +370,37 @@ export function startBuildingAnimation(scene, params) {
           constructionEffects.destroy()
         })
       }
+      
+      // Cleanup tempSprite (presunutý sem z delayedCall aby rešpektoval pauzy)
+      if (tempSprite) {
+        tempSprite.destroy()
+        tempSprite = null
+      }
+      if (tempSpriteMaskShape) {
+        tempSpriteMaskShape.destroy()
+        tempSpriteMaskShape = null
+      }
+      if (shadowSprites[tempBuildingKey]) {
+        delete shadowSprites[tempBuildingKey]
+        redrawShadowsAround(row, col)
+      }
+      
+      // Cleanup construct sprite-ov (presunutý sem z delayedCall aby rešpektoval pauzy)
+      constructSprites.forEach(sprite => {
+        if (sprite) sprite.destroy()
+      })
+      constructMasks.forEach(maskInfo => {
+        if (maskInfo.shape) maskInfo.shape.destroy()
+      })
+      
+      // Oznámime že animácia je kompletne dokončená
+      if (onAnimationComplete) onAnimationComplete()
     }
   })
   
-  // Vrátime construct sprites aby sa im mohol nastaviť depth zvonka
-  return constructSprites
+  // Uložíme referenciu na tween
+  animationControl._tween = mainTween
+  
+  // Vrátime construct sprites a animation control
+  return { constructSprites, animationControl }
 }

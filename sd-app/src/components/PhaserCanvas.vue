@@ -4,6 +4,7 @@ import Phaser from 'phaser'
 import { PersonManager } from '../utils/personManager.js'
 import { CarManager } from '../utils/carManager.js'
 import { startBuildingAnimation } from '../utils/buildingAnimationService.js'
+import { findNearestCar, dispatchCarToBuilding } from '../utils/carDispatchService.js'
 
 const props = defineProps({
   images: Array,
@@ -86,7 +87,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked', 'destination-tile-clicked', 'building-deleted'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked', 'destination-tile-clicked', 'building-deleted', 'building-state-changed', 'building-construction-complete'])
 
 const gameContainer = ref(null)
 let game = null
@@ -2297,13 +2298,20 @@ class IsoScene extends Phaser.Scene {
         
         // Premenná pre construct sprite-y - musí byť dostupná aj mimo shouldAnimate bloku
         let constructSprites = []
+        let animationControl = null
         
         // === ANIMÁCIA STAVBY - len pri manuálnom umiestnení (nie pri načítavaní projektu) ===
         // Preskočíme stavebné animáciu pre budovy s fly-away efektom - tie sa objavia plynule
         const shouldAnimate = !skipShadows && !this.batchLoading && !buildingData?.hasFlyAwayEffect
         
+        // Zistíme či existujú autá na mape (ak áno, animácia čaká na auto)
+        const hasCars = this.carManager && this.carManager.cars && this.carManager.cars.length > 0
+        
         if (shouldAnimate) {
-          constructSprites = startBuildingAnimation(this, {
+          // Emit počiatočný stav - vždy začíname ako 'building', pri waitForCar sa zmení na 'waiting' keď dosiahne fázu 1
+          emit('building-state-changed', { row, col, state: hasCars ? 'waiting' : 'building' })
+          
+          const animResult = startBuildingAnimation(this, {
             buildingSprite,
             key: textureKey,
             x,
@@ -2320,8 +2328,58 @@ class IsoScene extends Phaser.Scene {
             redrawShadowsAround: (r, c) => this.redrawShadowsAround(r, c),
             row,
             col,
-            createConstructionDustEffect: (cx, cy, cw, ch) => this.createConstructionDustEffect(cx, cy, cw, ch)
+            createConstructionDustEffect: (cx, cy, cw, ch) => this.createConstructionDustEffect(cx, cy, cw, ch),
+            waitForCar: hasCars,
+            onWaitingForCar: () => {
+              // Animácia dosiahla koniec fázy 1 a čaká na auto
+              emit('building-state-changed', { row, col, state: 'waiting' })
+            },
+            onAnimationComplete: () => {
+              // Animácia je kompletne dokončená - oznámime GameView
+              console.log(`✅ Animácia stavby [${row}, ${col}] kompletne dokončená`)
+              emit('building-construction-complete', { row, col })
+            }
           })
+          constructSprites = animResult.constructSprites
+          animationControl = animResult.animationControl
+          
+          // Ak čakáme na auto, dispatchneme najbližšie auto k budove
+          if (hasCars && animationControl) {
+            const carResult = findNearestCar(this.carManager.cars, row, col, cellImages)
+            if (carResult) {
+              const dispatch = dispatchCarToBuilding(
+                this,
+                carResult.car,
+                carResult.path,
+                carResult.nearestRoad,
+                row,
+                col,
+                {
+                  onArrive: () => {
+                    // Auto prišlo - obnovíme animáciu stavby
+                    console.log(`🚗✅ Auto dorazilo k budove [${row}, ${col}] - obnovujem animáciu`)
+                    emit('building-state-changed', { row, col, state: 'building' })
+                    animationControl.resume()
+                    
+                    // Auto sa vráti na cestu po dokončení animácie
+                    // Zostávajúci čas = celkový - čas fázy 1
+                    const remainingTime = 8000 // ~80% z 10s animácie zostáva po fáze 1
+                    this.time.delayedCall(remainingTime, () => {
+                      dispatch.returnCar()
+                    })
+                  },
+                  moveSpeed: 400,
+                  carManager: this.carManager
+                }
+              )
+            } else {
+              // Žiadne auto nenájdené - pokračuj normálne
+              console.log(`⚠️ Žiadne auto nenájdené pre budovu [${row}, ${col}] - animácia pokračuje`)
+              if (animationControl.isPaused) {
+                animationControl.resume()
+              }
+            }
+          }
         }
         
         // Vytvor shadowInfo len ak nemá dontDropShadow flag
