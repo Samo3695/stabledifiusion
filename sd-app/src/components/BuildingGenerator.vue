@@ -112,15 +112,28 @@ const API_URL = `${API_BASE_URL}/generate`
 const HEALTH_URL = `${API_BASE_URL}/health`
 
 // Načítaj dostupné LoRA z backendu
-const fetchAvailableLoras = async () => {
+const fetchAvailableLoras = async (retryCount = 0) => {
   try {
+    console.log(`🔍 Načítavam LoRA modely z ${HEALTH_URL}... (pokus ${retryCount + 1})`)
     const response = await fetch(HEALTH_URL)
     if (response.ok) {
       const data = await response.json()
       availableLoras.value = data.loras_available || []
+      console.log(`✅ Načítaných ${availableLoras.value.length} LoRA modelov:`, availableLoras.value)
+    } else {
+      console.warn(`⚠️ Health endpoint vrátil status ${response.status}`)
+      // Retry po 3 sekundách ak backend ešte nie je ready
+      if (retryCount < 3) {
+        setTimeout(() => fetchAvailableLoras(retryCount + 1), 3000)
+      }
     }
   } catch (err) {
-    console.error('Nepodarilo sa načítať LoRA:', err)
+    console.error('❌ Nepodarilo sa načítať LoRA:', err.message)
+    // Retry po 5 sekundách ak backend ešte nebeží
+    if (retryCount < 3) {
+      console.log(`🔄 Skúsim znova o 5s... (pokus ${retryCount + 1}/3)`)
+      setTimeout(() => fetchAvailableLoras(retryCount + 1), 5000)
+    }
   }
 }
 

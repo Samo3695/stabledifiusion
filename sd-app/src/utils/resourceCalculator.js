@@ -18,11 +18,12 @@ export function calculateResourceUsage(canvasImagesMap, images) {
     // Nájdi zodpovedajúci obrázok s buildingData
     const image = images.find(img => img.id === canvasItem.imageId)
     
-    if (!image || !image.buildingData || !image.buildingData.isBuilding) {
+    // Použi buildingData z canvasItem (má prednosť) alebo z image library
+    const buildingData = canvasItem.buildingData || image?.buildingData
+    
+    if (!buildingData || !buildingData.isBuilding) {
       return
     }
-    
-    const buildingData = image.buildingData
     
     // Spočítaj operational cost (použité resources)
     const operationalCost = buildingData.operationalCost || []
@@ -57,19 +58,25 @@ export function calculateResourceUsage(canvasImagesMap, images) {
  * @param {Object} buildingProductionStates - Mapa stavov produkcie {'row-col': {enabled: boolean}}
  * @returns {Object} - {resourceId: amount}
  */
-export function calculateStoredResources(canvasImagesMap, images, buildingProductionStates = {}) {
+export function calculateStoredResources(canvasImagesMap, images, buildingProductionStates = {}, animatingBuildings = null) {
   const stored = {}
 
   // Prejdi všetky umiestnené budovy na canvase
   Object.entries(canvasImagesMap || {}).forEach(([key, canvasItem]) => {
+    // Preskočíme budovy ktoré sú ešte v stavebnej animácii
+    if (animatingBuildings && animatingBuildings.has && animatingBuildings.has(key)) {
+      return
+    }
+    
     const image = images.find(img => img.id === canvasItem.imageId)
-    if (!image || !image.buildingData || !image.buildingData.isBuilding) return
+    
+    // Použi buildingData z canvasItem (má prednosť) alebo z image library
+    const buildingData = canvasItem.buildingData || image?.buildingData
+    if (!buildingData || !buildingData.isBuilding) return
 
-    // Započítaj stored capacity len ak má budova zapnutú auto produkciu
-    const productionState = buildingProductionStates[key]
-    if (!productionState || !productionState.enabled) return
-
-    const buildingStored = image.buildingData.stored || []
+    // Započítaj stored capacity vždy (aj keď je produkcia vypnutá)
+    // Kapacita skladu existuje bez ohľadu na to či budova produkuje
+    const buildingStored = buildingData.stored || []
     buildingStored.forEach(s => {
       if (!stored[s.resourceId]) stored[s.resourceId] = 0
       stored[s.resourceId] += Number(s.amount) || 0
@@ -127,16 +134,21 @@ export function checkBuildingResources(buildingData, resources) {
 }
 
 /**
- * Odpočíta build cost resources a trackuje alokovanie workResource na 3 sekundy
+ * Odpočíta build cost resources a trackuje alokovanie workResource
+ * Work-force sa nevracia automaticky - volajúci musí zavolať returnBuildWorkforce() po dokončení stavby
  * @param {Object} buildingData - Metadata budovy
  * @param {Array} resources - Zoznam dostupných resources (ref)
  * @param {Object} allocatedResources - Objekt pre tracking alokovaných resources (ref)
+ * @param {Object} workforceAllocations - Detailný tracking kde je work-force alokovaná (ref)
+ * @param {number} row - Riadok budovy na canvase
+ * @param {number} col - Stĺpec budovy na canvase
+ * @returns {Array} - Zoznam alokovaných work-force items pre neskoršie vrátenie
  */
-export function deductBuildCost(buildingData, resources, allocatedResources = {}) {
-  if (!buildingData || !buildingData.isBuilding) return
+export function deductBuildCost(buildingData, resources, allocatedResources = {}, workforceAllocations = {}, row = 0, col = 0) {
+  if (!buildingData || !buildingData.isBuilding) return []
   
   const buildCost = buildingData.buildCost || []
-  const workResourcesToReturn = [] // Zoznam workResource ktoré treba vrátiť
+  const allocatedWorkItems = [] // Zoznam work-force na vrátenie po stavbe
   
   buildCost.forEach(cost => {
     const resource = resources.find(r => r.id === cost.resourceId)
@@ -145,45 +157,78 @@ export function deductBuildCost(buildingData, resources, allocatedResources = {}
       resource.amount -= cost.amount
       console.log(`💰 Odpočítané ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
       
-      // Ak je to workResource, pridáme do zoznamu na vrátenie a trackujeme alokovanie
+      // Ak je to workResource, alokuj (nevracia sa automaticky)
       if (resource.workResource) {
-        // Pridaj do allocated
+        // Pridaj do celkového allocated count
         if (!allocatedResources[cost.resourceId]) {
           allocatedResources[cost.resourceId] = 0
         }
         allocatedResources[cost.resourceId] += cost.amount
-        console.log(`👷 Alokované work force (build): ${cost.amount}x ${resource.name}, total allocated: ${allocatedResources[cost.resourceId]}`)
         
-        workResourcesToReturn.push({
+        // Pridaj detailný záznam alokácie
+        if (!workforceAllocations[cost.resourceId]) {
+          workforceAllocations[cost.resourceId] = []
+        }
+        workforceAllocations[cost.resourceId].push({
+          row, col, amount: cost.amount, type: 'build',
+          buildingName: buildingData.buildingName || 'Budova'
+        })
+        
+        allocatedWorkItems.push({
           resourceId: resource.id,
           amount: cost.amount,
           resourceName: resource.name
         })
+        
+        console.log(`👷 Alokované work force (build): ${cost.amount}x ${resource.name} na [${row},${col}], total allocated: ${allocatedResources[cost.resourceId]}`)
       }
     }
   })
   
-  // Vrátiť workResources po 3 sekundách
-  if (workResourcesToReturn.length > 0) {
-    setTimeout(() => {
-      workResourcesToReturn.forEach(item => {
-        const resource = resources.find(r => r.id === item.resourceId)
-        if (resource) {
-          resource.amount += item.amount
-          
-          // Uber z allocated
-          if (allocatedResources[item.resourceId]) {
-            allocatedResources[item.resourceId] -= item.amount
-            if (allocatedResources[item.resourceId] <= 0) {
-              delete allocatedResources[item.resourceId]
-            }
-          }
-          
-          console.log(`👷 Work resource vrátené a dealokované: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}, allocated: ${allocatedResources[item.resourceId] || 0}`)
+  return allocatedWorkItems
+}
+
+/**
+ * Vráti work-force po dokončení stavby budovy
+ * @param {Array} allocatedWorkItems - Items vrátené z deductBuildCost
+ * @param {Array} resources - Zoznam dostupných resources (ref)
+ * @param {Object} allocatedResources - Objekt pre tracking alokovaných resources (ref)
+ * @param {Object} workforceAllocations - Detailný tracking kde je work-force alokovaná (ref)
+ * @param {number} row - Riadok budovy
+ * @param {number} col - Stĺpec budovy
+ */
+export function returnBuildWorkforce(allocatedWorkItems, resources, allocatedResources = {}, workforceAllocations = {}, row = 0, col = 0) {
+  if (!allocatedWorkItems || allocatedWorkItems.length === 0) return
+  
+  allocatedWorkItems.forEach(item => {
+    const resource = resources.find(r => r.id === item.resourceId)
+    if (resource) {
+      resource.amount += item.amount
+      
+      // Uber z allocated
+      if (allocatedResources[item.resourceId]) {
+        allocatedResources[item.resourceId] -= item.amount
+        if (allocatedResources[item.resourceId] <= 0) {
+          delete allocatedResources[item.resourceId]
         }
-      })
-    }, 5000) // 5 sekúnd
-  }
+      }
+      
+      // Odstráň detailný záznam alokácie
+      if (workforceAllocations[item.resourceId]) {
+        const idx = workforceAllocations[item.resourceId].findIndex(
+          a => a.row === row && a.col === col && a.type === 'build'
+        )
+        if (idx !== -1) {
+          workforceAllocations[item.resourceId].splice(idx, 1)
+          if (workforceAllocations[item.resourceId].length === 0) {
+            delete workforceAllocations[item.resourceId]
+          }
+        }
+      }
+      
+      console.log(`👷 Work force vrátené po stavbe: ${item.amount}x ${item.resourceName} z [${row},${col}], zostatok: ${resource.amount}`)
+    }
+  })
 }
 
 /**
@@ -220,6 +265,8 @@ export function canStartProduction(buildingData, resources) {
   
   for (const cost of operationalCost) {
     const resource = resources.find(r => r.id === cost.resourceId)
+    // Work-force sa preskakuje - je alokovaná pri zapnutí produkcie, nie každý cyklus
+    if (resource && resource.workResource) continue
     if (!resource || resource.amount < cost.amount) {
       return false
     }
@@ -243,6 +290,8 @@ export function getMissingOperationalResources(buildingData, resources) {
   
   operationalCost.forEach(cost => {
     const resource = resources.find(r => r.id === cost.resourceId)
+    // Work-force sa preskakuje - je alokovaná pri zapnutí produkcie
+    if (resource && resource.workResource) return
     if (!resource || resource.amount < cost.amount) {
       missingResourceIds.add(cost.resourceId)
     }
@@ -262,23 +311,18 @@ export function executeProduction(buildingData, resources, storedCapacities = {}
   
   const operationalCost = buildingData.operationalCost || []
   const production = buildingData.production || []
-  const workResourcesToReturn = []
   
-  // Odpočítaj operational cost
+  // Odpočítaj operational cost (work-force sa preskakuje - je alokovaná na úrovni produkcie)
   operationalCost.forEach(cost => {
     const resource = resources.find(r => r.id === cost.resourceId)
     if (resource) {
+      // Work-force sa neodčítava tu - je alokovaná pri zapnutí produkcie
+      if (resource.workResource) {
+        console.log(`👷 Work force ${resource.name} preskočená - je alokovaná na úrovni produkcie`)
+        return
+      }
       resource.amount -= cost.amount
       console.log(`⚙️ Odpočítané prevádzkové náklady: ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
-      
-      // Ak je to workResource, pridáme do zoznamu na vrátenie
-      if (resource.workResource) {
-        workResourcesToReturn.push({
-          resourceId: resource.id,
-          amount: cost.amount,
-          resourceName: resource.name
-        })
-      }
     }
   })
   
@@ -316,19 +360,6 @@ export function executeProduction(buildingData, resources, storedCapacities = {}
       console.warn(`⚠️ Resource ${prod.resourceName} (${prod.resourceId}) neexistuje v zozname resources`)
     }
   })
-  
-  // Vrátiť workResources po 3 sekundách
-  if (workResourcesToReturn.length > 0) {
-    setTimeout(() => {
-      workResourcesToReturn.forEach(item => {
-        const resource = resources.find(r => r.id === item.resourceId)
-        if (resource) {
-          resource.amount += item.amount
-          console.log(`👷 Work resource vrátené: ${item.amount}x ${item.resourceName}, nový zostatok: ${resource.amount}`)
-        }
-      })
-    }, 3000)
-  }
   
   console.log('✅ Produkcia spustená!')
 }

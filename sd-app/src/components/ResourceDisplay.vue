@@ -16,7 +16,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['reduce-to-capacity'])
+const emit = defineEmits(['reduce-to-capacity', 'show-allocations'])
 
 // Trackery pre odpočítavanie - { resourceId: { progress: 0-100, timeLeft: 10 } }
 const countdowns = ref({})
@@ -204,8 +204,9 @@ onUnmounted(() => {
               >{{ trends[resource.id] === 'up' ? '▲' : '▼' }}</span>
               <span 
                 v-if="resource.workResource && allocatedResources[resource.id]"
-                class="amount-allocated"
-                :title="`Alokované work force`"
+                class="amount-allocated clickable-allocated"
+                :title="`Klikni pre zobrazenie alokácií work force`"
+                @click.stop="emit('show-allocations', resource.id)"
               >({{ allocatedResources[resource.id] }})</span>
               <span 
                 v-if="resource.mustBeStored || (storedResources && storedResources[resource.id] !== undefined)" 
@@ -495,6 +496,16 @@ onUnmounted(() => {
   font-size: 0.85rem;
   color: #f59e0b; /* oranžová farba pre alokované */
   margin-left: 2px;
+}
+
+.clickable-allocated {
+  cursor: pointer;
+  transition: color 0.2s, text-shadow 0.2s;
+}
+
+.clickable-allocated:hover {
+  color: #fbbf24;
+  text-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
 }
 
 @keyframes blink-warning {

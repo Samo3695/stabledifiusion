@@ -242,7 +242,7 @@ class IsoScene extends Phaser.Scene {
       carCount: 200,
       TILE_WIDTH,
       TILE_HEIGHT,
-      moveDuration: 4000, // Rýchlejšie ako osoby
+      moveDuration: 2000, // 2x rýchlejšie (pôvodne 4000)
       initialDelayRange: [0, 4000]
     })
   }
@@ -362,6 +362,9 @@ class IsoScene extends Phaser.Scene {
   
   // Mapa auto-production indikátorov pre budovy
   autoProductionIndicators = {}
+  
+  // Zoznam work-force alokačných highlightov
+  workforceHighlights = []
 
   // Zobrazí warning indikátor nad budovou
   // type: 'resources' (žltý) alebo 'storage' (červený)
@@ -747,6 +750,109 @@ class IsoScene extends Phaser.Scene {
       this.autoProductionIndicators[key].arrow?.destroy()
       delete this.autoProductionIndicators[key]
       console.log(`✅ Auto-production indikátor skrytý na [${row}, ${col}]`)
+    }
+  }
+
+  // Zobrazí ikony work-force alokácií na canvase
+  showWorkforceAllocations(positions) {
+    // Najprv vyčisti predchádzajúce
+    this.hideWorkforceAllocations()
+    
+    if (!this.workforceHighlights) {
+      this.workforceHighlights = []
+    }
+    
+    positions.forEach(pos => {
+      let { row, col } = pos
+      let key = `${row}-${col}`
+      
+      // Skontroluj sekundárnu bunku
+      const originCellData = cellImages[key]
+      if (originCellData?.isSecondary) {
+        row = originCellData.originRow
+        col = originCellData.originCol
+        key = `${row}-${col}`
+      }
+      
+      const buildingSprite = this.buildingSprites[key]
+      if (!buildingSprite) return
+      
+      const { x, y } = this.gridToIso(row, col)
+      
+      const cellData = cellImages[key]
+      const cellsX = cellData?.cellsX || 1
+      const cellsY = cellData?.cellsY || 1
+      
+      let offsetX = 0
+      let offsetY = 0
+      
+      if (cellsX === 1 && cellsY === 2) {
+        offsetX = -TILE_WIDTH / 4
+        offsetY = TILE_HEIGHT / 2
+      } else if (cellsX === 2 && cellsY === 2) {
+        offsetY = TILE_HEIGHT
+      } else if (cellsX >= 3) {
+        offsetY = TILE_HEIGHT * (cellsX - 1)
+      }
+      
+      const iconY = y + TILE_HEIGHT + offsetY - buildingSprite.height * buildingSprite.scaleY - 10
+      const iconX = x + offsetX + 30 // Posun vpravo od stredu
+      
+      // Pozadie ikony
+      const bg = this.add.graphics()
+      bg.setPosition(iconX, iconY)
+      bg.fillStyle(pos.type === 'build' ? 0xf59e0b : 0x3b82f6, 0.9) // žltá pre build, modrá pre production
+      bg.fillRoundedRect(-18, -14, 36, 28, 6)
+      bg.lineStyle(2, 0xffffff, 1)
+      bg.strokeRoundedRect(-18, -14, 36, 28, 6)
+      bg.setDepth(9999999)
+      
+      // Ikona + číslo
+      const emoji = pos.type === 'build' ? '🔨' : '⚙️'
+      const label = this.add.text(iconX, iconY, `${emoji}${pos.amount}`, {
+        fontSize: '12px',
+        fontFamily: 'Arial',
+        color: '#ffffff',
+        fontStyle: 'bold'
+      })
+      label.setOrigin(0.5, 0.5)
+      label.setDepth(9999999)
+      
+      // Tooltip s názvom budovy
+      const tooltip = this.add.text(iconX, iconY - 24, pos.buildingName, {
+        fontSize: '10px',
+        fontFamily: 'Arial',
+        color: '#ffffff',
+        backgroundColor: '#000000aa',
+        padding: { x: 4, y: 2 }
+      })
+      tooltip.setOrigin(0.5, 0.5)
+      tooltip.setDepth(9999999)
+      
+      // Pulzovanie
+      this.tweens.add({
+        targets: [bg, label, tooltip],
+        scaleX: { from: 1, to: 1.15 },
+        scaleY: { from: 1, to: 1.15 },
+        alpha: { from: 1, to: 0.8 },
+        duration: 600,
+        ease: 'Sine.easeInOut',
+        yoyo: true,
+        repeat: -1
+      })
+      
+      this.workforceHighlights.push(bg, label, tooltip)
+    })
+    
+    console.log(`👷 Zobrazených ${positions.length} work-force alokácií na canvase`)
+  }
+  
+  // Skryje ikony work-force alokácií
+  hideWorkforceAllocations() {
+    if (this.workforceHighlights) {
+      this.workforceHighlights.forEach(obj => obj?.destroy())
+      this.workforceHighlights = []
+      console.log('👷 Work-force alokácie skryté z canvasu')
     }
   }
 
@@ -2953,6 +3059,14 @@ defineExpose({
   // Vypne produkčné efekty (dym/svetlo)
   hideProductionEffects: (row, col) => {
     mainScene?.hideProductionEffects(row, col)
+  },
+  // Zobrazí ikony work-force alokácií na canvase
+  showWorkforceAllocations: (positions) => {
+    mainScene?.showWorkforceAllocations(positions)
+  },
+  // Skryje ikony work-force alokácií
+  hideWorkforceAllocations: () => {
+    mainScene?.hideWorkforceAllocations()
   }
 })
 
