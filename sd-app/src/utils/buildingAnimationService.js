@@ -3,9 +3,69 @@
  * Obsahuje celú logiku animácie vrátane construct sprite-ov, 0.png tempSprite a masiek
  */
 
-const BUILDING_ANIMATION_DURATION = 10000 // ms
+const DEFAULT_BUILDING_ANIMATION_DURATION = 10000 // ms - použije sa ak nie je buildCost
+const MIN_ANIMATION_DURATION = 3000 // ms - minimálna doba animácie
 const TILE_WIDTH = 64
 const TILE_HEIGHT = 32
+
+/**
+ * Vypočíta dobu animácie na základe buildCost
+ * Doba = súčet amount všetkých resources v sekundách
+ * @param {Array} buildCost - Pole { resourceId, resourceName, amount }
+ * @returns {number} - Doba v ms
+ */
+function calculateAnimationDuration(buildCost) {
+  if (!buildCost || !Array.isArray(buildCost) || buildCost.length === 0) {
+    return DEFAULT_BUILDING_ANIMATION_DURATION
+  }
+  const totalAmount = buildCost.reduce((sum, item) => sum + (item.amount || 0), 0)
+  const durationMs = totalAmount * 1000 // 1 sekunda za každý amount
+  return Math.max(durationMs, MIN_ANIMATION_DURATION)
+}
+
+/**
+ * Helper funkcia na kreslenie pie chart progress baru
+ * Kreslí kruhový pie chart s výplňou podľa progress
+ */
+function drawPieChart(graphics, centerX, centerY, radius, progress, bgColor, fgColor, outlineColor) {
+  graphics.clear()
+  
+  // Pozadie kruhu (zostávajúca časť)
+  graphics.fillStyle(bgColor, 0.6)
+  graphics.beginPath()
+  graphics.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  graphics.closePath()
+  graphics.fillPath()
+  
+  // Vyplnená časť (hotová časť) - kreslíme od vrchu (-PI/2)
+  if (progress > 0) {
+    const startAngle = -Math.PI / 2
+    const endAngle = startAngle + (Math.PI * 2 * progress)
+    
+    graphics.fillStyle(fgColor, 0.85)
+    graphics.beginPath()
+    graphics.moveTo(centerX, centerY)
+    graphics.arc(centerX, centerY, radius, startAngle, endAngle, false)
+    graphics.lineTo(centerX, centerY)
+    graphics.closePath()
+    graphics.fillPath()
+  }
+  
+  // Obrys
+  graphics.lineStyle(1.5, outlineColor, 0.8)
+  graphics.beginPath()
+  graphics.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  graphics.closePath()
+  graphics.strokePath()
+  
+  // Vnútorný kruh (pre lepší vzhľad - donut efekt)
+  const innerRadius = radius * 0.45
+  graphics.fillStyle(0x000000, 0.3)
+  graphics.beginPath()
+  graphics.arc(centerX, centerY, innerRadius, 0, Math.PI * 2)
+  graphics.closePath()
+  graphics.fillPath()
+}
 
 /**
  * Helper funkcia na kreslenie izometrickej masky
@@ -58,14 +118,21 @@ export function startBuildingAnimation(scene, params) {
     createConstructionDustEffect,
     waitForCar = false, // Ak true, animácia sa zastaví po fáze 1 a čaká na resumeAnimation()
     onAnimationComplete = null, // Callback keď animácia skutočne dobehne (rešpektuje pauzy)
-    onWaitingForCar = null // Callback keď animácia čaká na auto (fáza 1 dokončená)
+    onWaitingForCar = null, // Callback keď animácia čaká na auto (fáza 1 dokončená)
+    buildCost = null // Pole resources s amount - určuje dobu trvania animácie
   } = params
+  
+  // Vypočítame dobu animácie na základe buildCost
+  const BUILDING_ANIMATION_DURATION = calculateAnimationDuration(buildCost)
+  const totalBuildAmount = buildCost ? buildCost.reduce((sum, item) => sum + (item.amount || 0), 0) : 0
+  console.log(`🏗️ Animácia stavby [${row}, ${col}]: trvanie ${BUILDING_ANIMATION_DURATION}ms (buildCost total: ${totalBuildAmount})`)
   
   // Kontrolný objekt pre pause/resume
   const animationControl = {
     isPaused: false,
     _tween: null,
     _hasPaused: false,
+    _buildingData: { buildCost }, // Uložíme buildCost pre prístup z PhaserCanvas
     pause() {
       if (this._tween && !this.isPaused) {
         this._tween.pause()
@@ -205,6 +272,25 @@ export function startBuildingAnimation(scene, params) {
     constructionEffects.setDepth(buildingSprite.depth + 0.2)
   }
   
+  // === PIE CHART PROGRESS BAR ===
+  const pieChartRadius = Math.max(8, Math.min(14, targetWidth * 0.12))
+  const pieChartX = buildingSprite.x
+  const pieChartY = finalY - spriteHeight - pieChartRadius - 4 // Nad budovou
+  
+  let pieChartGraphics = null
+  let pieChartVisible = false // Zobrazíme až od fázy 2 (keď príde auto)
+  
+  // Vytvoríme pie chart graphics
+  pieChartGraphics = scene.add.graphics()
+  pieChartGraphics.setDepth(999999) // Najvyšší depth - vždy nad všetkým
+  pieChartGraphics.setAlpha(0) // Skrytý na začiatku
+  
+  // Fáza 1 je od 0 do diamondHeight/2 v hodnotách height
+  // Fáza 2+ je od diamondHeight/2 do spriteHeight
+  // Progress bar sleduje fázu 2+ (od príchodu auta)
+  const phase2StartHeight = diamondHeight / 2
+  const phase2TotalHeight = spriteHeight - phase2StartHeight
+  
   // Animujeme výšku masky od 0 po plnú výšku
   const mainTween = scene.tweens.addCounter({
     from: 0,
@@ -240,6 +326,34 @@ export function startBuildingAnimation(scene, params) {
           buildingSprite.x,
           finalY - height
         )
+      }
+      
+      // === PIE CHART PROGRESS BAR UPDATE ===
+      if (pieChartGraphics) {
+        if (height >= phase2StartHeight) {
+          // Zobrazíme pie chart od fázy 2
+          if (!pieChartVisible) {
+            pieChartVisible = true
+            pieChartGraphics.setAlpha(1)
+          }
+          
+          // Progress od 0 do 1 počas fázy 2+
+          const phase2Progress = Math.min(1, (height - phase2StartHeight) / phase2TotalHeight)
+          
+          // Pozícia pie chartu sa posúva s vrchom budovy
+          const currentPieY = finalY - height - pieChartRadius - 4
+          
+          drawPieChart(
+            pieChartGraphics,
+            pieChartX,
+            currentPieY,
+            pieChartRadius,
+            phase2Progress,
+            0x333333,  // bgColor - tmavosivá
+            0x44cc44,  // fgColor - zelená
+            0xffffff   // outlineColor - biela
+          )
+        }
       }
       
       // Animujeme masky construct sprite-ov
@@ -383,6 +497,12 @@ export function startBuildingAnimation(scene, params) {
       if (shadowSprites[tempBuildingKey]) {
         delete shadowSprites[tempBuildingKey]
         redrawShadowsAround(row, col)
+      }
+      
+      // Cleanup pie chart
+      if (pieChartGraphics) {
+        pieChartGraphics.destroy()
+        pieChartGraphics = null
       }
       
       // Cleanup construct sprite-ov (presunutý sem z delayedCall aby rešpektoval pauzy)

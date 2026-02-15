@@ -2333,6 +2333,7 @@ class IsoScene extends Phaser.Scene {
             row,
             col,
             createConstructionDustEffect: (cx, cy, cw, ch) => this.createConstructionDustEffect(cx, cy, cw, ch),
+            buildCost: buildingData?.buildCost || null,
             waitForCar: hasCars,
             onWaitingForCar: () => {
               // Animácia dosiahla koniec fázy 1 a je SKUTOČNE pozastavená
@@ -2464,7 +2465,11 @@ class IsoScene extends Phaser.Scene {
             animationControl.resume()
             
             // Auto sa vráti na cestu po dokončení animácie
-            const remainingTime = 8000
+            // Čas = súčet buildCost amounts v sekundách (rovnaký ako doba animácie fázy 2+)
+            const buildCost = animationControl._buildingData?.buildCost
+            const totalAmount = buildCost ? buildCost.reduce((sum, item) => sum + (item.amount || 0), 0) : 0
+            const remainingTime = totalAmount > 0 ? Math.max(totalAmount * 1000, 3000) : 8000
+            console.log(`🚗 Auto čaká ${remainingTime}ms pri budove [${row}, ${col}] (buildCost total: ${totalAmount})`)
             this.time.delayedCall(remainingTime, () => {
               dispatch.returnCar()
             })
