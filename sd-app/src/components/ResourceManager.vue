@@ -21,6 +21,7 @@ const addResource = () => {
     id: Date.now().toString(),
     name: newResourceName.value.trim(),
     amount: 0,
+    weight: 0, // Váha resource
     icon: null, // Base64 ikonka
     workResource: false, // Či je to work resource
     vehicleAnimation: false, // Či je to vehicle animation
@@ -56,6 +57,14 @@ const updateResourceAmount = (id, amount) => {
   const resource = resources.value.find(r => r.id === id)
   if (resource) {
     resource.amount = Number(amount) || 0
+    emitUpdate()
+  }
+}
+
+const updateResourceWeight = (id, weight) => {
+  const resource = resources.value.find(r => r.id === id)
+  if (resource) {
+    resource.weight = Number(weight) || 0
     emitUpdate()
   }
 }
@@ -221,13 +230,28 @@ const togglePersonAnimation = (id) => {
                 />
                 <span class="work-label">🧑 Person</span>
               </label>
-              <input
-                type="number"
-                :value="resource.amount"
-                @input="updateResourceAmount(resource.id, $event.target.value)"
-                class="amount-input"
-                min="0"
-              />
+              <div class="number-inputs-group">
+                <div class="input-wrapper">
+                  <label class="input-label">Amount</label>
+                  <input
+                    type="number"
+                    :value="resource.amount"
+                    @input="updateResourceAmount(resource.id, $event.target.value)"
+                    class="amount-input"
+                    min="0"
+                  />
+                </div>
+                <div class="input-wrapper">
+                  <label class="input-label">Weight</label>
+                  <input
+                    type="number"
+                    :value="resource.weight"
+                    @input="updateResourceWeight(resource.id, $event.target.value)"
+                    class="amount-input"
+                    min="0"
+                  />
+                </div>
+              </div>
               <button 
                 @click="deleteResource(resource.id)" 
                 class="btn-delete"
@@ -521,6 +545,25 @@ const togglePersonAnimation = (id) => {
 
 .person-toggle:has(.work-checkbox:checked) .work-label {
   color: #f59e0b;
+}
+
+.number-inputs-group {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.input-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .amount-input {
