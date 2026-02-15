@@ -150,6 +150,10 @@ class IsoScene extends Phaser.Scene {
     
     // CarManager pre správu áut
     this.carManager = null
+    
+    // Fronta pre sekvenčné spracovanie car dispatchov
+    this.carDispatchQueue = []
+    this.isProcessingCarDispatch = false
   }
 
   preload() {
@@ -2331,8 +2335,18 @@ class IsoScene extends Phaser.Scene {
             createConstructionDustEffect: (cx, cy, cw, ch) => this.createConstructionDustEffect(cx, cy, cw, ch),
             waitForCar: hasCars,
             onWaitingForCar: () => {
-              // Animácia dosiahla koniec fázy 1 a čaká na auto
+              // Animácia dosiahla koniec fázy 1 a je SKUTOČNE pozastavená
+              // Teraz je správny moment na vyhľadanie a dispatchovanie auta
               emit('building-state-changed', { row, col, state: 'waiting' })
+              
+              // Pridáme do dispatch fronty AŽ TERAZ (animácia je zaručene pozastavená)
+              this.carDispatchQueue.push({
+                row,
+                col,
+                animationControl: animResult.animationControl
+              })
+              console.log(`📋 Budova [${row}, ${col}] čaká na auto - pridaná do dispatch fronty (celkom: ${this.carDispatchQueue.length})`)
+              this.processNextCarDispatch()
             },
             onAnimationComplete: () => {
               // Animácia je kompletne dokončená - oznámime GameView
@@ -2342,44 +2356,6 @@ class IsoScene extends Phaser.Scene {
           })
           constructSprites = animResult.constructSprites
           animationControl = animResult.animationControl
-          
-          // Ak čakáme na auto, dispatchneme najbližšie auto k budove
-          if (hasCars && animationControl) {
-            const carResult = findNearestCar(this.carManager.cars, row, col, cellImages)
-            if (carResult) {
-              const dispatch = dispatchCarToBuilding(
-                this,
-                carResult.car,
-                carResult.path,
-                carResult.nearestRoad,
-                row,
-                col,
-                {
-                  onArrive: () => {
-                    // Auto prišlo - obnovíme animáciu stavby
-                    console.log(`🚗✅ Auto dorazilo k budove [${row}, ${col}] - obnovujem animáciu`)
-                    emit('building-state-changed', { row, col, state: 'building' })
-                    animationControl.resume()
-                    
-                    // Auto sa vráti na cestu po dokončení animácie
-                    // Zostávajúci čas = celkový - čas fázy 1
-                    const remainingTime = 8000 // ~80% z 10s animácie zostáva po fáze 1
-                    this.time.delayedCall(remainingTime, () => {
-                      dispatch.returnCar()
-                    })
-                  },
-                  moveSpeed: 400,
-                  carManager: this.carManager
-                }
-              )
-            } else {
-              // Žiadne auto nenájdené - pokračuj normálne
-              console.log(`⚠️ Žiadne auto nenájdené pre budovu [${row}, ${col}] - animácia pokračuje`)
-              if (animationControl.isPaused) {
-                animationControl.resume()
-              }
-            }
-          }
         }
         
         // Vytvor shadowInfo len ak nemá dontDropShadow flag
@@ -2446,6 +2422,76 @@ class IsoScene extends Phaser.Scene {
     })
     
     this.load.start()
+  }
+
+  /**
+   * Sekvenčné spracovanie car dispatch fronty
+   * Vyhľadávanie najbližšieho auta pre ďalšiu budovu
+   * začne až keď je predchádzajúce auto označené ako dispatched.
+   * Animácia budovy je ZARUČENE pozastavená keď sa request spracuje.
+   */
+  processNextCarDispatch() {
+    // Ak už spracovávame, nič nerobíme - zavolá sa znova po dokončení
+    if (this.isProcessingCarDispatch) return
+    
+    // Ak je fronta prázdna, koniec
+    if (this.carDispatchQueue.length === 0) return
+    
+    this.isProcessingCarDispatch = true
+    
+    // Vyberieme prvý request z fronty
+    const request = this.carDispatchQueue.shift()
+    const { row, col, animationControl } = request
+    
+    console.log(`🔄 Spracovávam dispatch pre budovu [${row}, ${col}], zostáva vo fronte: ${this.carDispatchQueue.length}`)
+    
+    // Nájdeme najbližšie auto (teraz je bezpečné - predchádzajúce auto je už dispatched)
+    const carResult = findNearestCar(this.carManager.cars, row, col, cellImages)
+    
+    if (carResult) {
+      const dispatch = dispatchCarToBuilding(
+        this,
+        carResult.car,
+        carResult.path,
+        carResult.nearestRoad,
+        row,
+        col,
+        {
+          onArrive: () => {
+            // Auto prišlo - obnovíme animáciu stavby (je zaručene pozastavená)
+            console.log(`🚗✅ Auto dorazilo k budove [${row}, ${col}] - obnovujem animáciu`)
+            emit('building-state-changed', { row, col, state: 'building' })
+            animationControl.resume()
+            
+            // Auto sa vráti na cestu po dokončení animácie
+            const remainingTime = 8000
+            this.time.delayedCall(remainingTime, () => {
+              dispatch.returnCar()
+            })
+          },
+          moveSpeed: 400,
+          carManager: this.carManager
+        }
+      )
+      
+      // Auto je teraz dispatched - môžeme spracovať ďalší request
+      this.isProcessingCarDispatch = false
+      // Spracujeme ďalší v nasledujúcom frame aby neblokovalo
+      this.time.delayedCall(0, () => {
+        this.processNextCarDispatch()
+      })
+    } else {
+      // Žiadne auto nenájdené - obnovíme animáciu bez čakania (animácia je pozastavená)
+      console.log(`⚠️ Žiadne auto nenájdené pre budovu [${row}, ${col}] - animácia pokračuje bez auta`)
+      emit('building-state-changed', { row, col, state: 'building' })
+      animationControl.resume()
+      
+      this.isProcessingCarDispatch = false
+      // Skúsime ďalší request
+      this.time.delayedCall(0, () => {
+        this.processNextCarDispatch()
+      })
+    }
   }
 
   createShadowForBuilding(buildingSprite, x, y) {
