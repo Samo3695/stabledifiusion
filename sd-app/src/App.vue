@@ -822,6 +822,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
     image.buildingData = {
       isBuilding: buildingData.isBuilding,
       isCommandCenter: buildingData.isCommandCenter,
+      isPort: buildingData.isPort,
       canBuildOnlyInDestination: buildingData.canBuildOnlyInDestination,
       destinationTiles: buildingData.destinationTiles,
       buildingName: buildingData.buildingName,
@@ -831,6 +832,8 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       operationalCost: buildingData.operationalCost,
       production: buildingData.production,
       stored: buildingData.stored,
+      allowedResources: buildingData.allowedResources,
+      portCapacity: buildingData.portCapacity,
       hasSmokeEffect: buildingData.hasSmokeEffect,
       smokeSpeed: buildingData.smokeSpeed,
       smokeScale: buildingData.smokeScale,

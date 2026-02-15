@@ -69,6 +69,7 @@ const carsPerPlacement = ref(props.carSpawnCount) // Počet áut na jedno umiest
 // Building data
 const isBuilding = ref(false)
 const isCommandCenter = ref(false) // Či je budova command center
+const isPort = ref(false) // Či je budova prístav
 const canBuildOnlyInDestination = ref(false) // Či sa môže stavať len v destination tiles
 const destinationTiles = ref([]) // Pole destination tiles [{row, col}]
 const isSettingDestination = ref(false) // Či práve nastavujeme destination
@@ -89,6 +90,9 @@ const hasFlyAwayEffect = ref(false) // Či budova má fly-away efekt
 const lightBlinkSpeed = ref(1) // Rýchlosť blikania svetla (0.1 - 10)
 const lightColor = ref('#ffff00') // Farba svetla (hex)
 const lightSize = ref(1) // Veľkosť svetla (0.1 - 5)
+const allowedResources = ref([]) // [{resourceId, resourceName}] - povolené resources pre port
+const portCapacity = ref(0) // Kapacita portu
+const selectedAllowedResource = ref('')
 const selectedBuildResource = ref('')
 const selectedOperationalResource = ref('')
 const selectedProductionResource = ref('')
@@ -315,6 +319,7 @@ const saveBuildingData = () => {
     const buildingData = {
       isBuilding: isBuilding.value,
       isCommandCenter: isCommandCenter.value,
+      isPort: isPort.value,
       canBuildOnlyInDestination: canBuildOnlyInDestination.value,
       destinationTiles: destinationTiles.value,
       buildingName: buildingName.value,
@@ -324,6 +329,8 @@ const saveBuildingData = () => {
       operationalCost: operationalCost.value,
       production: production.value,
       stored: stored.value,
+      allowedResources: allowedResources.value,
+      portCapacity: portCapacity.value,
       hasSmokeEffect: hasSmokeEffect.value,
       smokeSpeed: smokeSpeed.value,
       smokeScale: smokeScale.value,
@@ -346,7 +353,7 @@ const saveBuildingData = () => {
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, canBuildOnlyInDestination, destinationTiles, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, hasFlyAwayEffect, lightBlinkSpeed, lightColor, lightSize], () => {
+watch([isBuilding, isCommandCenter, isPort, canBuildOnlyInDestination, destinationTiles, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, allowedResources, portCapacity, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, hasFlyAwayEffect, lightBlinkSpeed, lightColor, lightSize], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -438,6 +445,7 @@ const openModal = (image) => {
   if (image.buildingData) {
     isBuilding.value = image.buildingData.isBuilding || false
     isCommandCenter.value = image.buildingData.isCommandCenter || false
+    isPort.value = image.buildingData.isPort || false
     canBuildOnlyInDestination.value = image.buildingData.canBuildOnlyInDestination || false
     destinationTiles.value = image.buildingData.destinationTiles || []
     buildingName.value = image.buildingData.buildingName || ''
@@ -447,6 +455,8 @@ const openModal = (image) => {
     operationalCost.value = image.buildingData.operationalCost || []
     production.value = image.buildingData.production || []
     stored.value = image.buildingData.stored || []
+    allowedResources.value = image.buildingData.allowedResources || []
+    portCapacity.value = image.buildingData.portCapacity || 0
     hasSmokeEffect.value = image.buildingData.hasSmokeEffect === true
     smokeSpeed.value = image.buildingData.smokeSpeed || 1
     smokeScale.value = image.buildingData.smokeScale || 1
@@ -461,6 +471,7 @@ const openModal = (image) => {
   } else {
     isBuilding.value = false
     isCommandCenter.value = false
+    isPort.value = false
     canBuildOnlyInDestination.value = false
     destinationTiles.value = []
     buildingName.value = ''
@@ -470,6 +481,8 @@ const openModal = (image) => {
     operationalCost.value = []
     production.value = []
     stored.value = []
+    allowedResources.value = []
+    portCapacity.value = 0
     hasSmokeEffect.value = false
     smokeSpeed.value = 1
     smokeScale.value = 1
@@ -487,6 +500,7 @@ const closeModal = () => {
   selectedImage.value = null
   isBuilding.value = false
   isCommandCenter.value = false
+  isPort.value = false
   canBuildOnlyInDestination.value = false
   destinationTiles.value = []
   isSettingDestination.value = false
@@ -497,6 +511,8 @@ const closeModal = () => {
   operationalCost.value = []
   production.value = []
   stored.value = []
+  allowedResources.value = []
+  portCapacity.value = 0
   hasSmokeEffect.value = false
   smokeSpeed.value = 1
   smokeScale.value = 1
@@ -615,6 +631,25 @@ const addStoredResource = () => {
   })
   selectedStoredResource.value = ''
   storedAmount.value = 1
+}
+
+const addAllowedResource = () => {
+  if (!selectedAllowedResource.value) return
+  const resource = props.resources.find(r => r.id === selectedAllowedResource.value)
+  if (!resource) return
+  
+  // Skontroluj duplicitu
+  if (allowedResources.value.some(r => r.resourceId === resource.id)) return
+  
+  allowedResources.value.push({
+    resourceId: resource.id,
+    resourceName: resource.name
+  })
+  selectedAllowedResource.value = ''
+}
+
+const removeAllowedResource = (index) => {
+  allowedResources.value.splice(index, 1)
 }
 
 const removeStoredResource = (index) => {
@@ -959,6 +994,11 @@ defineExpose({
                   <span>Is Command Center</span>
                 </label>
                 
+                <label v-if="isBuilding" class="building-checkbox" style="margin-top: 0.5rem;">
+                  <input type="checkbox" v-model="isPort" />
+                  <span>Is Port</span>
+                </label>
+                
                 <div v-if="isBuilding" class="destination-controls" style="margin-top: 0.75rem;">
                   <label class="building-checkbox">
                     <input type="checkbox" v-model="canBuildOnlyInDestination" />
@@ -1190,65 +1230,107 @@ defineExpose({
                   </div>
                 </div>
 
-                <!-- Produce -->
-                <div class="building-subsection">
-                  <h4>📦 Produkuje (Produce)</h4>
-                  <div class="resource-input-group">
-                    <select v-model="selectedProductionResource" class="resource-select">
-                      <option value="">Vyberte resource...</option>
-                      <option v-for="resource in resources" :key="resource.id" :value="resource.id">
-                        {{ resource.name }}
-                      </option>
-                    </select>
-                    <input 
-                      v-model.number="productionAmount" 
-                      type="number" 
-                      min="1" 
-                      placeholder="Počet"
-                      class="amount-input"
-                    />
-                    <button @click="addProductionResource" class="btn-add-resource" type="button">
-                      ➕
-                    </button>
-                  </div>
-                  <div v-if="production.length > 0" class="resource-list">
-                    <div v-for="(item, index) in production" :key="index" class="resource-item">
-                      <span class="resource-name">{{ item.resourceName }}</span>
-                      <span class="resource-amount">× {{ item.amount }}</span>
-                      <button @click="removeProductionResource(index)" class="btn-remove" type="button">✕</button>
+                <!-- Port sekcie (Allowed Resources + Capacity) -->
+                <template v-if="isPort">
+                  <!-- Allowed Resources -->
+                  <div class="building-subsection">
+                    <h4>🚢 Allowed Resources</h4>
+                    <div class="resource-input-group">
+                      <select v-model="selectedAllowedResource" class="resource-select">
+                        <option value="">Vyberte resource...</option>
+                        <option v-for="resource in resources" :key="resource.id" :value="resource.id">
+                          {{ resource.name }}
+                        </option>
+                      </select>
+                      <button @click="addAllowedResource" class="btn-add-resource" type="button">
+                        ➕
+                      </button>
+                    </div>
+                    <div v-if="allowedResources.length > 0" class="resource-list">
+                      <div v-for="(item, index) in allowedResources" :key="index" class="resource-item">
+                        <span class="resource-name">{{ item.resourceName }}</span>
+                        <button @click="removeAllowedResource(index)" class="btn-remove" type="button">✕</button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <!-- Stored -->
-                <div class="building-subsection">
-                  <h4>🏚️ Skladované (Stored)</h4>
-                  <div class="resource-input-group">
-                    <select v-model="selectedStoredResource" class="resource-select">
-                      <option value="">Vyberte resource...</option>
-                      <option v-for="resource in resources" :key="resource.id" :value="resource.id">
-                        {{ resource.name }}
-                      </option>
-                    </select>
-                    <input 
-                      v-model.number="storedAmount" 
-                      type="number" 
-                      min="1" 
-                      placeholder="Počet"
-                      class="amount-input"
-                    />
-                    <button @click="addStoredResource" class="btn-add-resource" type="button">
-                      ➕
-                    </button>
-                  </div>
-                  <div v-if="stored.length > 0" class="resource-list">
-                    <div v-for="(item, index) in stored" :key="index" class="resource-item">
-                      <span class="resource-name">{{ item.resourceName }}</span>
-                      <span class="resource-amount">× {{ item.amount }}</span>
-                      <button @click="removeStoredResource(index)" class="btn-remove" type="button">✕</button>
+                  <!-- Port Capacity -->
+                  <div class="building-subsection">
+                    <h4>📊 Capacity</h4>
+                    <div class="building-name-input">
+                      <input 
+                        v-model.number="portCapacity" 
+                        type="number" 
+                        min="0" 
+                        placeholder="Kapacita portu"
+                        class="name-input"
+                      />
                     </div>
                   </div>
-                </div>
+                </template>
+
+                <!-- Non-port sekcie (Produce + Stored) -->
+                <template v-else>
+                  <!-- Produce -->
+                  <div class="building-subsection">
+                    <h4>📦 Produkuje (Produce)</h4>
+                    <div class="resource-input-group">
+                      <select v-model="selectedProductionResource" class="resource-select">
+                        <option value="">Vyberte resource...</option>
+                        <option v-for="resource in resources" :key="resource.id" :value="resource.id">
+                          {{ resource.name }}
+                        </option>
+                      </select>
+                      <input 
+                        v-model.number="productionAmount" 
+                        type="number" 
+                        min="1" 
+                        placeholder="Počet"
+                        class="amount-input"
+                      />
+                      <button @click="addProductionResource" class="btn-add-resource" type="button">
+                        ➕
+                      </button>
+                    </div>
+                    <div v-if="production.length > 0" class="resource-list">
+                      <div v-for="(item, index) in production" :key="index" class="resource-item">
+                        <span class="resource-name">{{ item.resourceName }}</span>
+                        <span class="resource-amount">× {{ item.amount }}</span>
+                        <button @click="removeProductionResource(index)" class="btn-remove" type="button">✕</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Stored -->
+                  <div class="building-subsection">
+                    <h4>🏚️ Skladované (Stored)</h4>
+                    <div class="resource-input-group">
+                      <select v-model="selectedStoredResource" class="resource-select">
+                        <option value="">Vyberte resource...</option>
+                        <option v-for="resource in resources" :key="resource.id" :value="resource.id">
+                          {{ resource.name }}
+                        </option>
+                      </select>
+                      <input 
+                        v-model.number="storedAmount" 
+                        type="number" 
+                        min="1" 
+                        placeholder="Počet"
+                        class="amount-input"
+                      />
+                      <button @click="addStoredResource" class="btn-add-resource" type="button">
+                        ➕
+                      </button>
+                    </div>
+                    <div v-if="stored.length > 0" class="resource-list">
+                      <div v-for="(item, index) in stored" :key="index" class="resource-item">
+                        <span class="resource-name">{{ item.resourceName }}</span>
+                        <span class="resource-amount">× {{ item.amount }}</span>
+                        <button @click="removeStoredResource(index)" class="btn-remove" type="button">✕</button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </div>
             </div>
 

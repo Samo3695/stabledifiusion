@@ -993,6 +993,38 @@ class IsoScene extends Phaser.Scene {
     }
   }
 
+  // Spustí fly-away efekt podľa row/col (wrapper pre volanie z vonku)
+  triggerFlyAwayEffect(row, col) {
+    let key = `${row}-${col}`
+    const originCellData = cellImages[key]
+    if (originCellData?.isSecondary) {
+      row = originCellData.originRow
+      col = originCellData.originCol
+      key = `${row}-${col}`
+    }
+    const buildingSprite = this.buildingSprites[key]
+    if (!buildingSprite) {
+      console.warn('⚠️ triggerFlyAwayEffect: buildingSprite nenájdený pre', key)
+      return
+    }
+    // Ak už beží fly-away, zastav ho a resetni pozíciu pred novým spustením
+    if (this.flyAwayEffects && this.flyAwayEffects[key]) {
+      const effect = this.flyAwayEffects[key]
+      effect?.tween?.stop()
+      if (effect?.sprite && effect?.originalY !== undefined) {
+        effect.sprite.y = effect.originalY
+      }
+      const shadowInfo = this.shadowSprites[key]
+      if (shadowInfo) {
+        shadowInfo.alpha = 1
+        shadowInfo.scaleMultiplier = 1
+        this.redrawAllShadows()
+      }
+      delete this.flyAwayEffects[key]
+    }
+    this.startFlyAwayEffect(key, buildingSprite)
+  }
+
   // Spustí fly-away efekt (5s: 2.5s hore, 2.5s späť)
   startFlyAwayEffect(key, buildingSprite) {
     if (this.flyAwayEffects[key]) return
@@ -3169,6 +3201,10 @@ defineExpose({
   hideProductionEffects: (row, col) => {
     mainScene?.hideProductionEffects(row, col)
   },
+  // Spustí fly-away efekt pre budovu
+  triggerFlyAwayEffect: (row, col) => {
+    mainScene?.triggerFlyAwayEffect(row, col)
+  },
   // Zobrazí ikony work-force alokácií na canvase
   showWorkforceAllocations: (positions) => {
     mainScene?.showWorkforceAllocations(positions)
@@ -3208,6 +3244,95 @@ defineExpose({
       const [row, col] = randomKey.split('-').map(Number)
       mainScene.createPersonsAt(row, col, 1)
     }
+  },
+  // Spawn cars na road tiles vedľa konkrétnej budovy
+  spawnCarsOnAdjacentRoads: (buildingRow, buildingCol, totalCount, cellsX = 1, cellsY = 1) => {
+    if (!mainScene || !mainScene.carManager || totalCount <= 0) return
+    // Nájdi všetky bunky budovy
+    const buildingCells = new Set()
+    for (let dy = 0; dy < cellsY; dy++) {
+      for (let dx = 0; dx < cellsX; dx++) {
+        buildingCells.add(`${buildingRow + dy}-${buildingCol + dx}`)
+      }
+    }
+    // Nájdi susedné road tiles - postupne rozširuj radius ak nenájde
+    let adjacentRoads = []
+    const maxSearchRadius = 5
+    for (let radius = 1; radius <= maxSearchRadius && adjacentRoads.length === 0; radius++) {
+      for (let dy = -radius; dy < cellsY + radius; dy++) {
+        for (let dx = -radius; dx < cellsX + radius; dx++) {
+          const r = buildingRow + dy
+          const c = buildingCol + dx
+          const k = `${r}-${c}`
+          if (buildingCells.has(k)) continue
+          const cell = cellImages[k]
+          if (cell && cell.isRoadTile && !cell.isSecondary) {
+            adjacentRoads.push({ row: r, col: c })
+          }
+        }
+      }
+      if (adjacentRoads.length > 0) {
+        console.log(`🚗 Nájdené ${adjacentRoads.length} road tiles v radius ${radius} od budovy [${buildingRow},${buildingCol}]`)
+      }
+    }
+    if (adjacentRoads.length === 0) {
+      console.warn('⚠️ Žiadne road tiles v dosahu pre spawn cars pri budove', buildingRow, buildingCol)
+      return
+    }
+    // Vyber najbližšiu road tile k stredu budovy
+    const centerRow = buildingRow + (cellsY - 1) / 2
+    const centerCol = buildingCol + (cellsX - 1) / 2
+    let nearest = adjacentRoads[0]
+    let minDist = Math.abs(nearest.row - centerRow) + Math.abs(nearest.col - centerCol)
+    for (let i = 1; i < adjacentRoads.length; i++) {
+      const dist = Math.abs(adjacentRoads[i].row - centerRow) + Math.abs(adjacentRoads[i].col - centerCol)
+      if (dist < minDist) { minDist = dist; nearest = adjacentRoads[i] }
+    }
+    console.log(`🚗 Port: Spawning ${totalCount} cars na najbližšej road tile [${nearest.row},${nearest.col}]`)
+    mainScene.createCarsAt(nearest.row, nearest.col, totalCount)
+  },
+  // Spawn persons pred konkrétnou budovou
+  spawnPersonsAtBuilding: (buildingRow, buildingCol, totalCount, cellsX = 1, cellsY = 1) => {
+    if (!mainScene || !mainScene.personManager || totalCount <= 0) return
+    // Nájdi susedné road tiles - postupne rozširuj radius ak nenájde
+    let adjacentRoads = []
+    const maxSearchRadius = 5
+    for (let radius = 1; radius <= maxSearchRadius && adjacentRoads.length === 0; radius++) {
+      for (let dy = -radius; dy < cellsY + radius; dy++) {
+        for (let dx = -radius; dx < cellsX + radius; dx++) {
+          const r = buildingRow + dy
+          const c = buildingCol + dx
+          if (dy >= 0 && dy < cellsY && dx >= 0 && dx < cellsX) continue
+          const k = `${r}-${c}`
+          const cell = cellImages[k]
+          if (cell && cell.isRoadTile && !cell.isSecondary) {
+            adjacentRoads.push({ row: r, col: c })
+          }
+        }
+      }
+      if (adjacentRoads.length > 0) {
+        console.log(`🚶 Nájdené ${adjacentRoads.length} road tiles v radius ${radius} od budovy [${buildingRow},${buildingCol}]`)
+      }
+    }
+    // Ak nie sú road tiles, spawn priamo pred budovu (spodný riadok + 1)
+    if (adjacentRoads.length === 0) {
+      const spawnRow = buildingRow + cellsY
+      const spawnCol = buildingCol
+      console.log(`🚶 Port: Žiadne cesty v dosahu, spawn ${totalCount} persons priamo pred budovu [${spawnRow}, ${spawnCol}]`)
+      mainScene.createPersonsAt(spawnRow, spawnCol, totalCount)
+      return
+    }
+    // Vyber najbližšiu road tile k stredu budovy
+    const centerRow = buildingRow + (cellsY - 1) / 2
+    const centerCol = buildingCol + (cellsX - 1) / 2
+    let nearest = adjacentRoads[0]
+    let minDist = Math.abs(nearest.row - centerRow) + Math.abs(nearest.col - centerCol)
+    for (let i = 1; i < adjacentRoads.length; i++) {
+      const dist = Math.abs(adjacentRoads[i].row - centerRow) + Math.abs(adjacentRoads[i].col - centerCol)
+      if (dist < minDist) { minDist = dist; nearest = adjacentRoads[i] }
+    }
+    console.log(`🚶 Port: Spawning ${totalCount} persons na najbližšej road tile [${nearest.row},${nearest.col}]`)
+    mainScene.createPersonsAt(nearest.row, nearest.col, totalCount)
   }
 })
 

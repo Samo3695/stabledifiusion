@@ -60,6 +60,9 @@ const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybran
 const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
 const showBuildingModal = ref(false) // Či sa má zobraziť modal s metadátami budovy
 const clickedBuilding = ref(null) // Údaje o kliknutej budove
+const portPayload = ref([]) // Payload pre port budovu: [{resourceId, resourceName, amount}]
+const selectedPayloadResource = ref('') // Vybraná resource pre payload
+const payloadAmount = ref(1) // Množstvo pre payload
 const showInsufficientResourcesModal = ref(false) // Modal pre nedostatok resources
 const insufficientResourcesData = ref({ 
   buildingName: '',
@@ -99,6 +102,29 @@ const currentBuildingAnimState = computed(() => {
   if (!clickedBuilding.value) return null
   const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
   return animatingBuildings.value.get(key) || null
+})
+
+// Computed property pre aktuálnu váhu payloadu v porte (súčet weight * amount)
+const currentPortWeight = computed(() => {
+  let totalWeight = 0
+  for (const item of portPayload.value) {
+    const res = resources.value.find(r => r.id === item.resourceId)
+    const weight = res ? (Number(res.weight) || 0) : 0
+    totalWeight += weight * item.amount
+  }
+  return totalWeight
+})
+
+// Computed property pre maximálnu kapacitu portu
+const portMaxCapacity = computed(() => {
+  if (!clickedBuilding.value) return 0
+  return Number(clickedBuilding.value.portCapacity) || 0
+})
+
+// Computed property pre percentuálne naplnenie portu
+const portFillPercent = computed(() => {
+  if (portMaxCapacity.value <= 0) return 0
+  return Math.min(100, (currentPortWeight.value / portMaxCapacity.value) * 100)
 })
 
 // Computed properties pre usedResources a producedResources - používa resourceCalculator service
@@ -617,6 +643,9 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
     image.buildingData = {
       isBuilding: buildingData.isBuilding,
       isCommandCenter: buildingData.isCommandCenter,
+      isPort: buildingData.isPort,
+      canBuildOnlyInDestination: buildingData.canBuildOnlyInDestination,
+      destinationTiles: buildingData.destinationTiles,
       buildingName: buildingData.buildingName,
       buildingSize: buildingData.buildingSize,
       dontDropShadow: buildingData.dontDropShadow,
@@ -624,6 +653,8 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
       operationalCost: buildingData.operationalCost,
       production: buildingData.production,
       stored: buildingData.stored,
+      allowedResources: buildingData.allowedResources,
+      portCapacity: buildingData.portCapacity,
       hasSmokeEffect: buildingData.hasSmokeEffect,
       smokeSpeed: buildingData.smokeSpeed,
       smokeScale: buildingData.smokeScale,
@@ -677,6 +708,7 @@ const startAutoProductionForBuilding = (row, col) => {
     row, col,
     buildingName: bd.buildingName,
     isCommandCenter: bd.isCommandCenter || false,
+    isPort: bd.isPort || false,
     operationalCost: bd.operationalCost || [],
     production: bd.production || [],
     stored: bd.stored || []
@@ -885,6 +917,7 @@ const handleCanvasUpdated = () => {
             col,
             buildingName: bd.buildingName,
             isCommandCenter: bd.isCommandCenter || false,
+            isPort: bd.isPort || false,
             operationalCost: bd.operationalCost || [],
             production: bd.production || [],
             stored: bd.stored || []
@@ -1169,6 +1202,50 @@ const handleBuildingConstructionComplete = ({ row, col }) => {
 const closeBuildingModal = () => {
   showBuildingModal.value = false
   clickedBuilding.value = null
+  portPayload.value = []
+  selectedPayloadResource.value = ''
+  payloadAmount.value = 1
+}
+
+// Pridanie resource do payloadu portu
+const addPortPayload = () => {
+  if (!selectedPayloadResource.value || payloadAmount.value <= 0) return
+  
+  const res = resources.value.find(r => r.id === selectedPayloadResource.value)
+  if (!res) return
+  
+  const weight = Number(res.weight) || 0
+  const addedWeight = weight * payloadAmount.value
+  
+  // Kontrola či sa zmestí do kapacity
+  if (currentPortWeight.value + addedWeight > portMaxCapacity.value) {
+    console.log(`⚠️ Port payload: nedostatok kapacity. Aktuálne: ${currentPortWeight.value}, pridávam: ${addedWeight}, max: ${portMaxCapacity.value}`)
+    return
+  }
+  
+  // Kontrola či existuje v allowedResources
+  const allowed = clickedBuilding.value.allowedResources || []
+  if (!allowed.some(a => a.resourceId === selectedPayloadResource.value)) return
+  
+  // Ak už existuje v payload, pridaj k existujúcemu
+  const existing = portPayload.value.find(p => p.resourceId === selectedPayloadResource.value)
+  if (existing) {
+    existing.amount += payloadAmount.value
+  } else {
+    portPayload.value.push({
+      resourceId: selectedPayloadResource.value,
+      resourceName: res.name,
+      amount: payloadAmount.value
+    })
+  }
+  
+  // Reset
+  payloadAmount.value = 1
+}
+
+// Odobranie resource z payloadu portu
+const removePortPayload = (index) => {
+  portPayload.value.splice(index, 1)
 }
 
 // Zastaviť auto produkciu pre konkrétnu budovu
@@ -1419,6 +1496,107 @@ const startProduction = () => {
   executeProduction(clickedBuilding.value, resources.value, storedResources.value)
 }
 
+// Spustenie port produkcie - odpočíta operational cost a pridá payload resources do hráčových zdrojov
+const startPortProduction = () => {
+  if (!clickedBuilding.value) return
+  if (!checkProductionResources(clickedBuilding.value, resources.value)) return
+  if (portPayload.value.length === 0) {
+    console.log('⚠️ Port payload je prázdny, nie je čo produkovať')
+    return
+  }
+
+  // Odpočítaj operational cost (work-force sa preskakuje)
+  const operationalCost = clickedBuilding.value.operationalCost || []
+  operationalCost.forEach(cost => {
+    const resource = resources.value.find(r => r.id === cost.resourceId)
+    if (resource) {
+      if (resource.workResource) {
+        console.log(`👷 Work force ${resource.name} preskočená - je alokovaná na úrovni produkcie`)
+        return
+      }
+      resource.amount -= cost.amount
+      console.log(`⚙️ Port: Odpočítané prevádzkové náklady: ${cost.amount}x ${resource.name}, zostatok: ${resource.amount}`)
+    }
+  })
+
+  // Pridaj payload resources do hráčových zdrojov
+  portPayload.value.forEach(item => {
+    const resource = resources.value.find(r => r.id === item.resourceId)
+    if (resource) {
+      resource.amount += item.amount
+      console.log(`🚢 Port produkcia: +${item.amount}x ${resource.name}, nový zostatok: ${resource.amount}`)
+    } else {
+      console.warn(`⚠️ Resource ${item.resourceName} (${item.resourceId}) neexistuje v zozname resources`)
+    }
+  })
+
+  console.log('✅ Port produkcia dokončená! Payload vyčistený.')
+
+  // Ulož spawn dáta z payloadu pred vyčistením
+  const spawnData = { cars: 0, persons: 0 }
+  portPayload.value.forEach(item => {
+    const res = resources.value.find(r => r.id === item.resourceId)
+    if (res) {
+      if (res.vehicleAnimation) spawnData.cars += item.amount
+      if (res.personAnimation) spawnData.persons += item.amount
+    }
+  })
+
+  // Vyčisti payload po produkcii
+  portPayload.value = []
+
+  // Spusti efekty budovy
+  const row = clickedBuilding.value.row
+  const col = clickedBuilding.value.col
+  const hasFlyAway = !!clickedBuilding.value.hasFlyAwayEffect
+  const cellsX = clickedBuilding.value.buildingSize?.x || 1
+  const cellsY = clickedBuilding.value.buildingSize?.y || 1
+
+  // Najprv vyčisti existujúce efekty
+  canvasRef.value?.hideProductionEffects(row, col)
+
+  // Po krátkom oneskorení spusti všetky efekty nanovo
+  setTimeout(() => {
+    // Fly-away efekt (ak ho budova má)
+    if (hasFlyAway) {
+      canvasRef.value?.triggerFlyAwayEffect(row, col)
+      // Smoke efekty - fly-away onComplete ich sám vyčistí po návrate
+      canvasRef.value?.showProductionEffects(row, col)
+
+      // Po dokončení fly-away animácie (5s + 600ms buffer) spawn cars/persons
+      setTimeout(() => {
+        if (spawnData.cars > 0) {
+          console.log(`🚗 Port: Spawning ${spawnData.cars} cars po fly-away`)
+          canvasRef.value?.spawnCarsOnAdjacentRoads(row, col, spawnData.cars, cellsX, cellsY)
+        }
+        if (spawnData.persons > 0) {
+          console.log(`🚶 Port: Spawning ${spawnData.persons} persons po fly-away`)
+          canvasRef.value?.spawnPersonsAtBuilding(row, col, spawnData.persons, cellsX, cellsY)
+        }
+      }, 5600)
+    } else {
+      // Bez fly-away - dočasný smoke/light flash na 3 sekundy
+      canvasRef.value?.showProductionEffects(row, col)
+      setTimeout(() => {
+        canvasRef.value?.hideProductionEffects(row, col)
+
+        // Spawn cars/persons po skončení efektu
+        if (spawnData.cars > 0) {
+          console.log(`🚗 Port: Spawning ${spawnData.cars} cars po produkcii`)
+          canvasRef.value?.spawnCarsOnAdjacentRoads(row, col, spawnData.cars, cellsX, cellsY)
+        }
+        if (spawnData.persons > 0) {
+          console.log(`🚶 Port: Spawning ${spawnData.persons} persons po produkcii`)
+          canvasRef.value?.spawnPersonsAtBuilding(row, col, spawnData.persons, cellsX, cellsY)
+        }
+      }, 3000)
+    }
+  }, 100)
+
+  // Zatvor modálne okno pri port budovách
+  closeBuildingModal()
+}
+
 // Handler pre zníženie resource na kapacitu po odpočítavaní
 const handleReduceToCapacity = (resourceId) => {
   const resource = resources.value.find(r => r.id === resourceId)
@@ -1598,6 +1776,10 @@ const handleShowAllocations = (resourceId) => {
             <span class="info-label">Typ:</span>
             <span class="info-value command-center-badge">🏛️ Command Center</span>
           </div>
+          <div v-if="clickedBuilding.isPort" class="info-row">
+            <span class="info-label">Typ:</span>
+            <span class="info-value port-badge">🚢 Port</span>
+          </div>
         </div>
         
         <!-- Build Cost -->
@@ -1627,6 +1809,117 @@ const handleShowAllocations = (resourceId) => {
           </div>
         </div>
         
+        <!-- PORT: Payload a Capacity -->
+        <template v-if="clickedBuilding.isPort">
+          <!-- Capacity Progress Bar -->
+          <div class="building-info-section">
+            <h3>📊 Kapacita portu</h3>
+            <div class="port-capacity-section">
+              <div class="port-capacity-bar-container">
+                <div 
+                  class="port-capacity-bar-fill" 
+                  :style="{ width: portFillPercent + '%' }"
+                  :class="{ 'near-full': portFillPercent > 80, 'full': portFillPercent >= 100 }"
+                ></div>
+              </div>
+              <div class="port-capacity-text">
+                {{ currentPortWeight }} / {{ portMaxCapacity }} ({{ Math.round(portFillPercent) }}%)
+              </div>
+            </div>
+          </div>
+          
+          <!-- Payload sekcia -->
+          <div class="building-info-section">
+            <h3>📦 Payload</h3>
+            
+            <!-- Pridanie do payloadu -->
+            <div class="payload-add-section">
+              <select v-model="selectedPayloadResource" class="payload-select">
+                <option value="" disabled>Vyber resource...</option>
+                <option 
+                  v-for="ar in (clickedBuilding.allowedResources || [])" 
+                  :key="ar.resourceId" 
+                  :value="ar.resourceId"
+                >
+                  {{ ar.resourceName }}
+                </option>
+              </select>
+              <input 
+                type="number" 
+                v-model.number="payloadAmount" 
+                min="1" 
+                class="payload-amount-input"
+                placeholder="Množstvo"
+              />
+              <button 
+                class="payload-add-button" 
+                @click="addPortPayload"
+                :disabled="!selectedPayloadResource || payloadAmount <= 0 || portFillPercent >= 100"
+              >
+                ➕ Pridať
+              </button>
+            </div>
+            
+            <!-- Zoznam payloadu -->
+            <div v-if="portPayload.length > 0" class="payload-list">
+              <div v-for="(item, index) in portPayload" :key="index" class="payload-item">
+                <span class="payload-resource-name">{{ item.resourceName }}</span>
+                <span class="payload-resource-amount">× {{ item.amount }}</span>
+                <span class="payload-resource-weight">
+                  (⚖️ {{ (resources.find(r => r.id === item.resourceId)?.weight || 0) * item.amount }})
+                </span>
+                <button class="payload-remove-button" @click="removePortPayload(index)">✕</button>
+              </div>
+            </div>
+            <p v-else class="payload-empty">Žiadny náklad</p>
+          </div>
+          
+          <!-- Port Production Controls - len jednorázový cyklus, bez auto -->
+          <div v-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
+            <template v-if="currentBuildingAnimState === 'waiting'">
+              <h3>🚚 Čaká na pracovnú silu...</h3>
+              <div class="build-in-progress">
+                <div class="build-progress-animation waiting">
+                  <div class="build-progress-bar waiting-bar"></div>
+                </div>
+                <p class="build-progress-text">Čaká sa na príchod pracovnej sily.</p>
+              </div>
+            </template>
+            <template v-else-if="currentBuildingAnimState === 'building'">
+              <h3>🏗️ Stavba prebieha...</h3>
+              <div class="build-in-progress">
+                <div class="build-progress-animation">
+                  <div class="build-progress-bar"></div>
+                </div>
+                <p class="build-progress-text">Budova sa stavia.</p>
+              </div>
+            </template>
+            <template v-else>
+              <h3>⚙️ Ovládanie portu</h3>
+              <div class="production-controls">
+                <button 
+                  class="production-button"
+                  :class="{ disabled: !canStartProduction() || portPayload.length === 0 }"
+                  :disabled="!canStartProduction() || portPayload.length === 0"
+                  @click="startPortProduction"
+                >
+                  <span v-if="!canStartProduction()">⛔ Nedostatok resources</span>
+                  <span v-else-if="portPayload.length === 0">📦 Prázdny payload</span>
+                  <span v-else>▶️ Štart</span>
+                </button>
+              </div>
+              <p v-if="!canStartProduction()" class="production-warning">
+                ⚠️ Nemáte dostatok resources na prevádzku!
+              </p>
+              <p v-else-if="portPayload.length === 0" class="production-warning">
+                📦 Pridajte resources do payloadu pred spustením.
+              </p>
+            </template>
+          </div>
+        </template>
+        
+        <!-- NORMÁLNA BUDOVA: Stored, Production, Production Controls -->
+        <template v-else>
         <!-- Stored (Sklad) -->
         <div v-if="clickedBuilding.stored && clickedBuilding.stored.length > 0" class="building-info-section">
           <h3>🏪 Skladovacia kapacita</h3>
@@ -1713,6 +2006,7 @@ const handleShowAllocations = (resourceId) => {
             </p>
           </template>
         </div>
+        </template>
       </div>
     </Modal>
     
@@ -2068,6 +2362,157 @@ header {
   border-radius: 20px;
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+.port-badge {
+  background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
+  color: white;
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+/* Port Capacity Bar */
+.port-capacity-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.port-capacity-bar-container {
+  width: 100%;
+  height: 20px;
+  background: #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #d1d5db;
+}
+
+.port-capacity-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  border-radius: 10px;
+  transition: width 0.3s ease;
+}
+
+.port-capacity-bar-fill.near-full {
+  background: linear-gradient(90deg, #f59e0b, #d97706);
+}
+
+.port-capacity-bar-fill.full {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+}
+
+.port-capacity-text {
+  text-align: center;
+  font-size: 0.85rem;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+/* Payload Section */
+.payload-add-section {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  align-items: center;
+}
+
+.payload-select {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: white;
+}
+
+.payload-amount-input {
+  width: 70px;
+  padding: 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.payload-add-button {
+  padding: 0.5rem 0.75rem;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 0.2s;
+}
+
+.payload-add-button:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.payload-add-button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.payload-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.payload-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.payload-resource-name {
+  flex: 1;
+  font-weight: 600;
+  color: #1e40af;
+}
+
+.payload-resource-amount {
+  color: #475569;
+  font-weight: 500;
+}
+
+.payload-resource-weight {
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.payload-remove-button {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+}
+
+.payload-remove-button:hover {
+  background: #fecaca;
+}
+
+.payload-empty {
+  text-align: center;
+  color: #9ca3af;
+  font-style: italic;
+  font-size: 0.85rem;
+  padding: 0.5rem 0;
 }
 
 .resource-list {
