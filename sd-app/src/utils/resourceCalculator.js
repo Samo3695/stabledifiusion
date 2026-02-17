@@ -74,8 +74,11 @@ export function calculateStoredResources(canvasImagesMap, images, buildingProduc
     const buildingData = canvasItem.buildingData || image?.buildingData
     if (!buildingData || !buildingData.isBuilding) return
 
-    // Započítaj stored capacity vždy (aj keď je produkcia vypnutá)
-    // Kapacita skladu existuje bez ohľadu na to či budova produkuje
+    // Započítaj stored capacity len pre budovy, ktoré sú v prevádzke (auto produkcia zapnutá)
+    // Ak budova nie je v prevádzke, jej skladovací priestor sa nepočíta
+    const productionState = buildingProductionStates[key]
+    if (!productionState || !productionState.enabled) return
+
     const buildingStored = buildingData.stored || []
     buildingStored.forEach(s => {
       if (!stored[s.resourceId]) stored[s.resourceId] = 0

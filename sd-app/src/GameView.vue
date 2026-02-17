@@ -56,6 +56,7 @@ const animatingBuildings = ref(new Map()) // Budovy aktuálne v stavebnej animá
 const BUILDING_ANIMATION_DURATION = 10000 // ms - musí byť rovnaká ako v buildingAnimationService.js
 const pendingBuildAllocations = ref({}) // Čakajúce alokácie work-force pre budovy v animácii: { 'row-col': allocatedWorkItems }
 const buildingWorkerCount = ref({}) // Počet pracovníkov na stavbe: { 'row-col': count }
+const stoppedByResources = ref({}) // Budovy zastavené kvôli nedostatku surovín: { 'row-col': { row, col, buildingData } }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
 const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybranú budovu
 const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
@@ -218,6 +219,55 @@ watch(roadTiles, (newTiles, oldTiles) => {
     if (oldOpacity !== newOpacity && canvasRef.value) {
       regenerateRoadTilesOnCanvas(canvasRef.value, newTiles)
     }
+  }
+}, { deep: true })
+
+// Watch na resources - automatický reštart budov zastavených kvôli nedostatku surovín
+watch(resources, () => {
+  const stoppedKeys = Object.keys(stoppedByResources.value)
+  if (stoppedKeys.length === 0) return
+  
+  for (const key of stoppedKeys) {
+    const { row, col, buildingData } = stoppedByResources.value[key]
+    
+    // Skontroluj či budova ešte existuje na canvase
+    if (!canvasImagesMap.value[key]) {
+      delete stoppedByResources.value[key]
+      continue
+    }
+    
+    // Skontroluj či už nemá spustenú produkciu (medzitým manuálne)
+    if (buildingProductionStates.value[key]?.enabled) {
+      delete stoppedByResources.value[key]
+      continue
+    }
+    
+    // Skontroluj či sú teraz suroviny dostupné (non-work resources)
+    if (!checkProductionResources(buildingData, resources.value)) {
+      continue
+    }
+    
+    // Skontroluj workforce
+    let hasEnoughWorkforce = true
+    const operationalCost = buildingData.operationalCost || []
+    operationalCost.forEach(cost => {
+      const resource = resources.value.find(r => r.id === cost.resourceId)
+      if (resource && resource.workResource && resource.amount < cost.amount) {
+        hasEnoughWorkforce = false
+      }
+    })
+    
+    if (!hasEnoughWorkforce) continue
+    
+    // Suroviny sú dostupné - reštartuj produkciu
+    console.log(`🔄 Auto-restart produkcie pre budovu na [${row}, ${col}] - suroviny sú zas dostupné`)
+    delete stoppedByResources.value[key]
+    
+    // Skry warning indikátor
+    canvasRef.value?.hideWarningIndicator(row, col)
+    
+    // Spusti produkciu
+    startAutoProductionForBuilding(row, col)
   }
 }, { deep: true })
 
@@ -620,6 +670,9 @@ const handleLoadProject = async (projectData) => {
                   }
                   delete buildingProductionStates.value[key]
                   canvasRef.value?.hideAutoProductionIndicator(row, col)
+                  // Zaregistruj budovu na auto-restart keď budú suroviny dostupné
+                  stoppedByResources.value[key] = { row, col, buildingData: state.buildingData }
+                  console.log(`🔄 Budova na [${row}, ${col}] zaregistrovaná na auto-restart`)
                 }
               }, 5000)
               
@@ -741,6 +794,9 @@ const handleCommandCenterSelected = (selectedImageId) => {
 // Spusti auto produkciu pre konkrétnu budovu (volaná po dokončení stavebnej animácie)
 const startAutoProductionForBuilding = (row, col) => {
   const key = `${row}-${col}`
+  
+  // Odstráň z auto-restart sledovania (ak bola zastavená kvôli resources a teraz sa reštartuje)
+  delete stoppedByResources.value[key]
   
   // Skontroluj či budova ešte existuje na canvase a nemá zapnutú produkciu
   const mapData = canvasImagesMap.value[key]
@@ -872,6 +928,9 @@ const startAutoProductionForBuilding = (row, col) => {
       }
       delete buildingProductionStates.value[key]
       canvasRef.value?.hideAutoProductionIndicator(row, col)
+      // Zaregistruj budovu na auto-restart keď budú suroviny dostupné
+      stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
+      console.log(`🔄 Budova na [${row}, ${col}] zaregistrovaná na auto-restart`)
     }
   }, 5000)
   
@@ -1119,6 +1178,9 @@ const handleCanvasUpdated = () => {
               }
               delete buildingProductionStates.value[key]
               canvasRef.value?.hideAutoProductionIndicator(row, col)
+              // Zaregistruj budovu na auto-restart keď budú suroviny dostupné
+              stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
+              console.log(`🔄 Budova na [${row}, ${col}] zaregistrovaná na auto-restart`)
             }
           }, 5000)
           
@@ -1252,6 +1314,8 @@ const handleBuildingDeleted = ({ row, col, buildingData }) => {
     // Odstráň z animujúcich budov
     animatingBuildings.value.delete(key)
     delete buildingWorkerCount.value[key] // Vyčisti worker count
+    // Odstráň z auto-restart sledovania pri zmazaní budovy
+    delete stoppedByResources.value[key]
   }
 }
 
@@ -1510,6 +1574,12 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   // Reset progress
   productionProgress.value[key] = 0
   
+  // Zaregistruj budovu na auto-restart ak bola zastavená kvôli resources
+  if (reason === 'resources' && buildingData) {
+    stoppedByResources.value[key] = { row, col, buildingData }
+    console.log(`🔄 Budova na [${row}, ${col}] zaregistrovaná na auto-restart`)
+  }
+  
   // Zobraz warning indikátor podľa dôvodu zastavenia
   if (reason === 'resources') {
     // Získaj zoznam chýbajúcich surovín
@@ -1539,6 +1609,8 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   } else {
     // Manuálne zastavenie - skry indikátor
     canvasRef.value?.hideWarningIndicator(row, col)
+    // Odstráň z auto-restart sledovania pri manuálnom zastavení
+    delete stoppedByResources.value[key]
   }
   
   // Vymazať stav budovy
