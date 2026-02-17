@@ -134,8 +134,12 @@ export function startBuildingAnimation(scene, params) {
   const animationControl = {
     isPaused: false,
     _tween: null,
-    _hasPaused: false,
+    _phase: 1, // 1 = fáza 1 (0.png), 2 = fáza 2 (stavba)
+    _waitingForPhase2: false, // Čaká sa na auto pred spustením fázy 2
+    _startPhase2: null, // Funkcia na spustenie fázy 2
     _buildingData: { buildCost }, // Uložíme buildCost pre prístup z PhaserCanvas
+    _workerCount: 1, // Počet pracovníkov na stavbe
+    _dispatches: [], // Pole dispatch objektov (cars) pri stavbe
     pause() {
       if (this._tween && !this.isPaused) {
         this._tween.pause()
@@ -144,11 +148,30 @@ export function startBuildingAnimation(scene, params) {
       }
     },
     resume() {
-      if (this._tween && this.isPaused) {
+      if (this._waitingForPhase2) {
+        // Fáza 1 dokončená, spúšťame fázu 2
+        this._waitingForPhase2 = false
+        this.isPaused = false
+        if (this._startPhase2) this._startPhase2()
+        console.log(`▶️ Animácia stavby obnovená pre [${row}, ${col}] - štart fázy 2`)
+      } else if (this._tween && this.isPaused) {
         this._tween.resume()
         this.isPaused = false
         console.log(`▶️ Animácia stavby obnovená pre [${row}, ${col}]`)
       }
+    },
+    /**
+     * Nastaví počet pracovníkov a upravia rýchlosť animácie
+     * 1 worker = základná rýchlosť, 2 = 2x rýchlejsie, 3 = 3x rýchlejsie atď.
+     * Ovplyvňuje len fázu 2 (skutočná stavba)
+     * @param {number} count - Počet pracovníkov
+     */
+    setWorkerCount(count) {
+      this._workerCount = Math.max(1, count)
+      if (this._tween && this._phase === 2) {
+        this._tween.setTimeScale(this._workerCount)
+      }
+      console.log(`👷 Stavba [${row}, ${col}]: ${this._workerCount} pracovníkov, rýchlosť ${this._workerCount}x`)
     }
   }
   
@@ -295,242 +318,271 @@ export function startBuildingAnimation(scene, params) {
   const phase2StartHeight = diamondHeight / 2
   const phase2TotalHeight = spriteHeight - phase2StartHeight
   
-  // Animujeme výšku masky od 0 po plnú výšku
-  const mainTween = scene.tweens.addCounter({
-    from: 0,
-    to: spriteHeight,
-    duration: BUILDING_ANIMATION_DURATION,
-    ease: 'Linear',
-    onUpdate: (tween) => {
-      const height = tween.getValue()
-      
-      // Ak čakáme na auto a dosiahli sme koniec fázy 1 - pozastavíme okamžite
-      if (waitForCar && !animationControl._hasPaused && height >= diamondHeight / 2) {
-        animationControl._hasPaused = true
-        // Pauza priamo v tomto frame - tween.pause() funguje aj v onUpdate
-        tween.pause()
-        animationControl.isPaused = true
-        console.log(`⏸️ Animácia stavby pozastavená pre [${row}, ${col}] na výške ${height.toFixed(1)}`)
-        // Oznámime že animácia čaká na auto
-        if (onWaitingForCar) onWaitingForCar()
-      }
-      
-      maskShape.clear()
-      maskShape.fillStyle(0xffffff)
-      maskShape.fillRect(
-        buildingSprite.x - buildingSprite.displayWidth / 2,
-        finalY - height,
-        buildingSprite.displayWidth,
-        height
+  // === SPOLOČNÁ FUNKCIA PRE AKTUALIZÁCIU ANIMÁCIE ===
+  // Volá sa z oboch fáz tweenu s aktuálnou hodnotou výšky
+  function updateAnimationHeight(height) {
+    maskShape.clear()
+    maskShape.fillStyle(0xffffff)
+    maskShape.fillRect(
+      buildingSprite.x - buildingSprite.displayWidth / 2,
+      finalY - height,
+      buildingSprite.displayWidth,
+      height
+    )
+    
+    // Posúvame efekty dymu/prachu s hornou hranou masky
+    if (constructionEffects) {
+      constructionEffects.setPosition(
+        buildingSprite.x,
+        finalY - height
       )
-      
-      // Posúvame efekty dymu/prachu s hornou hranou masky
-      if (constructionEffects) {
-        constructionEffects.setPosition(
-          buildingSprite.x,
-          finalY - height
+    }
+    
+    // === PIE CHART PROGRESS BAR UPDATE ===
+    if (pieChartGraphics) {
+      if (height >= phase2StartHeight) {
+        // Zobrazíme pie chart od fázy 2
+        if (!pieChartVisible) {
+          pieChartVisible = true
+          pieChartGraphics.setAlpha(1)
+        }
+        
+        // Progress od 0 do 1 počas fázy 2+
+        const phase2Progress = Math.min(1, (height - phase2StartHeight) / phase2TotalHeight)
+        
+        // Pozícia pie chartu sa posúva s vrchom budovy
+        const currentPieY = finalY - height - pieChartRadius - 4
+        
+        drawPieChart(
+          pieChartGraphics,
+          pieChartX,
+          currentPieY,
+          pieChartRadius,
+          phase2Progress,
+          0x333333,  // bgColor - tmavosivá
+          0x44cc44,  // fgColor - zelená
+          0xffffff   // outlineColor - biela
         )
       }
-      
-      // === PIE CHART PROGRESS BAR UPDATE ===
-      if (pieChartGraphics) {
-        if (height >= phase2StartHeight) {
-          // Zobrazíme pie chart od fázy 2
-          if (!pieChartVisible) {
-            pieChartVisible = true
-            pieChartGraphics.setAlpha(1)
-          }
-          
-          // Progress od 0 do 1 počas fázy 2+
-          const phase2Progress = Math.min(1, (height - phase2StartHeight) / phase2TotalHeight)
-          
-          // Pozícia pie chartu sa posúva s vrchom budovy
-          const currentPieY = finalY - height - pieChartRadius - 4
-          
-          drawPieChart(
-            pieChartGraphics,
-            pieChartX,
-            currentPieY,
-            pieChartRadius,
-            phase2Progress,
-            0x333333,  // bgColor - tmavosivá
-            0x44cc44,  // fgColor - zelená
-            0xffffff   // outlineColor - biela
+    }
+    
+    // Animujeme masky construct sprite-ov
+    if (!dontDropShadow) {
+      constructMasks.forEach(maskInfo => {
+        let currentHeight = 0
+        
+        const constructPhase3Start = dontDropShadow 
+          ? spriteHeight - diamondHeight / 0.5
+          : spriteHeight - diamondHeight / 1.2
+        
+        if (height >= diamondHeight / 2 && height < constructPhase3Start) {
+          const constructAnimDuration = constructPhase3Start - diamondHeight / 2
+          const progressInConstruct = (height - diamondHeight / 2) / constructAnimDuration
+          currentHeight = progressInConstruct * maskInfo.height
+        } else if (height >= constructPhase3Start) {
+          const phase3Duration = spriteHeight - constructPhase3Start
+          const phase3Progress = (height - constructPhase3Start) / phase3Duration
+          currentHeight = maskInfo.height * (1 - phase3Progress)
+        }
+        
+        const maskTopY = finalY - height
+        const maskBottomY = maskInfo.initialY
+        const actualMaskHeight = Math.min(currentHeight, maskBottomY - maskTopY)
+        
+        maskInfo.shape.clear()
+        maskInfo.shape.fillStyle(0xffffff)
+        if (actualMaskHeight > 0) {
+          maskInfo.shape.fillRect(
+            maskInfo.sprite.x - maskInfo.sprite.displayWidth / 2,
+            maskBottomY - actualMaskHeight,
+            maskInfo.sprite.displayWidth,
+            actualMaskHeight
           )
         }
-      }
-      
-      // Animujeme masky construct sprite-ov
-      if (!dontDropShadow) {
-        constructMasks.forEach(maskInfo => {
-          let currentHeight = 0
+      })
+    }
+    
+    // 3 fázy pohybu tempSprite:
+    if (tempSprite && tempSpriteMaskShape) {
+      // Pre budovy s dontDropShadow: len fáza 1 a fáza 3 (bez pohybu hore)
+      if (dontDropShadow) {
+        // Fáza 1: Vykresľovanie masky 0.png zdola hore do plnej výšky
+        if (height < spriteHeight - diamondHeight / 2.2) {
+          tempSprite.y = tempSpriteInitialY
           
-          const constructPhase3Start = dontDropShadow 
-            ? spriteHeight - diamondHeight / 0.5
-            : spriteHeight - diamondHeight / 1.2
+          const tempPhase1Duration = spriteHeight - diamondHeight / 2.2
+          const tempPhase1Progress = height / tempPhase1Duration
+          const tempMaskHeight = tempPhase1Progress * tempSpriteHeight
           
-          if (height >= diamondHeight / 2 && height < constructPhase3Start) {
-            const constructAnimDuration = constructPhase3Start - diamondHeight / 2
-            const progressInConstruct = (height - diamondHeight / 2) / constructAnimDuration
-            currentHeight = progressInConstruct * maskInfo.height
-          } else if (height >= constructPhase3Start) {
-            const phase3Duration = spriteHeight - constructPhase3Start
-            const phase3Progress = (height - constructPhase3Start) / phase3Duration
-            currentHeight = maskInfo.height * (1 - phase3Progress)
-          }
-          
-          const maskTopY = finalY - height
-          const maskBottomY = maskInfo.initialY
-          const actualMaskHeight = Math.min(currentHeight, maskBottomY - maskTopY)
-          
-          maskInfo.shape.clear()
-          maskInfo.shape.fillStyle(0xffffff)
-          if (actualMaskHeight > 0) {
-            maskInfo.shape.fillRect(
-              maskInfo.sprite.x - maskInfo.sprite.displayWidth / 2,
-              maskBottomY - actualMaskHeight,
-              maskInfo.sprite.displayWidth,
-              actualMaskHeight
-            )
-          }
-        })
-      }
-      
-      // 3 fázy pohybu tempSprite:
-      if (tempSprite && tempSpriteMaskShape) {
-        // Pre budovy s dontDropShadow: len fáza 1 a fáza 3 (bez pohybu hore)
-        if (dontDropShadow) {
-          // Fáza 1: Vykresľovanie masky 0.png zdola hore do plnej výšky
-          if (height < spriteHeight - diamondHeight / 2.2) {
-            tempSprite.y = tempSpriteInitialY
-            
-            const phase1Duration = spriteHeight - diamondHeight / 2.2
-            const phase1Progress = height / phase1Duration
-            const tempMaskHeight = phase1Progress * tempSpriteHeight
-            
-            drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
-          }
-          // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
-          else {
-            tempSprite.y = tempSpriteInitialY
-            
-            const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
-            const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
-            const newBottomY = tempSpriteInitialY - (tempSpriteHeight - remainingMaskHeight)
-            
-            drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
-          }
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
         }
-        // Pre normálne budovy: všetky 3 fázy
+        // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
         else {
-          // Fáza 1: Vykresľovanie masky 0.png zdola hore kým maska nedosiahne diamondHeight / 2
-          if (height < diamondHeight / 2) {
-            tempSprite.y = tempSpriteInitialY
-            
-            const tempMaskHeight = (height / (diamondHeight / 2)) * tempSpriteHeight
-            drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
-            
-            if (shadowSprites[tempBuildingKey]) {
-              shadowSprites[tempBuildingKey].scaleMultiplier = 0
-            }
-            if (shadowSprites[gridKey]) {
-              shadowSprites[gridKey].scaleMultiplier = 0
-            }
+          tempSprite.y = tempSpriteInitialY
+          
+          const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
+          const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
+          const newBottomY = tempSpriteInitialY - (tempSpriteHeight - remainingMaskHeight)
+          
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
+        }
+      }
+      // Pre normálne budovy: všetky 3 fázy
+      else {
+        // Fáza 1: Vykresľovanie masky 0.png zdola hore kým maska nedosiahne diamondHeight / 2
+        if (height < diamondHeight / 2) {
+          tempSprite.y = tempSpriteInitialY
+          
+          const tempMaskHeight = (height / (diamondHeight / 2)) * tempSpriteHeight
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
+          
+          if (shadowSprites[tempBuildingKey]) {
+            shadowSprites[tempBuildingKey].scaleMultiplier = 0
           }
-          // Fáza 2: Pohyb hore kým nie je diamondHeight / 2.2 od vrchu obrázka
-          else if (height < spriteHeight - diamondHeight / 2.2) {
-            const traveledHeight = height - diamondHeight / 2
-            tempSprite.y = tempSpriteInitialY - traveledHeight
-            
-            drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSprite.y, tempSprite.displayWidth, tempSpriteHeight, tempSpriteHeight)
-            
-            const phase2Duration = (spriteHeight - diamondHeight / 2.2) - diamondHeight / 2
-            const phase2Progress = (height - diamondHeight / 2) / phase2Duration
-            if (shadowSprites[tempBuildingKey]) {
-              shadowSprites[tempBuildingKey].scaleMultiplier = phase2Progress
-              shadowSprites[tempBuildingKey].y = tempSprite.y
-            }
-            if (shadowSprites[gridKey]) {
-              shadowSprites[gridKey].scaleMultiplier = phase2Progress
-            }
-            redrawShadowsAround(row, col)
+          if (shadowSprites[gridKey]) {
+            shadowSprites[gridKey].scaleMultiplier = 0
           }
-          // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
-          else {
-            const finalTempY = tempSpriteInitialY - (spriteHeight - diamondHeight / 2.2 - diamondHeight / 2)
-            tempSprite.y = finalTempY
-            
-            const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
-            const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
-            const newBottomY = finalTempY - (tempSpriteHeight - remainingMaskHeight)
-            
-            drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
-            
-            if (shadowSprites[tempBuildingKey]) {
-              shadowSprites[tempBuildingKey].scaleMultiplier = 1
-              shadowSprites[tempBuildingKey].y = finalTempY
-            }
-            if (shadowSprites[gridKey]) {
-              shadowSprites[gridKey].scaleMultiplier = 1
-            }
+        }
+        // Fáza 2: Pohyb hore kým nie je diamondHeight / 2.2 od vrchu obrázka
+        else if (height < spriteHeight - diamondHeight / 2.2) {
+          const traveledHeight = height - diamondHeight / 2
+          tempSprite.y = tempSpriteInitialY - traveledHeight
+          
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSprite.y, tempSprite.displayWidth, tempSpriteHeight, tempSpriteHeight)
+          
+          const tempPhase2Duration = (spriteHeight - diamondHeight / 2.2) - diamondHeight / 2
+          const tempPhase2Progress = (height - diamondHeight / 2) / tempPhase2Duration
+          if (shadowSprites[tempBuildingKey]) {
+            shadowSprites[tempBuildingKey].scaleMultiplier = tempPhase2Progress
+            shadowSprites[tempBuildingKey].y = tempSprite.y
+          }
+          if (shadowSprites[gridKey]) {
+            shadowSprites[gridKey].scaleMultiplier = tempPhase2Progress
+          }
+          redrawShadowsAround(row, col)
+        }
+        // Fáza 3: Stojí a maska mizne zhora dole (opačný smer)
+        else {
+          const finalTempY = tempSpriteInitialY - (spriteHeight - diamondHeight / 2.2 - diamondHeight / 2)
+          tempSprite.y = finalTempY
+          
+          const phase3Progress = (height - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
+          const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
+          const newBottomY = finalTempY - (tempSpriteHeight - remainingMaskHeight)
+          
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
+          
+          if (shadowSprites[tempBuildingKey]) {
+            shadowSprites[tempBuildingKey].scaleMultiplier = 1
+            shadowSprites[tempBuildingKey].y = finalTempY
+          }
+          if (shadowSprites[gridKey]) {
+            shadowSprites[gridKey].scaleMultiplier = 1
           }
         }
       }
-    },
+    }
+  }
+  
+  // === CLEANUP FUNKCIA PO DOKONČENÍ CELEJ ANIMÁCIE ===
+  function cleanupAnimation() {
+    // Odstránime masku po dokončení
+    buildingSprite.clearMask(true)
+    
+    // Zastavíme a odstránime časticový efekt
+    if (constructionEffects) {
+      constructionEffects.stop()
+      scene.time.delayedCall(2000, () => {
+        constructionEffects.destroy()
+      })
+    }
+    
+    // Cleanup tempSprite
+    if (tempSprite) {
+      tempSprite.destroy()
+      tempSprite = null
+    }
+    if (tempSpriteMaskShape) {
+      tempSpriteMaskShape.destroy()
+      tempSpriteMaskShape = null
+    }
+    if (shadowSprites[tempBuildingKey]) {
+      delete shadowSprites[tempBuildingKey]
+    }
+    
+    // Uistíme sa že hlavný tieň má scaleMultiplier=1 po dokončení animácie
+    if (shadowSprites[gridKey]) {
+      shadowSprites[gridKey].scaleMultiplier = 1
+    }
+    
+    // Vždy prekreslíme tiene po dokončení animácie
+    redrawShadowsAround(row, col)
+    
+    // Cleanup pie chart
+    if (pieChartGraphics) {
+      pieChartGraphics.destroy()
+      pieChartGraphics = null
+    }
+    
+    // Cleanup construct sprite-ov
+    constructSprites.forEach(sprite => {
+      if (sprite) sprite.destroy()
+    })
+    constructMasks.forEach(maskInfo => {
+      if (maskInfo.shape) maskInfo.shape.destroy()
+    })
+    
+    // Oznámime že animácia je kompletne dokončená
+    if (onAnimationComplete) onAnimationComplete()
+  }
+  
+  // === FÁZA 2: SKUTOČNÁ STAVBA (spustí sa po fáze 1 alebo po príchode auta) ===
+  const phase1Height = diamondHeight / 2
+  
+  function startPhase2Fn() {
+    animationControl._phase = 2
+    const phase2Tween = scene.tweens.addCounter({
+      from: phase1Height,
+      to: spriteHeight,
+      duration: BUILDING_ANIMATION_DURATION,
+      ease: 'Linear',
+      onUpdate: (tween) => updateAnimationHeight(tween.getValue()),
+      onComplete: cleanupAnimation
+    })
+    animationControl._tween = phase2Tween
+    // Aplikuj aktuálny worker count timeScale
+    if (animationControl._workerCount > 1) {
+      phase2Tween.setTimeScale(animationControl._workerCount)
+    }
+    console.log(`🏗️ Fáza 2 stavby [${row}, ${col}] spustená: ${BUILDING_ANIMATION_DURATION}ms, ${animationControl._workerCount}x rýchlosť`)
+  }
+  animationControl._startPhase2 = startPhase2Fn
+  
+  // === FÁZA 1: RÝCHLE OBJAVENIE 0.PNG (< 1 sekunda) ===
+  const PHASE1_DURATION = 800 // ms - rýchla fáza 1
+  
+  const phase1Tween = scene.tweens.addCounter({
+    from: 0,
+    to: phase1Height,
+    duration: PHASE1_DURATION,
+    ease: 'Linear',
+    onUpdate: (tween) => updateAnimationHeight(tween.getValue()),
     onComplete: () => {
-      // Odstránime masku po dokončení
-      buildingSprite.clearMask(true)
-      
-      // Zastavíme a odstránime časticový efekt
-      if (constructionEffects) {
-        constructionEffects.stop()
-        scene.time.delayedCall(2000, () => {
-          constructionEffects.destroy()
-        })
+      if (waitForCar) {
+        // Fáza 1 dokončená, čakáme na príchod auta
+        animationControl.isPaused = true
+        animationControl._waitingForPhase2 = true
+        console.log(`⏸️ Fáza 1 dokončená, čaká sa na auto pre [${row}, ${col}]`)
+        if (onWaitingForCar) onWaitingForCar()
+      } else {
+        // Bez čakania na auto - hneď spustíme fázu 2
+        startPhase2Fn()
       }
-      
-      // Cleanup tempSprite (presunutý sem z delayedCall aby rešpektoval pauzy)
-      if (tempSprite) {
-        tempSprite.destroy()
-        tempSprite = null
-      }
-      if (tempSpriteMaskShape) {
-        tempSpriteMaskShape.destroy()
-        tempSpriteMaskShape = null
-      }
-      if (shadowSprites[tempBuildingKey]) {
-        delete shadowSprites[tempBuildingKey]
-      }
-      
-      // Uistíme sa že hlavný tieň má scaleMultiplier=1 po dokončení animácie
-      if (shadowSprites[gridKey]) {
-        shadowSprites[gridKey].scaleMultiplier = 1
-      }
-      
-      // Vždy prekreslíme tiene po dokončení animácie
-      redrawShadowsAround(row, col)
-      
-      // Cleanup pie chart
-      if (pieChartGraphics) {
-        pieChartGraphics.destroy()
-        pieChartGraphics = null
-      }
-      
-      // Cleanup construct sprite-ov (presunutý sem z delayedCall aby rešpektoval pauzy)
-      constructSprites.forEach(sprite => {
-        if (sprite) sprite.destroy()
-      })
-      constructMasks.forEach(maskInfo => {
-        if (maskInfo.shape) maskInfo.shape.destroy()
-      })
-      
-      // Oznámime že animácia je kompletne dokončená
-      if (onAnimationComplete) onAnimationComplete()
     }
   })
   
-  // Uložíme referenciu na tween
-  animationControl._tween = mainTween
+  // Uložíme referenciu na aktuálny tween (fáza 1)
+  animationControl._tween = phase1Tween
   
   // Vrátime construct sprites a animation control
   return { constructSprites, animationControl }

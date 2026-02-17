@@ -55,6 +55,7 @@ const productionProgress = ref({}) // Progress pre každú budovu { 'row-col': 0
 const animatingBuildings = ref(new Map()) // Budovy aktuálne v stavebnej animácii: Map<'row-col', 'waiting'|'building'>
 const BUILDING_ANIMATION_DURATION = 10000 // ms - musí byť rovnaká ako v buildingAnimationService.js
 const pendingBuildAllocations = ref({}) // Čakajúce alokácie work-force pre budovy v animácii: { 'row-col': allocatedWorkItems }
+const buildingWorkerCount = ref({}) // Počet pracovníkov na stavbe: { 'row-col': count }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
 const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybranú budovu
 const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
@@ -102,6 +103,23 @@ const currentBuildingAnimState = computed(() => {
   if (!clickedBuilding.value) return null
   const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
   return animatingBuildings.value.get(key) || null
+})
+
+// Computed property pre počet pracovníkov na aktuálne kliknutej budove
+const currentBuildingWorkers = computed(() => {
+  if (!clickedBuilding.value) return 1
+  const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
+  return buildingWorkerCount.value[key] || 1
+})
+
+// Computed property pre maximálny počet pracovníkov (dostupné + aktuálne alokované)
+const maxBuildingWorkers = computed(() => {
+  const vehicleRes = resources.value.find(r => r.vehicleAnimation)
+  if (!vehicleRes) return 1
+  if (!clickedBuilding.value) return 1
+  const key = `${clickedBuilding.value.row}-${clickedBuilding.value.col}`
+  const currentWorkers = buildingWorkerCount.value[key] || 1
+  return currentWorkers + vehicleRes.amount // dostupné + už alokované
 })
 
 // Computed property pre aktuálnu váhu payloadu v porte (súčet weight * amount)
@@ -287,15 +305,31 @@ const handleCellSelected = ({ row, col }) => {
       // Kontrola resources pre budovy - len ak nie je zapnutý ignore checkbox
       if (!ignoreResourceCheck.value && selectedImage.buildingData && selectedImage.buildingData.isBuilding) {
         const resourceCheck = checkBuildingResources(selectedImage.buildingData)
-        if (!resourceCheck.hasEnough) {
+        
+        // === Kontrola vehicleAnimation resources (cars) ===
+        const hasVehicleResources = resources.value.some(r => r.vehicleAnimation)
+        const availableVehicle = hasVehicleResources ? resources.value.find(r => r.vehicleAnimation && r.amount > 0) : null
+        const missingVehicle = hasVehicleResources && !availableVehicle
+        
+        if (!resourceCheck.hasEnough || missingVehicle) {
           // Zobraz modal s chýbajúcimi resources
+          const missingBuild = [...resourceCheck.missingBuild]
+          if (missingVehicle) {
+            const vehicleRes = resources.value.find(r => r.vehicleAnimation)
+            missingBuild.push({
+              name: vehicleRes.name + ' (vozidlo)',
+              needed: 1,
+              available: 0,
+              isWorkResource: true
+            })
+          }
           insufficientResourcesData.value = {
             buildingName: selectedImage.buildingData.buildingName || 'Budova',
-            missingBuildResources: resourceCheck.missingBuild,
+            missingBuildResources: missingBuild,
             missingOperationalResources: resourceCheck.missingOperational
           }
           showInsufficientResourcesModal.value = true
-          console.log('⛔ GameView: Nedostatok resources:', resourceCheck)
+          console.log('⛔ GameView: Nedostatok resources:', resourceCheck, missingVehicle ? '(žiadne dostupné vozidlo)' : '')
           return // Nezakladať budovu
         }
         
@@ -304,9 +338,32 @@ const handleCellSelected = ({ row, col }) => {
         const col = canvasRef.value ? selectedCell.value.col : 0
         const allocatedWorkItems = deductBuildCost(selectedImage.buildingData, row, col)
         
+        // === Alokácia vehicleAnimation resource (car) pre stavbu ===
+        if (availableVehicle) {
+          availableVehicle.amount -= 1
+          if (!allocatedResources.value[availableVehicle.id]) {
+            allocatedResources.value[availableVehicle.id] = 0
+          }
+          allocatedResources.value[availableVehicle.id] += 1
+          if (!workforceAllocations.value[availableVehicle.id]) {
+            workforceAllocations.value[availableVehicle.id] = []
+          }
+          workforceAllocations.value[availableVehicle.id].push({
+            row, col, amount: 1, type: 'build',
+            buildingName: selectedImage.buildingData.buildingName || 'Budova'
+          })
+          allocatedWorkItems.push({
+            resourceId: availableVehicle.id,
+            amount: 1,
+            resourceName: availableVehicle.name
+          })
+          console.log(`🚗 Alokované vozidlo (build): 1x ${availableVehicle.name} na [${row},${col}], zostatok: ${availableVehicle.amount}`)
+        }
+        
         // Označ budovu ako animujúcu (stav sa upresní cez building-state-changed event)
         const animKey = `${row}-${col}`
         animatingBuildings.value.set(animKey, 'building')
+        buildingWorkerCount.value[animKey] = 1 // Štart s 1 pracovníkom
         console.log(`🏗️ Budova ${animKey} začína stavebnú animáciu`)
         
         // Uložíme alokované work items - budú vrátené keď animácia skutočne dokončí (cez event)
@@ -883,6 +940,18 @@ const handleCanvasUpdated = () => {
           console.log(`⏹️ Auto-produkcia zastavená pre vymazanú budovu na [${row}, ${col}]`)
         }
         
+        // Vrátenie pending build alokácií (vrátane vehicleAnimation resources)
+        const pendingAlloc = pendingBuildAllocations.value[oldKey]
+        if (pendingAlloc && pendingAlloc.length > 0) {
+          returnBuildWorkforce(pendingAlloc, resources.value, allocatedResources.value, workforceAllocations.value, row, col)
+          delete pendingBuildAllocations.value[oldKey]
+          console.log(`🚗 Vrátené pending build alokácie pre vymazanú budovu na [${row}, ${col}]`)
+        }
+        
+        // Odstráň z animujúcich budov
+        animatingBuildings.value.delete(oldKey)
+        delete buildingWorkerCount.value[oldKey] // Vyčisti worker count
+        
         // Skrytie warning indikátora
         canvasRef.value?.hideWarningIndicator(row, col)
         
@@ -1166,9 +1235,23 @@ const handleBuildingClicked = ({ row, col, buildingData }) => {
 }
 
 // Handler pre zmazanie budovy (bulldozer/road delete mode)
-const handleBuildingDeleted = ({ buildingData }) => {
+const handleBuildingDeleted = ({ row, col, buildingData }) => {
   if (buildingData?.isBuilding) {
     refundBuildCostOnDelete(buildingData, resources.value)
+  }
+  
+  // Vrátenie pending build alokácií (vrátane vehicleAnimation resources) ak bola budova v stavbe
+  if (row !== undefined && col !== undefined) {
+    const key = `${row}-${col}`
+    const pendingAlloc = pendingBuildAllocations.value[key]
+    if (pendingAlloc && pendingAlloc.length > 0) {
+      returnBuildWorkforce(pendingAlloc, resources.value, allocatedResources.value, workforceAllocations.value, row, col)
+      delete pendingBuildAllocations.value[key]
+      console.log(`🚗 Vrátené pending build alokácie pre zmazanú budovu na [${row}, ${col}]`)
+    }
+    // Odstráň z animujúcich budov
+    animatingBuildings.value.delete(key)
+    delete buildingWorkerCount.value[key] // Vyčisti worker count
   }
 }
 
@@ -1192,10 +1275,129 @@ const handleBuildingConstructionComplete = ({ row, col }) => {
   
   // Odstráň z animujúcich
   animatingBuildings.value.delete(key)
+  delete buildingWorkerCount.value[key] // Vyčisti worker count
   console.log(`✅ Budova ${key} skutočne dokončená, spúšťam auto produkciu`)
   
   // Spusti auto produkciu pre túto budovu
   startAutoProductionForBuilding(row, col)
+}
+
+// Handler pre zmenu počtu pracovníkov na stavbe
+const changeConstructionWorkers = (newCount) => {
+  if (!clickedBuilding.value) return
+  const { row, col } = clickedBuilding.value
+  const key = `${row}-${col}`
+  const currentCount = buildingWorkerCount.value[key] || 1
+  newCount = Math.max(1, Math.round(newCount))
+  
+  if (newCount === currentCount) return
+  
+  const vehicleRes = resources.value.find(r => r.vehicleAnimation)
+  if (!vehicleRes) return
+  
+  const diff = newCount - currentCount
+  
+  if (diff > 0) {
+    // Pridávame pracovníkov - kontrola dostupnosti
+    if (vehicleRes.amount < diff) {
+      console.log(`⛔ Nedostatok vozidiel: potreba ${diff}, dostupné ${vehicleRes.amount}`)
+      return
+    }
+    
+    // Alokuj ďalšie vozidlá
+    vehicleRes.amount -= diff
+    if (!allocatedResources.value[vehicleRes.id]) {
+      allocatedResources.value[vehicleRes.id] = 0
+    }
+    allocatedResources.value[vehicleRes.id] += diff
+    
+    // Pridaj do workforce alokácií
+    if (!workforceAllocations.value[vehicleRes.id]) {
+      workforceAllocations.value[vehicleRes.id] = []
+    }
+    // Aktualizuj existujúcu alokáciu alebo pridaj novú
+    const existingAlloc = workforceAllocations.value[vehicleRes.id].find(
+      a => a.row === row && a.col === col && a.type === 'build'
+    )
+    if (existingAlloc) {
+      existingAlloc.amount += diff
+    } else {
+      workforceAllocations.value[vehicleRes.id].push({
+        row, col, amount: diff, type: 'build',
+        buildingName: clickedBuilding.value.buildingName || 'Budova'
+      })
+    }
+    
+    // Pridaj do pending build alokácií (pre návrat pri dokončení/zmazaní)
+    if (!pendingBuildAllocations.value[key]) {
+      pendingBuildAllocations.value[key] = []
+    }
+    const existingPending = pendingBuildAllocations.value[key].find(a => a.resourceId === vehicleRes.id)
+    if (existingPending) {
+      existingPending.amount += diff
+    } else {
+      pendingBuildAllocations.value[key].push({
+        resourceId: vehicleRes.id,
+        amount: diff,
+        resourceName: vehicleRes.name
+      })
+    }
+    
+    // Dispatch extra cars k budove
+    for (let i = 0; i < diff; i++) {
+      if (canvasRef.value?.dispatchExtraCarToBuilding) {
+        canvasRef.value.dispatchExtraCarToBuilding(row, col)
+      }
+    }
+    
+    console.log(`👷 Pridaní ${diff} pracovníci na [${row},${col}], celkom: ${newCount}, zostatok vozidiel: ${vehicleRes.amount}`)
+  } else {
+    // Odoberáme pracovníkov - vrátime vozidlá
+    const returnCount = Math.abs(diff)
+    vehicleRes.amount += returnCount
+    if (allocatedResources.value[vehicleRes.id]) {
+      allocatedResources.value[vehicleRes.id] -= returnCount
+      if (allocatedResources.value[vehicleRes.id] <= 0) {
+        delete allocatedResources.value[vehicleRes.id]
+      }
+    }
+    
+    // Aktualizuj workforce alokácie
+    if (workforceAllocations.value[vehicleRes.id]) {
+      const alloc = workforceAllocations.value[vehicleRes.id].find(
+        a => a.row === row && a.col === col && a.type === 'build'
+      )
+      if (alloc) {
+        alloc.amount -= returnCount
+        if (alloc.amount <= 0) {
+          const idx = workforceAllocations.value[vehicleRes.id].indexOf(alloc)
+          workforceAllocations.value[vehicleRes.id].splice(idx, 1)
+        }
+      }
+    }
+    
+    // Aktualizuj pending build alokácie
+    if (pendingBuildAllocations.value[key]) {
+      const pendingAlloc = pendingBuildAllocations.value[key].find(a => a.resourceId === vehicleRes.id)
+      if (pendingAlloc) {
+        pendingAlloc.amount -= returnCount
+        if (pendingAlloc.amount <= 0) {
+          const idx = pendingBuildAllocations.value[key].indexOf(pendingAlloc)
+          pendingBuildAllocations.value[key].splice(idx, 1)
+        }
+      }
+    }
+    
+    console.log(`👷 Odobratí ${returnCount} pracovníci z [${row},${col}], celkom: ${newCount}, zostatok vozidiel: ${vehicleRes.amount}`)
+  }
+  
+  // Aktualizuj worker count
+  buildingWorkerCount.value[key] = newCount
+  
+  // Nastav animation speed
+  if (canvasRef.value?.setConstructionWorkers) {
+    canvasRef.value.setConstructionWorkers(row, col, newCount)
+  }
 }
 
 // Zatvorenie modalu
@@ -1883,6 +2085,15 @@ const handleShowAllocations = (resourceId) => {
                   <div class="build-progress-bar waiting-bar"></div>
                 </div>
                 <p class="build-progress-text">Čaká sa na príchod pracovnej sily.</p>
+                <div class="worker-count-section">
+                  <label>👷 Pracovníci:</label>
+                  <div class="worker-count-controls">
+                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                  </div>
+                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+                </div>
               </div>
             </template>
             <template v-else-if="currentBuildingAnimState === 'building'">
@@ -1892,6 +2103,15 @@ const handleShowAllocations = (resourceId) => {
                   <div class="build-progress-bar"></div>
                 </div>
                 <p class="build-progress-text">Budova sa stavia.</p>
+                <div class="worker-count-section">
+                  <label>👷 Pracovníci:</label>
+                  <div class="worker-count-controls">
+                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                  </div>
+                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+                </div>
               </div>
             </template>
             <template v-else>
@@ -1953,6 +2173,15 @@ const handleShowAllocations = (resourceId) => {
                 <div class="build-progress-bar waiting-bar"></div>
               </div>
               <p class="build-progress-text">Čaká sa na príchod pracovnej sily. Stavba začne po príchode auta.</p>
+              <div class="worker-count-section">
+                <label>👷 Pracovníci:</label>
+                <div class="worker-count-controls">
+                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                </div>
+                <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+              </div>
             </div>
           </template>
           
@@ -1964,6 +2193,15 @@ const handleShowAllocations = (resourceId) => {
                 <div class="build-progress-bar"></div>
               </div>
               <p class="build-progress-text">Budova sa stavia. Produkcia sa spustí automaticky po dokončení stavby.</p>
+              <div class="worker-count-section">
+                <label>👷 Pracovníci:</label>
+                <div class="worker-count-controls">
+                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                </div>
+                <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+              </div>
             </div>
           </template>
           
@@ -2761,6 +2999,73 @@ header {
   color: #6b7280;
   font-size: 0.85rem;
   font-style: italic;
+}
+
+.worker-count-section {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(102, 126, 234, 0.08);
+  border-radius: 8px;
+  border: 1px solid rgba(102, 126, 234, 0.15);
+}
+
+.worker-count-section label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #4b5563;
+  white-space: nowrap;
+}
+
+.worker-count-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.worker-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: bold;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.worker-btn:hover:not(:disabled) {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.worker-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.worker-count-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1f2937;
+  min-width: 24px;
+  text-align: center;
+}
+
+.worker-speed-info {
+  font-size: 0.8rem;
+  color: #667eea;
+  font-weight: 600;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 /* Insufficient Resources Modal */

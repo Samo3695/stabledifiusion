@@ -337,9 +337,29 @@ export function dispatchCarToBuilding(scene, car, roadPath, nearestRoad, targetR
 
   // Vrátime objekt s control funkciami
   return {
-    /** Vráť auto na cestu (volaj po dokončení akcie pri budove) */
+    /** Vráť auto na cestu s animáciou (volaj po dokončení akcie pri budove) */
     returnCar: () => {
       returnToRoad()
+    },
+    /** Okamžite teleportuj auto na cestu bez animácie */
+    instantReturn: () => {
+      // Zastav prípadný aktuálny tween
+      if (car.moveTween) {
+        car.moveTween.stop()
+        car.moveTween = null
+      }
+      // Teleport na nearest road s malým náhodným offsetom aby sa autá nezlievali
+      const { x: roadX, y: roadY } = gridToIso(nearestRoad.row, nearestRoad.col)
+      const offsetX = (Math.random() - 0.5) * 16 // -8 až +8 px
+      const offsetY = (Math.random() - 0.5) * 8  // -4 až +4 px
+      car.sprite.setPosition(roadX + offsetX, roadY + TILE_HEIGHT / 2 + offsetY)
+      car.shadow.setPosition(roadX + offsetX + 4, roadY + TILE_HEIGHT / 2 + offsetY + 2)
+      car.currentCell = { row: nearestRoad.row, col: nearestRoad.col }
+      car.dispatched = false
+      delete car._returnToRoad
+      console.log(`🚗⚡ Auto ${car.id} okamžite vrátené na cestu [${nearestRoad.row}, ${nearestRoad.col}]`)
+      if (onReturn) onReturn()
+      if (carManager) carManager.startCarMovement(car)
     },
     /** Zastav dispatch (emergency) */
     cancel: () => {

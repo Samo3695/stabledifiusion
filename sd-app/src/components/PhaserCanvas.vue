@@ -154,6 +154,9 @@ class IsoScene extends Phaser.Scene {
     // Fronta pre sekvenčné spracovanie car dispatchov
     this.carDispatchQueue = []
     this.isProcessingCarDispatch = false
+    
+    // Aktívne stavebné animácie: { 'row-col': animationControl }
+    this.activeAnimations = {}
   }
 
   preload() {
@@ -2382,13 +2385,26 @@ class IsoScene extends Phaser.Scene {
               this.processNextCarDispatch()
             },
             onAnimationComplete: () => {
-              // Animácia je kompletne dokončená - oznámime GameView
+              // Animácia je kompletne dokončená - okamžite vrátime všetky autá na cestu
               console.log(`✅ Animácia stavby [${row}, ${col}] kompletne dokončená`)
+              const key = `${row}-${col}`
+              const anim = this.activeAnimations[key]
+              if (anim && anim._dispatches) {
+                anim._dispatches.forEach(d => {
+                  if (d.instantReturn) d.instantReturn()
+                })
+                anim._dispatches = []
+              }
+              // Odstráň z aktívnych animácií
+              delete this.activeAnimations[key]
               emit('building-construction-complete', { row, col })
             }
           })
           constructSprites = animResult.constructSprites
           animationControl = animResult.animationControl
+          
+          // Ulož animationControl pre neskoršie zmeny rýchlosti
+          this.activeAnimations[`${row}-${col}`] = animationControl
         }
         
         // Vytvor shadowInfo len ak nemá dontDropShadow flag
@@ -2496,15 +2512,8 @@ class IsoScene extends Phaser.Scene {
             emit('building-state-changed', { row, col, state: 'building' })
             animationControl.resume()
             
-            // Auto sa vráti na cestu po dokončení animácie
-            // Čas = súčet buildCost amounts v sekundách (rovnaký ako doba animácie fázy 2+)
-            const buildCost = animationControl._buildingData?.buildCost
-            const totalAmount = buildCost ? buildCost.reduce((sum, item) => sum + (item.amount || 0), 0) : 0
-            const remainingTime = totalAmount > 0 ? Math.max(totalAmount * 1000, 3000) : 8000
-            console.log(`🚗 Auto čaká ${remainingTime}ms pri budove [${row}, ${col}] (buildCost total: ${totalAmount})`)
-            this.time.delayedCall(remainingTime, () => {
-              dispatch.returnCar()
-            })
+            // Uložíme dispatch na animationControl - auto sa vráti okamžite pri dokončení animácie
+            animationControl._dispatches.push(dispatch)
           },
           moveSpeed: 400,
           carManager: this.carManager
@@ -3333,6 +3342,50 @@ defineExpose({
     }
     console.log(`🚶 Port: Spawning ${totalCount} persons na najbližšej road tile [${nearest.row},${nearest.col}]`)
     mainScene.createPersonsAt(nearest.row, nearest.col, totalCount)
+  },
+  // Nastaví počet pracovníkov na stavbe a upraví rýchlosť animácie
+  setConstructionWorkers: (row, col, workerCount) => {
+    if (!mainScene) return false
+    const key = `${row}-${col}`
+    const animControl = mainScene.activeAnimations[key]
+    if (!animControl) {
+      console.warn(`⚠️ Žiadna aktívna animácia pre budovu [${row}, ${col}]`)
+      return false
+    }
+    animControl.setWorkerCount(workerCount)
+    return true
+  },
+  // Dispatchne ďalšie auto k budove pod stavbou
+  dispatchExtraCarToBuilding: (targetRow, targetCol) => {
+    if (!mainScene || !mainScene.carManager) return false
+    const carResult = findNearestCar(mainScene.carManager.cars, targetRow, targetCol, cellImages)
+    if (!carResult) {
+      console.warn(`⚠️ Žiadne dostupné auto pre dispatch k [${targetRow}, ${targetCol}]`)
+      return false
+    }
+    const key = `${targetRow}-${targetCol}`
+    const animControl = mainScene.activeAnimations[key]
+    
+    const dispatch = dispatchCarToBuilding(
+      mainScene,
+      carResult.car,
+      carResult.path,
+      carResult.nearestRoad,
+      targetRow,
+      targetCol,
+      {
+        onArrive: () => {
+          console.log(`🚗✅ Ďalšie auto dorazilo k budove [${targetRow}, ${targetCol}]`)
+          // Uložíme dispatch na animationControl - vráti sa okamžite pri dokončení animácie
+          if (animControl) {
+            animControl._dispatches.push(dispatch)
+          }
+        },
+        moveSpeed: 400,
+        carManager: mainScene.carManager
+      }
+    )
+    return true
   }
 })
 
