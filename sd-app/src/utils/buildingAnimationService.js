@@ -122,6 +122,9 @@ export function startBuildingAnimation(scene, params) {
     buildCost = null // Pole resources s amount - určuje dobu trvania animácie
   } = params
   
+  // Grid kľúč pre prístup k shadowSprites (shadow je uložený pod "row-col", nie pod textureKey)
+  const gridKey = `${row}-${col}`
+  
   // Vypočítame dobu animácie na základe buildCost
   const BUILDING_ANIMATION_DURATION = calculateAnimationDuration(buildCost)
   const totalBuildAmount = buildCost ? buildCost.reduce((sum, item) => sum + (item.amount || 0), 0) : 0
@@ -269,7 +272,8 @@ export function startBuildingAnimation(scene, params) {
     spriteHeight
   )
   if (constructionEffects) {
-    constructionEffects.setDepth(buildingSprite.depth + 0.2)
+    // Zabezpečíme že dym bude vždy nad road tiles (depth 0.5)
+    constructionEffects.setDepth(Math.max(buildingSprite.depth + 0.2, 1.0))
   }
   
   // === PIE CHART PROGRESS BAR ===
@@ -429,8 +433,8 @@ export function startBuildingAnimation(scene, params) {
             if (shadowSprites[tempBuildingKey]) {
               shadowSprites[tempBuildingKey].scaleMultiplier = 0
             }
-            if (shadowSprites[key]) {
-              shadowSprites[key].scaleMultiplier = 0
+            if (shadowSprites[gridKey]) {
+              shadowSprites[gridKey].scaleMultiplier = 0
             }
           }
           // Fáza 2: Pohyb hore kým nie je diamondHeight / 2.2 od vrchu obrázka
@@ -446,8 +450,8 @@ export function startBuildingAnimation(scene, params) {
               shadowSprites[tempBuildingKey].scaleMultiplier = phase2Progress
               shadowSprites[tempBuildingKey].y = tempSprite.y
             }
-            if (shadowSprites[key]) {
-              shadowSprites[key].scaleMultiplier = phase2Progress
+            if (shadowSprites[gridKey]) {
+              shadowSprites[gridKey].scaleMultiplier = phase2Progress
             }
             redrawShadowsAround(row, col)
           }
@@ -466,8 +470,8 @@ export function startBuildingAnimation(scene, params) {
               shadowSprites[tempBuildingKey].scaleMultiplier = 1
               shadowSprites[tempBuildingKey].y = finalTempY
             }
-            if (shadowSprites[key]) {
-              shadowSprites[key].scaleMultiplier = 1
+            if (shadowSprites[gridKey]) {
+              shadowSprites[gridKey].scaleMultiplier = 1
             }
           }
         }
@@ -496,8 +500,15 @@ export function startBuildingAnimation(scene, params) {
       }
       if (shadowSprites[tempBuildingKey]) {
         delete shadowSprites[tempBuildingKey]
-        redrawShadowsAround(row, col)
       }
+      
+      // Uistíme sa že hlavný tieň má scaleMultiplier=1 po dokončení animácie
+      if (shadowSprites[gridKey]) {
+        shadowSprites[gridKey].scaleMultiplier = 1
+      }
+      
+      // Vždy prekreslíme tiene po dokončení animácie
+      redrawShadowsAround(row, col)
       
       // Cleanup pie chart
       if (pieChartGraphics) {

@@ -2209,10 +2209,10 @@ class IsoScene extends Phaser.Scene {
       // Prach letí nahor a do strán
       speedY: { min: -60, max: -120 },
       speedX: { min: -40, max: 40 },
-      // Veľkosť častíc
+      // Veľkosť částíc
       scale: { start: 0.3, end: 1.2 },
       // Postupne miznú
-      alpha: { start: 0.7, end: 0 },
+      alpha: { start: 0.3, end: 0 },
       // Krátky život častíc
       lifespan: 1200,
       // Hustota emitácie

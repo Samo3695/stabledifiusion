@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 const props = defineProps({
   initialResources: {
@@ -10,8 +10,14 @@ const props = defineProps({
 
 const emit = defineEmits(['update'])
 
-const resources = ref([...props.initialResources])
+// Rozdelíme resources a components
+const allItems = ref([...props.initialResources])
+const resources = computed(() => allItems.value.filter(item => !item.isComponent))
+const components = computed(() => allItems.value.filter(item => item.isComponent))
+
+const activeTab = ref('resources') // 'resources' alebo 'components'
 const newResourceName = ref('')
+const newComponentName = ref('')
 const editingResourceId = ref(null)
 
 const addResource = () => {
@@ -21,20 +27,39 @@ const addResource = () => {
     id: Date.now().toString(),
     name: newResourceName.value.trim(),
     amount: 0,
-    weight: 0, // Váha resource
-    icon: null, // Base64 ikonka
-    workResource: false, // Či je to work resource
-    vehicleAnimation: false, // Či je to vehicle animation
-    personAnimation: false // Či je to person animation
+    weight: 0,
+    icon: null,
+    workResource: false,
+    vehicleAnimation: false,
+    personAnimation: false,
+    isComponent: false
   }
   
-  resources.value.push(newResource)
+  allItems.value.push(newResource)
   newResourceName.value = ''
   emitUpdate()
 }
 
+const addComponent = () => {
+  if (!newComponentName.value.trim()) return
+  
+  const newComponent = {
+    id: Date.now().toString(),
+    name: newComponentName.value.trim(),
+    amount: 0,
+    weight: 0,
+    icon: null,
+    workResource: false,
+    isComponent: true
+  }
+  
+  allItems.value.push(newComponent)
+  newComponentName.value = ''
+  emitUpdate()
+}
+
 const deleteResource = (id) => {
-  resources.value = resources.value.filter(r => r.id !== id)
+  allItems.value = allItems.value.filter(r => r.id !== id)
   emitUpdate()
 }
 
@@ -49,12 +74,12 @@ const finishEditResource = () => {
 
 const emitUpdate = () => {
   emit('update', {
-    resources: resources.value
+    resources: allItems.value
   })
 }
 
 const updateResourceAmount = (id, amount) => {
-  const resource = resources.value.find(r => r.id === id)
+  const resource = allItems.value.find(r => r.id === id)
   if (resource) {
     resource.amount = Number(amount) || 0
     emitUpdate()
@@ -62,7 +87,7 @@ const updateResourceAmount = (id, amount) => {
 }
 
 const updateResourceWeight = (id, weight) => {
-  const resource = resources.value.find(r => r.id === id)
+  const resource = allItems.value.find(r => r.id === id)
   if (resource) {
     resource.weight = Number(weight) || 0
     emitUpdate()
@@ -87,7 +112,7 @@ const handleIconUpload = async (id, event) => {
   
   const reader = new FileReader()
   reader.onload = (e) => {
-    const resource = resources.value.find(r => r.id === id)
+    const resource = allItems.value.find(r => r.id === id)
     if (resource) {
       resource.icon = e.target.result // Base64 string
       emitUpdate()
@@ -97,7 +122,7 @@ const handleIconUpload = async (id, event) => {
 }
 
 const removeIcon = (id) => {
-  const resource = resources.value.find(r => r.id === id)
+  const resource = allItems.value.find(r => r.id === id)
   if (resource) {
     resource.icon = null
     emitUpdate()
@@ -105,7 +130,7 @@ const removeIcon = (id) => {
 }
 
 const toggleWorkResource = (id) => {
-  const resource = resources.value.find(r => r.id === id)
+  const resource = allItems.value.find(r => r.id === id)
   if (resource) {
     resource.workResource = !resource.workResource
     emitUpdate()
@@ -113,7 +138,7 @@ const toggleWorkResource = (id) => {
 }
 
 const toggleVehicleAnimation = (id) => {
-  const resource = resources.value.find(r => r.id === id)
+  const resource = allItems.value.find(r => r.id === id)
   if (resource) {
     resource.vehicleAnimation = !resource.vehicleAnimation
     emitUpdate()
@@ -121,7 +146,7 @@ const toggleVehicleAnimation = (id) => {
 }
 
 const togglePersonAnimation = (id) => {
-  const resource = resources.value.find(r => r.id === id)
+  const resource = allItems.value.find(r => r.id === id)
   if (resource) {
     resource.personAnimation = !resource.personAnimation
     emitUpdate()
@@ -131,12 +156,26 @@ const togglePersonAnimation = (id) => {
 
 <template>
   <div class="resource-manager">
-    <div class="section">
-      <div class="section-header">
-        <h3>📦 Resources</h3>
-        <span class="count">{{ resources.length }}</span>
-      </div>
-      
+    <!-- Tab Navigation -->
+    <div class="tabs">
+      <button 
+        @click="activeTab = 'resources'" 
+        :class="['tab', { active: activeTab === 'resources' }]"
+      >
+        📦 Resources
+        <span class="tab-count">{{ resources.length }}</span>
+      </button>
+      <button 
+        @click="activeTab = 'components'" 
+        :class="['tab', { active: activeTab === 'components' }]"
+      >
+        🧩 Components
+        <span class="tab-count">{{ components.length }}</span>
+      </button>
+    </div>
+
+    <!-- Resources Tab -->
+    <div v-if="activeTab === 'resources'" class="section">
       <div class="add-item">
           <input
             v-model="newResourceName"
@@ -254,6 +293,118 @@ const togglePersonAnimation = (id) => {
               </div>
               <button 
                 @click="deleteResource(resource.id)" 
+                class="btn-delete"
+                title="Vymazať"
+              >
+                🗑️
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Components Tab -->
+    <div v-if="activeTab === 'components'" class="section">
+      <div class="add-item">
+          <input
+            v-model="newComponentName"
+            type="text"
+            placeholder="Názov component..."
+            @keyup.enter="addComponent"
+            maxlength="50"
+          />
+          <button @click="addComponent" class="btn-add">
+            ➕ Pridať
+          </button>
+      </div>
+      
+      <div class="items-list">
+        <div v-if="components.length === 0" class="empty-state">
+          <p>Zatiaľ žiadne components</p>
+        </div>
+        
+        <div 
+          v-for="component in components" 
+          :key="component.id" 
+          class="item"
+        >
+          <div class="item-content">
+            <!-- Ikonka -->
+            <div class="icon-wrapper">
+              <div v-if="component.icon" class="icon-preview">
+                <img :src="component.icon" :alt="component.name" />
+                <button 
+                  @click="removeIcon(component.id)"
+                  class="btn-remove-icon"
+                  title="Odstrániť ikonku"
+                >
+                  ✕
+                </button>
+              </div>
+              <label v-else class="icon-upload" :for="'icon-' + component.id">
+                <span>📷</span>
+                <input
+                  :id="'icon-' + component.id"
+                  type="file"
+                  accept="image/*"
+                  @change="handleIconUpload(component.id, $event)"
+                  class="icon-input"
+                />
+              </label>
+            </div>
+            
+            <!-- Názov -->
+            <input
+              v-if="editingResourceId === component.id"
+              v-model="component.name"
+              @blur="finishEditResource"
+              @keyup.enter="finishEditResource"
+              class="edit-input"
+              autofocus
+            />
+            <span 
+              v-else 
+              class="item-name"
+              @dblclick="startEditResource(component.id)"
+            >
+              {{ component.name }}
+            </span>
+            
+            <div class="item-controls">
+              <label class="work-resource-toggle" :title="'Work Resource: ' + (component.workResource ? 'Áno' : 'Nie')">
+                <input
+                  type="checkbox"
+                  :checked="component.workResource"
+                  @change="toggleWorkResource(component.id)"
+                  class="work-checkbox"
+                />
+                <span class="work-label">👷 Work</span>
+              </label>
+              <div class="number-inputs-group">
+                <div class="input-wrapper">
+                  <label class="input-label">Amount</label>
+                  <input
+                    type="number"
+                    :value="component.amount"
+                    @input="updateResourceAmount(component.id, $event.target.value)"
+                    class="amount-input"
+                    min="0"
+                  />
+                </div>
+                <div class="input-wrapper">
+                  <label class="input-label">Weight</label>
+                  <input
+                    type="number"
+                    :value="component.weight"
+                    @input="updateResourceWeight(component.id, $event.target.value)"
+                    class="amount-input"
+                    min="0"
+                  />
+                </div>
+              </div>
+              <button 
+                @click="deleteResource(component.id)" 
                 class="btn-delete"
                 title="Vymazať"
               >
