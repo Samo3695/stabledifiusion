@@ -66,16 +66,6 @@ const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno
 const spawnCarsEnabled = ref(props.carSpawnEnabled) // Či pridať autá pri kliknutí na road tile
 const carsPerPlacement = ref(props.carSpawnCount) // Počet áut na jedno umiestnenie road tile
 
-// DEBUG: nastavenia tieňa áut (dočasný panel)
-const carShadowDebug = ref({
-  alpha: 0.25,
-  angle: -90,
-  scaleX: parseFloat((0.0835 * 0.7).toFixed(4)),
-  scaleY: parseFloat((0.0835 * 0.4).toFixed(4)),
-  offsetX: 4,
-  offsetY: 2
-})
-
 // Building data
 const isBuilding = ref(false)
 const isCommandCenter = ref(false) // Či je budova command center

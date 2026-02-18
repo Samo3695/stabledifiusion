@@ -1190,11 +1190,14 @@ class IsoScene extends Phaser.Scene {
       
       console.log(`🎭 Person walk animácie: front=${front.frameKeys.length} framov, back=${back.frameKeys.length} framov, ${frameRate} fps`)
       
-      // Reštartujeme animácie na existujúcich osobách
+      // Reštartujeme animácie na existujúcich osobách (sprite aj tieň)
       if (this.personManager && this.personManager.persons) {
         this.personManager.persons.forEach(person => {
           if (person.sprite && person.sprite.active) {
             person.sprite.play('person_walk_front')
+          }
+          if (person.shadow && person.shadow.active) {
+            person.shadow.play('person_walk_front')
           }
         })
       }

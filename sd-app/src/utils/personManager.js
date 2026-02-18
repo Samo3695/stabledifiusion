@@ -17,6 +17,17 @@ export class PersonManager {
     this.moveDuration = config.moveDuration || 60600 // ms (spomalené o polovicu)
     this.initialDelayRange = config.initialDelayRange || [0, 4000] // [min, max] ms
     
+    // Shadow konfigurácia
+    this.shadowConfig = {
+      offsetX: 1.5,
+      offsetY: -1,
+      alpha: 0.4,
+      angle: -88,
+      scaleX: 0.29,
+      scaleY: 0.3,
+      depth: 0.6
+    }
+    
     // Web Worker pre výpočty pohybu
     this.worker = new Worker(new URL('./personWorker.js', import.meta.url), { type: 'module' })
     this.workerReady = false
@@ -147,12 +158,17 @@ export class PersonManager {
     }
 
     const personShadow = this.scene.add.sprite(0, 0, textureKey)
-    personShadow.setDepth(0.6)
+    personShadow.setDepth(this.shadowConfig.depth)
     personShadow.setOrigin(0.5, 1)
     personShadow.setTint(0x000000)
-    personShadow.setAlpha(0.35)
-    personShadow.setAngle(-90)
-    personShadow.setScale(0.5 * 0.7, 0.5 * 0.4) // Úmerne zmenšený tieň
+    personShadow.setAlpha(this.shadowConfig.alpha)
+    personShadow.setAngle(this.shadowConfig.angle)
+    personShadow.setScale(this.shadowConfig.scaleX, this.shadowConfig.scaleY)
+    
+    // Tieň tiež prehráva rovnakú animáciu ako sprite
+    if (this.scene.anims.exists('person_walk')) {
+      personShadow.play('person_walk')
+    }
 
     personSprite.setPosition(x, y + this.TILE_HEIGHT / 2)
     personSprite.setVisible(true)
@@ -160,9 +176,7 @@ export class PersonManager {
     const personDepth = 99 + (row + col)
     personSprite.setDepth(personDepth)
 
-    const shadowOffsetX = 4
-    const shadowOffsetY = 2
-    personShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
+    personShadow.setPosition(x + this.shadowConfig.offsetX, y + this.shadowConfig.offsetY)
     personShadow.setVisible(true)
 
     const person = {
@@ -378,12 +392,14 @@ export class PersonManager {
     
     // Nastav flip
     person.sprite.setFlipX(flipX)
+    person.shadow.setFlipX(flipX)
     
     // Prepni animáciu len ak sa zmenila
     if (this.scene.anims.exists(animKey)) {
       const currentAnim = person.sprite.anims?.currentAnim?.key
       if (currentAnim !== animKey) {
         person.sprite.play(animKey)
+        person.shadow.play(animKey)
       }
     }
   }
@@ -408,9 +424,10 @@ export class PersonManager {
       ease: 'Linear',
       onUpdate: () => {
         // Aktualizujeme pozíciu tieňa počas pohybu
-        const shadowOffsetX = 4
-        const shadowOffsetY = 2
-        person.shadow.setPosition(person.sprite.x + shadowOffsetX, person.sprite.y + shadowOffsetY)
+        person.shadow.setPosition(
+          person.sprite.x + this.shadowConfig.offsetX,
+          person.sprite.y + this.shadowConfig.offsetY
+        )
         
         // Aktualizujeme depth počas pohybu pre plynulé zobrazovanie za budovami
         const currentPos = this.isoToGrid(person.sprite.x, person.sprite.y - this.TILE_HEIGHT / 2)
