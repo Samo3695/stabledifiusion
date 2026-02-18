@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import Phaser from 'phaser'
 import { PersonManager } from '../utils/personManager.js'
 import { CarManager } from '../utils/carManager.js'
+import { loadPersonGifFrames } from '../utils/gifFrameExtractor.js'
 import { startBuildingAnimation } from '../utils/buildingAnimationService.js'
 import { findNearestCar, dispatchCarToBuilding } from '../utils/carDispatchService.js'
 
@@ -163,10 +164,7 @@ class IsoScene extends Phaser.Scene {
     // Vytvoríme placeholder textúru pre tiene
     this.createShadowTexture()
     
-    // Načítame sprite osoby - 3 framey pre animáciu
-    this.load.image('person1', '/templates/roads/sprites/person1.png')
-    this.load.image('person2', '/templates/roads/sprites/person2.png')
-    this.load.image('person3', '/templates/roads/sprites/person3.png')
+    // Person GIF sa načíta asynchrónne v create() cez gifFrameExtractor
     
     // Načítame sprite auta
     this.load.image('car1', '/templates/roads/sprites/car-dawn-top-right.png')
@@ -222,21 +220,13 @@ class IsoScene extends Phaser.Scene {
     // Pravé tlačidlo pre dragging
     this.input.mouse.disableContextMenu()
     
-    // Vytvoríme animáciu pre osobu
-    if (!this.anims.exists('person_walk')) {
-      this.anims.create({
-        key: 'person_walk',
-        frames: [
-          { key: 'person1' },
-          { key: 'person2' },
-          { key: 'person3' }
-        ],
-        frameRate: 4,
-        repeat: -1
-      })
-    }
+    // Načítame animovaný GIF s postavami - extrahujeme 3. postavu (index 2)
+    // a vytvoríme walk animáciu zo všetkých GIF framov
+    this.loadPersonGif().then(() => {
+      console.log('✅ Person GIF framy načítané, PersonManager pripravený')
+    })
     
-    // Inicializujeme PersonManager
+    // Inicializujeme PersonManager (sprites sa nastavia po načítaní GIF)
     this.personManager = new PersonManager(this, cellImages, {
       personCount: 200,
       TILE_WIDTH,
@@ -1127,6 +1117,91 @@ class IsoScene extends Phaser.Scene {
     graphics.fillRect(0, 0, 128, 64)
     graphics.generateTexture('shadow', 128, 64)
     graphics.destroy()
+  }
+
+  /**
+   * Načíta animovaný GIF, extrahuje 3. postavu (index 2) = front walk
+   * a 2. postavu (index 1) = back walk, vytvorí 2 Phaser walk animácie
+   */
+  async loadPersonGif() {
+    try {
+      // Extrahujeme 3. postavu (index 2) pre front walk (row+, col+ smer)
+      const front = await loadPersonGifFrames(
+        this,
+        '/templates/roads/sprites/persons-mini.gif',
+        5,  // 5 postáv vedľa seba v GIF
+        2,  // index 2 = 3. postava
+        'person_front'
+      )
+      
+      // Extrahujeme 2. postavu (index 1) pre back walk (col-, row- smer)
+      const back = await loadPersonGifFrames(
+        this,
+        '/templates/roads/sprites/persons-mini.gif',
+        5,  // 5 postáv vedľa seba v GIF
+        1,  // index 1 = 2. postava
+        'person_back'
+      )
+      
+      if (front.frameKeys.length === 0 || back.frameKeys.length === 0) {
+        console.warn('⚠️ Žiadne framy z GIF, person animácia nebude fungovať')
+        return
+      }
+      
+      // Vytvoríme 'person1' textúru pre kompatibilitu s PersonManager
+      if (!this.textures.exists('person1')) {
+        const firstFrameCanvas = this.textures.get(front.frameKeys[0]).getSourceImage()
+        const copyCanvas = document.createElement('canvas')
+        copyCanvas.width = firstFrameCanvas.width
+        copyCanvas.height = firstFrameCanvas.height
+        copyCanvas.getContext('2d').drawImage(firstFrameCanvas, 0, 0)
+        this.textures.addCanvas('person1', copyCanvas)
+      }
+      
+      // Vypočítame frameRate z GIF delay
+      const frameRate = Math.max(2, Math.min(15, Math.round(1000 / front.delay)))
+      
+      // Vytvoríme front walk animáciu (3. postava) - pre row+ a col+ smery
+      if (this.anims.exists('person_walk_front')) this.anims.remove('person_walk_front')
+      this.anims.create({
+        key: 'person_walk_front',
+        frames: front.frameKeys.map(key => ({ key })),
+        frameRate: frameRate,
+        repeat: -1
+      })
+      
+      // Vytvoríme back walk animáciu (2. postava) - pre col- a row- smery
+      if (this.anims.exists('person_walk_back')) this.anims.remove('person_walk_back')
+      this.anims.create({
+        key: 'person_walk_back',
+        frames: back.frameKeys.map(key => ({ key })),
+        frameRate: frameRate,
+        repeat: -1
+      })
+      
+      // Zachováme aj 'person_walk' ako default (front)
+      if (this.anims.exists('person_walk')) this.anims.remove('person_walk')
+      this.anims.create({
+        key: 'person_walk',
+        frames: front.frameKeys.map(key => ({ key })),
+        frameRate: frameRate,
+        repeat: -1
+      })
+      
+      console.log(`🎭 Person walk animácie: front=${front.frameKeys.length} framov, back=${back.frameKeys.length} framov, ${frameRate} fps`)
+      
+      // Reštartujeme animácie na existujúcich osobách
+      if (this.personManager && this.personManager.persons) {
+        this.personManager.persons.forEach(person => {
+          if (person.sprite && person.sprite.active) {
+            person.sprite.play('person_walk_front')
+          }
+        })
+      }
+      
+    } catch (error) {
+      console.error('❌ Chyba pri načítaní person GIF:', error)
+    }
   }
 
   // Konverzia grid súradníc na izometrické

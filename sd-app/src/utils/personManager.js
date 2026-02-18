@@ -118,8 +118,27 @@ export class PersonManager {
   spawnSinglePersonAt(row, col) {
     const { x, y } = this.gridToIso(row, col)
 
-    const personSprite = this.scene.add.sprite(0, 0, 'person1')
-    personSprite.setScale(0.167) // Zmenšené o 1/3 (2/3 z pôvodných 0.25)
+    // Textúra person1 sa načíta asynchrónne z GIF - ak ešte neexistuje, vytvoríme placeholder
+    let textureKey = 'person1'
+    if (!this.scene.textures.exists('person1')) {
+      // Skúsime person_frame0 (prvý frame z GIF)
+      if (this.scene.textures.exists('person_frame0')) {
+        textureKey = 'person_frame0'
+      } else {
+        // Vytvoríme dočasný placeholder
+        if (!this.scene.textures.exists('person_placeholder')) {
+          const g = this.scene.make.graphics({ add: false })
+          g.fillStyle(0x667eea, 1)
+          g.fillCircle(8, 8, 8)
+          g.generateTexture('person_placeholder', 16, 16)
+          g.destroy()
+        }
+        textureKey = 'person_placeholder'
+      }
+    }
+
+    const personSprite = this.scene.add.sprite(0, 0, textureKey)
+    personSprite.setScale(0.25) // persons-mini.gif je už malý
     personSprite.setOrigin(0.5, 1)
     
     // Spusti animáciu chôdze
@@ -127,13 +146,13 @@ export class PersonManager {
       personSprite.play('person_walk')
     }
 
-    const personShadow = this.scene.add.sprite(0, 0, 'person1')
+    const personShadow = this.scene.add.sprite(0, 0, textureKey)
     personShadow.setDepth(0.6)
     personShadow.setOrigin(0.5, 1)
     personShadow.setTint(0x000000)
     personShadow.setAlpha(0.35)
     personShadow.setAngle(-90)
-    personShadow.setScale(0.167 * 0.7, 0.167 * 0.4) // Úmerne zmenšený tieň
+    personShadow.setScale(0.5 * 0.7, 0.5 * 0.4) // Úmerne zmenšený tieň
 
     personSprite.setPosition(x, y + this.TILE_HEIGHT / 2)
     personSprite.setVisible(true)
@@ -309,10 +328,74 @@ export class PersonManager {
   }
 
   /**
+   * Určí smer pohybu a nastaví správnu animáciu + flipX
+   * Smery v izometrickom grids:
+   *   row+ (napr. 29,24→30,24) = front walk, normal
+   *   col+ (napr. 31,19→31,20) = front walk, flipped
+   *   col- (napr. 33,22→33,21) = back walk, normal
+   *   row- (napr. 33,20→32,20) = back walk, flipped
+   */
+  updatePersonDirection(person, target) {
+    const dRow = target.row - person.currentCell.row
+    const dCol = target.col - person.currentCell.col
+    
+    let animKey = 'person_walk_front'
+    let flipX = false
+    
+    if (dRow > 0 && dCol === 0) {
+      // row+ = smer dole-vpravo → front, normálne
+      animKey = 'person_walk_front'
+      flipX = false
+    } else if (dRow === 0 && dCol > 0) {
+      // col+ = smer dole-vľavo → front, zrkadlovo
+      animKey = 'person_walk_front'
+      flipX = true
+    } else if (dRow === 0 && dCol < 0) {
+      // col- = smer hore-vpravo → back, normálne
+      animKey = 'person_walk_back'
+      flipX = false
+    } else if (dRow < 0 && dCol === 0) {
+      // row- = smer hore-vľavo → back, zrkadlovo
+      animKey = 'person_walk_back'
+      flipX = true
+    } else if (dRow > 0 && dCol > 0) {
+      // diagonálne dole → front
+      animKey = 'person_walk_front'
+      flipX = false
+    } else if (dRow < 0 && dCol < 0) {
+      // diagonálne hore → back
+      animKey = 'person_walk_back'
+      flipX = false
+    } else if (dRow > 0 && dCol < 0) {
+      // diagonálne → back flipped
+      animKey = 'person_walk_back'
+      flipX = true
+    } else if (dRow < 0 && dCol > 0) {
+      // diagonálne → front flipped
+      animKey = 'person_walk_front'
+      flipX = true
+    }
+    
+    // Nastav flip
+    person.sprite.setFlipX(flipX)
+    
+    // Prepni animáciu len ak sa zmenila
+    if (this.scene.anims.exists(animKey)) {
+      const currentAnim = person.sprite.anims?.currentAnim?.key
+      if (currentAnim !== animKey) {
+        person.sprite.play(animKey)
+      }
+    }
+  }
+
+  /**
    * Presunie osobu na zadaný tile (vypočítaný worker-om)
    */
   movePersonToTarget(person, target) {
     if (!person || !person.sprite || !target) return
+    
+    // Nastav správnu animáciu podľa smeru pohybu
+    this.updatePersonDirection(person, target)
     
     const { x: targetX, y: targetY } = this.gridToIso(target.row, target.col)
     
