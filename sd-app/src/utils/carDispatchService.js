@@ -225,7 +225,7 @@ export function dispatchCarToBuilding(scene, car, roadPath, nearestRoad, targetR
       duration: moveSpeed,
       ease: 'Linear',
       onUpdate: () => {
-        car.shadow.setPosition(car.sprite.x + 4, car.sprite.y + 2)
+        car.shadow.setPosition(car.sprite.x + (car.shadowOffsetX ?? 4), car.sprite.y + (car.shadowOffsetY ?? 2))
         const depth = 99 + (nextTile.row + nextTile.col)
         car.sprite.setDepth(depth)
       },
@@ -258,7 +258,7 @@ export function dispatchCarToBuilding(scene, car, roadPath, nearestRoad, targetR
       duration: moveSpeed * 1.5, // Trochu pomalšie mimo cestu
       ease: 'Sine.easeInOut',
       onUpdate: () => {
-        car.shadow.setPosition(car.sprite.x + 4, car.sprite.y + 2)
+        car.shadow.setPosition(car.sprite.x + (car.shadowOffsetX ?? 4), car.sprite.y + (car.shadowOffsetY ?? 2))
         car.sprite.setDepth(100 + targetRow + targetCol)
       },
       onComplete: () => {
@@ -305,7 +305,7 @@ export function dispatchCarToBuilding(scene, car, roadPath, nearestRoad, targetR
       duration: moveSpeed * 1.5,
       ease: 'Sine.easeInOut',
       onUpdate: () => {
-        car.shadow.setPosition(car.sprite.x + 4, car.sprite.y + 2)
+        car.shadow.setPosition(car.sprite.x + (car.shadowOffsetX ?? 4), car.sprite.y + (car.shadowOffsetY ?? 2))
       },
       onComplete: () => {
         car.currentCell = { row: nearestRoad.row, col: nearestRoad.col }
@@ -353,7 +353,7 @@ export function dispatchCarToBuilding(scene, car, roadPath, nearestRoad, targetR
       const offsetX = (Math.random() - 0.5) * 16 // -8 až +8 px
       const offsetY = (Math.random() - 0.5) * 8  // -4 až +4 px
       car.sprite.setPosition(roadX + offsetX, roadY + TILE_HEIGHT / 2 + offsetY)
-      car.shadow.setPosition(roadX + offsetX + 4, roadY + TILE_HEIGHT / 2 + offsetY + 2)
+      car.shadow.setPosition(roadX + offsetX + (car.shadowOffsetX ?? 4), roadY + TILE_HEIGHT / 2 + offsetY + (car.shadowOffsetY ?? 2))
       car.currentCell = { row: nearestRoad.row, col: nearestRoad.col }
       car.dispatched = false
       delete car._returnToRoad

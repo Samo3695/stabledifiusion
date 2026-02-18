@@ -271,6 +271,37 @@ watch(resources, () => {
   }
 }, { deep: true })
 
+// Sledovanie predchádzajúcich hodnôt vehicleAnimation/personAnimation resources
+const prevAnimationAmounts = ref({})
+
+// Watch na resources - aktualizácia počtu osôb na canvase podľa personAnimation resources
+watch(resources, (newResources) => {
+  if (!canvasRef.value || !newResources || newResources.length === 0) return
+
+  for (const resource of newResources) {
+    if (!resource.personAnimation) continue
+
+    const key = resource.id
+    const currentAmount = resource.amount || 0
+    const prevAmount = prevAnimationAmounts.value[key] ?? currentAmount
+
+    if (currentAmount === prevAmount) continue
+
+    const diff = currentAmount - prevAmount
+
+    if (diff > 0) {
+      console.log(`🚶 Resource '${resource.name}' vzrástol o ${diff} → spawning ${diff} persons`)
+      canvasRef.value.spawnPersonsOnAllRoads(diff)
+    } else {
+      const toRemove = Math.abs(diff)
+      console.log(`🚶 Resource '${resource.name}' klesol o ${toRemove} → removing ${toRemove} persons`)
+      canvasRef.value.removePersons(toRemove)
+    }
+
+    prevAnimationAmounts.value[key] = currentAmount
+  }
+}, { deep: true })
+
 const handleRoadOpacityChanged = (newOpacity) => {
   roadOpacity.value = newOpacity
 }
@@ -721,6 +752,12 @@ const handleLoadProject = async (projectData) => {
             if (resource.personAnimation && resource.amount > 0) {
               console.log(`🚶 Spawning ${resource.amount} persons pre resource '${resource.name}'`)
               canvasRef.value.spawnPersonsOnAllRoads(resource.amount)
+            }
+          })
+          // Inicializuj prevAnimationAmounts aby watch nedetekoval zmenu
+          resources.value.forEach(resource => {
+            if (resource.vehicleAnimation || resource.personAnimation) {
+              prevAnimationAmounts.value[resource.id] = resource.amount || 0
             }
           })
         }

@@ -9,7 +9,7 @@ export class CarManager {
     this.cellImages = cellImages
     this.cars = []
     this.carIdSeq = 0
-    
+
     // Konfigurácia
     this.carCount = config.carCount || 20
     this.TILE_WIDTH = config.TILE_WIDTH || 64
@@ -129,9 +129,9 @@ export class CarManager {
     carShadow.setDepth(0.6)
     carShadow.setOrigin(0.5, 1)
     carShadow.setTint(0x000000)
-    carShadow.setAlpha(0.35)
-    carShadow.setAngle(-90)
-    carShadow.setScale(0.0835 * 0.7, 0.0835 * 0.4) // Úmerne zmenšený tieň
+    carShadow.setAlpha(0.23)
+    carShadow.setAngle(-162)
+    carShadow.setScale(0.061, 0.053)
 
     carSprite.setPosition(x, y + this.TILE_HEIGHT / 2)
     carSprite.setVisible(true)
@@ -139,15 +139,15 @@ export class CarManager {
     const carDepth = 99 + (row + col)
     carSprite.setDepth(carDepth)
 
-    const shadowOffsetX = 4
-    const shadowOffsetY = 2
-    carShadow.setPosition(x + shadowOffsetX, y + shadowOffsetY)
+    carShadow.setPosition(x + (-3), y + (-9))
     carShadow.setVisible(true)
 
     const car = {
       id: this.generateCarId(),
       sprite: carSprite,
       shadow: carShadow,
+      shadowOffsetX: -3,
+      shadowOffsetY: -9,
       currentCell: { row, col },
       targetCell: null,
       moveTween: null,
@@ -372,9 +372,7 @@ export class CarManager {
         duration: this.moveDuration,
         ease: 'Linear',
         onUpdate: () => {
-          const shadowOffsetX = 4
-          const shadowOffsetY = 2
-          car.shadow.setPosition(car.sprite.x + shadowOffsetX, car.sprite.y + shadowOffsetY)
+          car.shadow.setPosition(car.sprite.x + car.shadowOffsetX, car.sprite.y + car.shadowOffsetY)
           
           const currentPos = this.isoToGrid(car.sprite.x, car.sprite.y - this.TILE_HEIGHT / 2)
           const newDepth = 99 + (currentPos.row + currentPos.col)
@@ -398,9 +396,7 @@ export class CarManager {
         duration: 300,
         ease: 'Sine.easeInOut',
         onUpdate: () => {
-          const shadowOffsetX = 4
-          const shadowOffsetY = 2
-          car.shadow.setPosition(car.sprite.x + shadowOffsetX, car.sprite.y + shadowOffsetY)
+          car.shadow.setPosition(car.sprite.x + car.shadowOffsetX, car.sprite.y + car.shadowOffsetY)
         },
         onComplete: () => {
           // Až potom sa pohne vpred
@@ -481,6 +477,25 @@ export class CarManager {
       this.worker.terminate()
       this.worker = null
     }
+  }
+
+  /**
+   * Odstráni zadaný počet áut (náhodne vybraných)
+   */
+  removeCars(count) {
+    const toRemove = Math.min(count, this.cars.length)
+    if (toRemove <= 0) return
+
+    for (let i = 0; i < toRemove; i++) {
+      const index = Math.floor(Math.random() * this.cars.length)
+      const car = this.cars[index]
+      this.stopCarMovement(car)
+      if (car.sprite) car.sprite.destroy()
+      if (car.shadow) car.shadow.destroy()
+      this.cars.splice(index, 1)
+    }
+
+    console.log(`🚗 Odstránených ${toRemove} áut, zostáva ${this.cars.length}`)
   }
 
   /**

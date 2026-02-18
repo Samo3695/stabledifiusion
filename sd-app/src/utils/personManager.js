@@ -416,6 +416,25 @@ export class PersonManager {
   }
 
   /**
+   * Odstráni zadaný počet osôb (náhodne vybraných)
+   */
+  removePersons(count) {
+    const toRemove = Math.min(count, this.persons.length)
+    if (toRemove <= 0) return
+
+    for (let i = 0; i < toRemove; i++) {
+      const index = Math.floor(Math.random() * this.persons.length)
+      const person = this.persons[index]
+      this.stopPersonMovement(person)
+      if (person.sprite) person.sprite.destroy()
+      if (person.shadow) person.shadow.destroy()
+      this.persons.splice(index, 1)
+    }
+
+    console.log(`🚶 Odstránených ${toRemove} osôb, zostáva ${this.persons.length}`)
+  }
+
+  /**
    * Získa počet osôb
    */
   getPersonCount() {

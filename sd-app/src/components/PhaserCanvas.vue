@@ -3254,6 +3254,24 @@ defineExpose({
       mainScene.createPersonsAt(row, col, 1)
     }
   },
+  // Odstráni zadaný počet áut z canvasu
+  removeCars: (count) => {
+    if (!mainScene || !mainScene.carManager || count <= 0) return
+    mainScene.carManager.removeCars(count)
+  },
+  // Odstráni zadaný počet osôb z canvasu
+  removePersons: (count) => {
+    if (!mainScene || !mainScene.personManager || count <= 0) return
+    mainScene.personManager.removePersons(count)
+  },
+  // Získa aktuálny počet áut na canvase
+  getCarCount: () => {
+    return mainScene?.carManager?.getCarCount() || 0
+  },
+  // Získa aktuálny počet osôb na canvase
+  getPersonCount: () => {
+    return mainScene?.personManager?.getPersonCount() || 0
+  },
   // Spawn cars na road tiles vedľa konkrétnej budovy
   spawnCarsOnAdjacentRoads: (buildingRow, buildingCol, totalCount, cellsX = 1, cellsY = 1) => {
     if (!mainScene || !mainScene.carManager || totalCount <= 0) return
