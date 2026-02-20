@@ -9,10 +9,25 @@ const props = defineProps({
   selectedBuildingId: {
     type: String,
     default: null
+  },
+  filterResourceId: {
+    type: String,
+    default: null
   }
 })
 
-const emit = defineEmits(['building-selected'])
+const emit = defineEmits(['building-selected', 'clear-filter'])
+
+// Filter buildings by resource (production, stored)
+const filteredBuildings = computed(() => {
+  if (!props.filterResourceId) return props.buildings
+  return props.buildings.filter(b => {
+    const bd = b.buildingData
+    if (!bd) return false
+    const check = (arr) => arr && arr.some(r => r.resourceId === props.filterResourceId)
+    return check(bd.production) || check(bd.stored)
+  })
+})
 
 // Mapovanie buildingSize na počet políčok
 const getSizeFromBuildingSize = (buildingSize) => {
@@ -42,24 +57,36 @@ const selectBuilding = (building) => {
 }
 
 // Počet budov
-const buildingCount = computed(() => props.buildings.length)
+const buildingCount = computed(() => filteredBuildings.value.length)
+const totalCount = computed(() => props.buildings.length)
 </script>
 
 <template>
   <div class="building-selector">
     <div class="section-header">
       <h3>🏗️ Buildings</h3>
-      <span class="building-count">{{ buildingCount }}</span>
+      <span class="building-count">{{ buildingCount }}<span v-if="filterResourceId"> / {{ totalCount }}</span></span>
+    </div>
+
+    <!-- Filter indicator -->
+    <div v-if="filterResourceId" class="filter-indicator">
+      <span class="filter-text">🔍 Filtered by resource</span>
+      <button class="clear-filter-btn" @click="emit('clear-filter')" title="Show all buildings">✕</button>
     </div>
     
-    <div v-if="buildingCount === 0" class="empty-state">
+    <div v-if="buildingCount === 0 && !filterResourceId" class="empty-state">
       <p>Žiadne budovy</p>
       <p class="hint">Načítajte projekt s budovami</p>
+    </div>
+
+    <div v-else-if="buildingCount === 0 && filterResourceId" class="empty-state">
+      <p>Žiadne budovy pre túto surovinu</p>
+      <button class="clear-filter-btn-large" @click="emit('clear-filter')">Zobraziť všetky</button>
     </div>
     
     <div v-else class="building-grid">
       <div
-        v-for="building in buildings"
+        v-for="building in filteredBuildings"
         :key="building.id"
         :class="['building-item', { selected: building.id === selectedBuildingId }]"
         @click="selectBuilding(building)"
@@ -98,6 +125,60 @@ const buildingCount = computed(() => props.buildings.length)
   margin: 0;
   font-size: 1.1rem;
   color: #333;
+}
+
+.filter-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+  border: 1px solid #818cf8;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: #4338ca;
+}
+
+.filter-text {
+  font-weight: 600;
+}
+
+.clear-filter-btn {
+  background: #818cf8;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: bold;
+  transition: background 0.2s;
+}
+
+.clear-filter-btn:hover {
+  background: #6366f1;
+}
+
+.clear-filter-btn-large {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  transition: opacity 0.2s;
+}
+
+.clear-filter-btn-large:hover {
+  opacity: 0.85;
 }
 
 .building-count {

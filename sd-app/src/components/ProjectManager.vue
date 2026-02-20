@@ -63,6 +63,10 @@ const props = defineProps({
   buildingProductionStates: {
     type: Object,
     default: () => ({})
+  },
+  gameTime: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -260,6 +264,7 @@ const saveProject = () => {
       },
       resources: props.resources || [],
       workforce: props.workforce || [],
+      gameTime: props.gameTime || 0,
       roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
       roadOpacity: props.roadOpacity || 100,
       buildingProductionStates: Object.entries(props.buildingProductionStates || {}).reduce((acc, [key, state]) => {
@@ -427,6 +432,7 @@ const saveGameplayProject = async () => {
       },
       resources: props.resources || [],
       workforce: props.workforce || [],
+      gameTime: props.gameTime || 0,
       roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
       roadOpacity: props.roadOpacity || 100,
       buildingProductionStates: Object.entries(props.buildingProductionStates || {}).reduce((acc, [key, state]) => {
@@ -559,6 +565,7 @@ const handleFileUpload = async (event) => {
       textureSettings: projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null },
       resources: projectData.resources || [],
       workforce: projectData.workforce || [],
+      gameTime: projectData.gameTime || 0,
       roadSpriteUrl: projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
       roadOpacity: projectData.roadOpacity || 100,
       buildingProductionStates: projectData.buildingProductionStates || {}

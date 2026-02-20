@@ -158,6 +158,10 @@ class IsoScene extends Phaser.Scene {
     
     // Aktívne stavebné animácie: { 'row-col': animationControl }
     this.activeAnimations = {}
+    
+    // Hover highlight tracking (keď nie je vybraná žiadna budova)
+    this.highlightedBuildingKey = null // Kľúč aktuálne zvýraznenej budovy
+    this.highlightedBuildingSprites = [] // Sprite-y s aplikovaným tintom
   }
 
   preload() {
@@ -736,6 +740,11 @@ class IsoScene extends Phaser.Scene {
       arrow
     }
     
+    // Auto-hide po 3 sekundách
+    this.time.delayedCall(3000, () => {
+      this.hideAutoProductionIndicator(row, col)
+    })
+    
     console.log(`✅ Auto-production indikátor vytvorený a zobrazený na [${row}, ${col}]`)
   }
 
@@ -1128,7 +1137,7 @@ class IsoScene extends Phaser.Scene {
       // Extrahujeme 3. postavu (index 2) pre front walk (row+, col+ smer)
       const front = await loadPersonGifFrames(
         this,
-        '/templates/roads/sprites/persons-mini.gif',
+        '/templates/roads/sprites/persons-mini-astro.gif',
         5,  // 5 postáv vedľa seba v GIF
         2,  // index 2 = 3. postava
         'person_front'
@@ -1137,7 +1146,7 @@ class IsoScene extends Phaser.Scene {
       // Extrahujeme 2. postavu (index 1) pre back walk (col-, row- smer)
       const back = await loadPersonGifFrames(
         this,
-        '/templates/roads/sprites/persons-mini.gif',
+        '/templates/roads/sprites/persons-mini-astro.gif',
         5,  // 5 postáv vedľa seba v GIF
         1,  // index 1 = 2. postava
         'person_back'
@@ -1158,8 +1167,8 @@ class IsoScene extends Phaser.Scene {
         this.textures.addCanvas('person1', copyCanvas)
       }
       
-      // Vypočítame frameRate z GIF delay
-      const frameRate = Math.max(2, Math.min(15, Math.round(1000 / front.delay)))
+      // Vypočítame frameRate z GIF delay (zvýšený pre plynulejšiu animáciu)
+      const frameRate = Math.max(4, Math.min(30, Math.round(1000 / front.delay) * 2))
       
       // Vytvoríme front walk animáciu (3. postava) - pre row+ a col+ smery
       if (this.anims.exists('person_walk_front')) this.anims.remove('person_walk_front')
@@ -1508,7 +1517,81 @@ class IsoScene extends Phaser.Scene {
       return
     }
     
-    const canInteract = props.templateSelected || props.deleteMode || props.selectedImageId
+    // === IDLE HOVER - keď nie je vybraná žiadna budova/template/delete mode ===
+    const canInteract = props.templateSelected || props.deleteMode || props.selectedImageId || props.roadBuildingMode || props.roadDeleteMode || props.isSettingDestination
+    
+    // Vyčistime predchádzajúci building highlight (tint)
+    if (this.highlightedBuildingSprites.length > 0) {
+      this.highlightedBuildingSprites.forEach(sprite => {
+        if (sprite && sprite.active) sprite.clearTint()
+      })
+      this.highlightedBuildingSprites = []
+      this.highlightedBuildingKey = null
+    }
+    
+    if (!canInteract && this.hoveredCell.row !== -1) {
+      // Jemný biely hover na tile pod myškou
+      this.hoverGraphics = this.add.graphics()
+      this.uiContainer.add(this.hoverGraphics)
+      
+      const hoverKey = `${this.hoveredCell.row}-${this.hoveredCell.col}`
+      const cellData = cellImages[hoverKey]
+      
+      // Zistime origin key budovy (ak je to sekundárna bunka)
+      let originKey = null
+      if (cellData) {
+        originKey = cellData.isSecondary ? `${cellData.originRow}-${cellData.originCol}` : hoverKey
+      }
+      
+      if (originKey && cellImages[originKey]) {
+        // Myška je nad budovou - zvýrazni všetky jej tiles
+        const origin = cellImages[originKey]
+        const cellsX = origin.cellsX || 1
+        const cellsY = origin.cellsY || 1
+        const [oRow, oCol] = originKey.split('-').map(Number)
+        
+        const affectedCells = this.getAffectedCells(oRow, oCol, cellsX, cellsY)
+        for (const cell of affectedCells) {
+          const { x, y } = this.gridToIso(cell.row, cell.col)
+          this.hoverGraphics.fillStyle(0xffffff, 0.2)
+          this.hoverGraphics.beginPath()
+          this.hoverGraphics.moveTo(x, y)
+          this.hoverGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+          this.hoverGraphics.lineTo(x, y + TILE_HEIGHT)
+          this.hoverGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+          this.hoverGraphics.closePath()
+          this.hoverGraphics.fillPath()
+          
+          this.hoverGraphics.lineStyle(1, 0xffffff, 0.4)
+          this.hoverGraphics.strokePath()
+        }
+        
+        // Tintni building sprite
+        const buildingSprite = this.buildingSprites[originKey]
+        if (buildingSprite && buildingSprite.active) {
+          buildingSprite.setTint(0xddddff)
+          this.highlightedBuildingSprites.push(buildingSprite)
+          this.highlightedBuildingKey = originKey
+        }
+      } else {
+        // Prázdny tile - jemný biely highlight
+        const { x, y } = this.gridToIso(this.hoveredCell.row, this.hoveredCell.col)
+        this.hoverGraphics.fillStyle(0xffffff, 0.12)
+        this.hoverGraphics.beginPath()
+        this.hoverGraphics.moveTo(x, y)
+        this.hoverGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+        this.hoverGraphics.lineTo(x, y + TILE_HEIGHT)
+        this.hoverGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+        this.hoverGraphics.closePath()
+        this.hoverGraphics.fillPath()
+        
+        this.hoverGraphics.lineStyle(1, 0xffffff, 0.25)
+        this.hoverGraphics.strokePath()
+      }
+      
+      return
+    }
+    
     if (!canInteract || this.hoveredCell.row === -1) return
     
     this.hoverGraphics = this.add.graphics()

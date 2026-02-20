@@ -276,6 +276,7 @@ export async function loadProject(projectData, canvasRef, onProgress = null) {
       workforce: projectData.workforce || [],
       roadSpriteUrl,
       roadOpacity,
+      gameTime: projectData.gameTime || 0,
       buildingProductionStates: projectData.buildingProductionStates || {}
     }
     

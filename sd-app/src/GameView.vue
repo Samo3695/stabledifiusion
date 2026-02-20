@@ -2,6 +2,7 @@
 import { ref, watch, nextTick, computed } from 'vue'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
+import GameClock from './components/GameClock.vue'
 import ResourceDisplay from './components/ResourceDisplay.vue'
 import BuildingSelector from './components/BuildingSelector.vue'
 import RoadSelector from './components/RoadSelector.vue'
@@ -48,6 +49,7 @@ const workforce = ref([])
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png')
 const roadOpacity = ref(100)
 const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
+const gameTime = ref(0) // Herný čas v milisekundách
 const buildingProductionStates = ref({}) // Mapa stavov auto produkcie pre každú budovu: { 'row-col': { enabled: boolean, interval: number, buildingData: {...}, progress: 0, progressInterval: null } }
 const allocatedResources = ref({}) // Tracking alokovaných work force resources { resourceId: amount }
 const workforceAllocations = ref({}) // Detailný tracking alokácií { resourceId: [{row, col, amount, type: 'build'|'production', buildingName}] }
@@ -58,6 +60,8 @@ const pendingBuildAllocations = ref({}) // Čakajúce alokácie work-force pre b
 const buildingWorkerCount = ref({}) // Počet pracovníkov na stavbe: { 'row-col': count }
 const stoppedByResources = ref({}) // Budovy zastavené kvôli nedostatku surovín: { 'row-col': { row, col, buildingData } }
 const selectedBuildingId = ref(null) // Vybraná budova z BuildingSelector
+const sidebarTab = ref('resources') // 'resources' | 'buildings'
+const filterResourceId = ref(null) // Filter pre BuildingSelector podľa resource
 const selectedBuildingDestinationTiles = ref([]) // Destination tiles pre vybranú budovu
 const selectedBuildingCanBuildOnlyInDestination = ref(false) // Či vybraná budova môže byť postavená len na destination tiles
 const showBuildingModal = ref(false) // Či sa má zobraziť modal s metadátami budovy
@@ -364,7 +368,7 @@ const handleCellSelected = ({ row, col }) => {
     }
 
     if (targetData?.buildingData?.isBuilding && !targetData.isRoadTile) {
-      refundBuildCostOnDelete(targetData.buildingData, resources.value)
+      // Suroviny sa NEVRACAJU pri zmazaní budovy
     }
 
     canvasRef.value.deleteImageAtCell(row, col)
@@ -538,6 +542,7 @@ const handleLoadProject = async (projectData) => {
     workforce.value = loadedData.workforce
     roadSpriteUrl.value = loadedData.roadSpriteUrl
     roadOpacity.value = loadedData.roadOpacity
+    gameTime.value = loadedData.gameTime || 0
     
     // Načítaj images
     const loadedImages = loadedData.images || []
@@ -559,7 +564,7 @@ const handleLoadProject = async (projectData) => {
       }))
       
       if (images.value.length > 0) {
-        selectedImageId.value = images.value[0].id
+        selectedImageId.value = null
       }
     }
     
@@ -1335,9 +1340,7 @@ const handleBuildingClicked = ({ row, col, buildingData }) => {
 
 // Handler pre zmazanie budovy (bulldozer/road delete mode)
 const handleBuildingDeleted = ({ row, col, buildingData }) => {
-  if (buildingData?.isBuilding) {
-    refundBuildCostOnDelete(buildingData, resources.value)
-  }
+  // Suroviny sa NEVRACAJU pri zmazaní budovy
   
   // Vrátenie pending build alokácií (vrátane vehicleAnimation resources) ak bola budova v stavbe
   if (row !== undefined && col !== undefined) {
@@ -1956,6 +1959,12 @@ const handleShowAllocations = (resourceId) => {
     canvasRef.value?.hideWorkforceAllocations()
   }, 4000)
 }
+
+// Handler pre kliknutie na resource - prepne na buildings tab s filtrom
+const handleResourceClicked = (resourceId) => {
+  filterResourceId.value = resourceId
+  sidebarTab.value = 'buildings'
+}
 </script>
 
 <template>
@@ -2026,6 +2035,7 @@ const handleShowAllocations = (resourceId) => {
         :roadSpriteUrl="roadSpriteUrl"
         :roadOpacity="roadOpacity"
         :buildingProductionStates="buildingProductionStates"
+        :gameTime="gameTime"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"
@@ -2034,26 +2044,60 @@ const handleShowAllocations = (resourceId) => {
       />
     </header>
     
+    <!-- Game Clock - fixná pozícia -->
+    <GameClock 
+      :initialTime="gameTime"
+      @update:gameTime="gameTime = $event"
+    />
+
     <!-- Pravý sidebar s Resources -->
     <aside class="sidebar">
+      <!-- Tabs -->
+      <div class="sidebar-tabs">
+        <button 
+          :class="['sidebar-tab', { active: sidebarTab === 'resources' }]" 
+          @click="sidebarTab = 'resources'; filterResourceId = null"
+        >
+          📊 Resources
+        </button>
+        <button 
+          :class="['sidebar-tab', { active: sidebarTab === 'buildings' }]" 
+          @click="sidebarTab = 'buildings'"
+        >
+          🏗️ Buildings
+        </button>
+      </div>
+
+      <!-- Resources tab -->
       <ResourceDisplay 
+        v-show="sidebarTab === 'resources'"
         :resources="resources"
         :storedResources="storedResources"
         :allocatedResources="allocatedResources"
         @reduce-to-capacity="handleReduceToCapacity"
         @show-allocations="handleShowAllocations"
+        @resource-clicked="handleResourceClicked"
       />
+
+      <!-- Buildings tab -->
       <BuildingSelector 
+        v-if="sidebarTab === 'buildings'"
         :buildings="buildings"
         :selectedBuildingId="selectedBuildingId"
+        :filterResourceId="filterResourceId"
         @building-selected="handleBuildingSelected"
+        @clear-filter="filterResourceId = null"
       />
-      <RoadSelector 
-        :roadBuildingMode="roadBuildingMode"
-        :roadDeleteMode="roadDeleteMode"
-        @road-mode-toggled="handleRoadModeToggled"
-        @road-delete-mode-toggled="handleRoadDeleteModeToggled"
-      />
+
+      <!-- Road selector - fixed at bottom in buildings tab -->
+      <div v-if="sidebarTab === 'buildings'" class="sidebar-bottom-fixed">
+        <RoadSelector 
+          :roadBuildingMode="roadBuildingMode"
+          :roadDeleteMode="roadDeleteMode"
+          @road-mode-toggled="handleRoadModeToggled"
+          @road-delete-mode-toggled="handleRoadDeleteModeToggled"
+        />
+      </div>
     </aside>
     
     <!-- Modal s metadátami budovy -->
@@ -2541,6 +2585,59 @@ header {
   overflow-y: auto;
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
   z-index: 20;
+  padding-top: 70px; /* Priestor pre fixný GameClock */
+}
+
+/* Sidebar Tabs */
+.sidebar-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0.5rem 0.5rem 0;
+  background: white;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 0.5rem 0.25rem;
+  border: none;
+  background: #f0f0f0;
+  color: #666;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-bottom: 2px solid transparent;
+}
+
+.sidebar-tab:first-child {
+  border-radius: 8px 0 0 0;
+}
+
+.sidebar-tab:last-child {
+  border-radius: 0 8px 0 0;
+}
+
+.sidebar-tab.active {
+  background: white;
+  color: #333;
+  border-bottom: 2px solid #667eea;
+}
+
+.sidebar-tab:hover:not(.active) {
+  background: #e8e8e8;
+}
+
+/* Road selector fixed at bottom */
+.sidebar-bottom-fixed {
+  position: sticky;
+  bottom: 0;
+  background: white;
+  z-index: 5;
+  border-top: 2px solid #f0f0f0;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
 }
 
 /* Loading overlay styles */
