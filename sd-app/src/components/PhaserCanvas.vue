@@ -1523,7 +1523,7 @@ class IsoScene extends Phaser.Scene {
     }
     
     // === IDLE HOVER - keď nie je vybraná žiadna budova/template/delete mode ===
-    const canInteract = props.templateSelected || props.deleteMode || props.selectedImageId || props.roadBuildingMode || props.roadDeleteMode || props.recycleMode || props.isSettingDestination
+    const canInteract = props.templateSelected || props.selectedImageId || props.roadBuildingMode || props.roadDeleteMode || props.isSettingDestination
     
     // Vyčistime predchádzajúci building highlight (tint)
     if (this.highlightedBuildingSprites.length > 0) {
@@ -1534,8 +1534,10 @@ class IsoScene extends Phaser.Scene {
       this.highlightedBuildingKey = null
     }
     
-    if (!canInteract && this.hoveredCell.row !== -1) {
-      // Jemný biely hover na tile pod myškou
+    const isSpecialMode = props.recycleMode || props.deleteMode
+    
+    if ((!canInteract || isSpecialMode) && this.hoveredCell.row !== -1) {
+      // Hover na tile pod myškou: biely v idle, oranžový v recycle, červený v delete
       this.hoverGraphics = this.add.graphics()
       this.uiContainer.add(this.hoverGraphics)
       
@@ -1555,10 +1557,26 @@ class IsoScene extends Phaser.Scene {
         const cellsY = origin.cellsY || 1
         const [oRow, oCol] = originKey.split('-').map(Number)
         
+        // Farby podľa režimu: recycle=oranžový, delete=červený, idle=biely
+        let tileFillColor, tileFillAlpha, tileStrokeColor, tileStrokeAlpha, tintColor
+        if (props.recycleMode) {
+          tileFillColor = 0xff8800; tileFillAlpha = 0.3
+          tileStrokeColor = 0xff8800; tileStrokeAlpha = 0.6
+          tintColor = 0xffcc88
+        } else if (props.deleteMode) {
+          tileFillColor = 0xff0000; tileFillAlpha = 0.3
+          tileStrokeColor = 0xff0000; tileStrokeAlpha = 0.6
+          tintColor = 0xff8888
+        } else {
+          tileFillColor = 0xffffff; tileFillAlpha = 0.2
+          tileStrokeColor = 0xffffff; tileStrokeAlpha = 0.4
+          tintColor = 0xddddff
+        }
+        
         const affectedCells = this.getAffectedCells(oRow, oCol, cellsX, cellsY)
         for (const cell of affectedCells) {
           const { x, y } = this.gridToIso(cell.row, cell.col)
-          this.hoverGraphics.fillStyle(0xffffff, 0.2)
+          this.hoverGraphics.fillStyle(tileFillColor, tileFillAlpha)
           this.hoverGraphics.beginPath()
           this.hoverGraphics.moveTo(x, y)
           this.hoverGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
@@ -1567,19 +1585,19 @@ class IsoScene extends Phaser.Scene {
           this.hoverGraphics.closePath()
           this.hoverGraphics.fillPath()
           
-          this.hoverGraphics.lineStyle(1, 0xffffff, 0.4)
+          this.hoverGraphics.lineStyle(1, tileStrokeColor, tileStrokeAlpha)
           this.hoverGraphics.strokePath()
         }
         
         // Tintni building sprite
         const buildingSprite = this.buildingSprites[originKey]
         if (buildingSprite && buildingSprite.active) {
-          buildingSprite.setTint(0xddddff)
+          buildingSprite.setTint(tintColor)
           this.highlightedBuildingSprites.push(buildingSprite)
           this.highlightedBuildingKey = originKey
         }
-      } else {
-        // Prázdny tile - jemný biely highlight
+      } else if (!isSpecialMode) {
+        // Prázdny tile - jemný biely highlight (len v idle, nie v recycle/delete mode)
         const { x, y } = this.gridToIso(this.hoveredCell.row, this.hoveredCell.col)
         this.hoverGraphics.fillStyle(0xffffff, 0.12)
         this.hoverGraphics.beginPath()
@@ -3619,6 +3637,24 @@ defineExpose({
     const cellsY = cellData?.cellsY || 1
     const hasCars = mainScene.carManager && mainScene.carManager.cars && mainScene.carManager.cars.length > 0
 
+    // Compute positioning params (same as addBuildingWithShadow)
+    const { x, y } = mainScene.gridToIso(targetRow, targetCol)
+    let offsetX = 0
+    let offsetY = 0
+    if (cellsX === 1 && cellsY === 2) {
+      offsetX = -TILE_WIDTH / 4
+      offsetY = TILE_HEIGHT / 2
+    } else if (cellsX === 2 && cellsY === 2) {
+      offsetY = TILE_HEIGHT
+    } else if (cellsX >= 3) {
+      offsetY = TILE_HEIGHT * (cellsX - 1)
+    }
+    const targetWidth = TILE_WIDTH * cellsX * 0.95
+    const baseShadowOffset = TILE_WIDTH * cellsX * 0.4
+    const buildingData = cellData?.buildingData || {}
+    const dontDropShadow = buildingData.dontDropShadow || false
+    const isTreeTemplate = (cellData?.templateName || '').toLowerCase().includes('tree')
+
     // Emit initial state
     emit('building-state-changed', { row: targetRow, col: targetCol, state: hasCars ? 'recycling-waiting' : 'recycling' })
 
@@ -3628,6 +3664,14 @@ defineExpose({
       col: targetCol,
       cellsX,
       cellsY,
+      x,
+      y,
+      offsetX,
+      offsetY,
+      targetWidth,
+      dontDropShadow,
+      isTreeTemplate,
+      baseShadowOffset,
       shadowSprites: mainScene.shadowSprites,
       redrawShadowsAround: (r, c) => mainScene.redrawShadowsAround(r, c),
       createConstructionDustEffect: (cx, cy, cw, ch) => mainScene.createConstructionDustEffect(cx, cy, cw, ch),

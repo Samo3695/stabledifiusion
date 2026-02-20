@@ -2926,7 +2926,7 @@ header {
   overflow-y: auto;
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
   z-index: 20;
-  padding-top: 70px; /* Priestor pre fixný GameClock */
+  padding-top: 55px; /* Priestor pre fixný GameClock */
 }
 
 /* Sidebar Tabs */

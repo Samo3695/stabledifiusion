@@ -92,6 +92,7 @@ function drawIsometricMask(graphics, centerX, bottomY, width, height, maxHeight)
 /**
  * Spustí REVERZNÚ animáciu budovy (recyklácia/demolícia)
  * Budova sa "rozoberie" zhora dole - maska sa zmenšuje od plnej výšky k nule
+ * Obsahuje construct sprite-y a 0.png tempSprite rovnako ako stavebná animácia
  * 
  * @param {Object} scene - Phaser scéna
  * @param {Object} params - Parametre
@@ -104,6 +105,14 @@ export function startRecycleAnimation(scene, params) {
     col,
     cellsX = 1,
     cellsY = 1,
+    x: gridX,
+    y: gridY,
+    offsetX = 0,
+    offsetY = 0,
+    targetWidth,
+    dontDropShadow = false,
+    isTreeTemplate = false,
+    baseShadowOffset = 0,
     shadowSprites,
     redrawShadowsAround,
     createConstructionDustEffect,
@@ -117,16 +126,22 @@ export function startRecycleAnimation(scene, params) {
   const RECYCLE_DURATION = calculateAnimationDuration(buildCost)
   const spriteHeight = buildingSprite.displayHeight
   const finalY = buildingSprite.y
+  const diamondHeight = (cellsX + cellsY) * (TILE_HEIGHT / 2)
+  const effectiveTargetWidth = targetWidth || buildingSprite.displayWidth
 
-  // Pie chart pre progress
-  const pieChartRadius = Math.max(8, Math.min(14, buildingSprite.displayWidth * 0.12))
+  // === PIE CHART ===
+  const pieChartRadius = Math.max(8, Math.min(14, effectiveTargetWidth * 0.12))
   const pieChartX = buildingSprite.x
   let pieChartGraphics = scene.add.graphics()
   pieChartGraphics.setDepth(999999)
   pieChartGraphics.setAlpha(0)
   let pieChartVisible = false
 
-  // Dust effect
+  // Phase 2 progress tracking (same as build animation)
+  const phase2StartHeight = diamondHeight / 2
+  const phase2TotalHeight = spriteHeight - phase2StartHeight
+
+  // === DUST EFFECT ===
   let constructionEffects = createConstructionDustEffect(
     buildingSprite.x,
     finalY - spriteHeight,
@@ -137,7 +152,7 @@ export function startRecycleAnimation(scene, params) {
     constructionEffects.setDepth(Math.max(buildingSprite.depth + 0.2, 1.0))
   }
 
-  // Mask for building - starts at full height
+  // === MASK FOR BUILDING - starts at full height ===
   const maskShape = scene.make.graphics()
   maskShape.fillStyle(0xffffff)
   maskShape.fillRect(
@@ -149,6 +164,94 @@ export function startRecycleAnimation(scene, params) {
   const mask = maskShape.createGeometryMask()
   buildingSprite.setMask(mask)
 
+  // === CONSTRUCT SPRITES na 3 cípoch diamantu ===
+  const constructSprites = []
+  const constructMasks = []
+  
+  const originYOffset = -(Math.max(cellsX, cellsY) - 1) * TILE_HEIGHT
+  const diamondTips = [
+    { name: 'left', x: gridX + offsetX - (cellsY * TILE_WIDTH) / 2, y: gridY + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 4 },
+    { name: 'bottom', x: gridX + offsetX, y: gridY + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 2 },
+    { name: 'right', x: gridX + offsetX + (cellsY * TILE_WIDTH) / 2, y: gridY + offsetY + originYOffset + ((cellsX + cellsY) * TILE_HEIGHT) / 4 }
+  ]
+  
+  if (scene.textures.exists('construct') && !dontDropShadow) {
+    diamondTips.forEach((tip) => {
+      const constructSprite = scene.add.sprite(tip.x, tip.y, 'construct')
+      const constructScale = (TILE_WIDTH * 0.2) / constructSprite.width
+      constructSprite.setScale(constructScale)
+      constructSprite.setOrigin(0.5, 1)
+      
+      if (tip.name === 'left') {
+        constructSprite.x += constructSprite.displayWidth
+        constructSprite.y += 5
+      } else if (tip.name === 'right') {
+        constructSprite.x -= constructSprite.displayWidth
+        constructSprite.y += 5
+      }
+      
+      // Construct mask - starts hidden (height=0), appears only in phase 2
+      const constructMaskShape = scene.make.graphics()
+      constructMaskShape.fillStyle(0xffffff)
+      constructMaskShape.fillRect(
+        constructSprite.x - constructSprite.displayWidth / 2,
+        constructSprite.y,
+        constructSprite.displayWidth,
+        0
+      )
+      const constructMask = constructMaskShape.createGeometryMask()
+      constructSprite.setMask(constructMask)
+      
+      // Set depth same as during building: buildingSprite.depth + 1
+      constructSprite.setDepth(buildingSprite.depth + 1)
+      
+      constructSprites.push(constructSprite)
+      constructMasks.push({ shape: constructMaskShape, sprite: constructSprite, height: spriteHeight, initialY: constructSprite.y })
+    })
+  }
+
+  // === 0.PNG TEMP SPRITE ===
+  const tempBuildingKey = `temp_recycle_${gridKey}_${Date.now()}`
+  let tempSprite = null
+  let tempSpriteInitialY = 0
+  let tempSpriteMaskShape = null
+  let tempSpriteHeight = 0
+  
+  scene.load.image(tempBuildingKey, '/templates/cubes1/0.png')
+  scene.load.once('complete', () => {
+    tempSprite = scene.add.sprite(gridX + offsetX, gridY + TILE_HEIGHT + offsetY, tempBuildingKey)
+    const tempScale = effectiveTargetWidth / tempSprite.width
+    tempSprite.setScale(tempScale)
+    tempSprite.setOrigin(0.5, 1)
+    tempSprite.setDepth(buildingSprite.depth + 2) // Same as build: above building and construct sprites
+    tempSprite.setAlpha(1)
+    
+    tempSpriteInitialY = tempSprite.y
+    tempSpriteHeight = tempSprite.displayHeight
+    
+    // Temp sprite mask - starts hidden, will be revealed based on currentHeight in updateReverseHeight
+    tempSpriteMaskShape = scene.make.graphics()
+    drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, 0, tempSpriteHeight)
+    const tempMask = tempSpriteMaskShape.createGeometryMask()
+    tempSprite.setMask(tempMask)
+    
+    // Shadow for temp sprite - starts hidden
+    shadowSprites[tempBuildingKey] = {
+      textureKey: tempBuildingKey,
+      x: gridX + offsetX,
+      y: gridY + TILE_HEIGHT + offsetY,
+      scale: tempScale,
+      scaleMultiplier: 0,
+      alpha: 1,
+      cellsX,
+      isTree: isTreeTemplate,
+      offsetX: -baseShadowOffset,
+      offsetY: baseShadowOffset * 0.375
+    }
+  })
+  scene.load.start()
+
+  // === ANIMATION CONTROL ===
   const animationControl = {
     isPaused: false,
     _tween: null,
@@ -182,8 +285,10 @@ export function startRecycleAnimation(scene, params) {
     }
   }
 
-  // Update function - height goes from spriteHeight down to 0
+  // === UPDATE FUNCTION - reverse: height goes from spriteHeight down to 0 ===
+  // Maps the decreasing height to the BUILD animation phases in reverse order
   function updateReverseHeight(currentHeight) {
+    // Main building mask
     maskShape.clear()
     maskShape.fillStyle(0xffffff)
     if (currentHeight > 0) {
@@ -195,39 +300,137 @@ export function startRecycleAnimation(scene, params) {
       )
     }
 
-    // Move dust effects
+    // Dust effects follow top edge
     if (constructionEffects) {
       constructionEffects.setPosition(buildingSprite.x, finalY - currentHeight)
     }
 
-    // Shadow scale follows reverse progress
+    // Shadow scale follows progress
     if (shadowSprites[gridKey]) {
       shadowSprites[gridKey].scaleMultiplier = currentHeight / spriteHeight
     }
 
-    // Pie chart progress
+    // === PIE CHART ===
     if (pieChartGraphics) {
-      if (!pieChartVisible) {
-        pieChartVisible = true
-        pieChartGraphics.setAlpha(1)
+      if (currentHeight <= spriteHeight - phase2StartHeight) {
+        if (!pieChartVisible) {
+          pieChartVisible = true
+          pieChartGraphics.setAlpha(1)
+        }
+        const phase2Progress = Math.min(1, 1 - (currentHeight / (spriteHeight - phase2StartHeight)))
+        const currentPieY = finalY - currentHeight - pieChartRadius - 4
+        
+        drawPieChart(
+          pieChartGraphics,
+          pieChartX,
+          currentPieY,
+          pieChartRadius,
+          phase2Progress,
+          0x333333,
+          0xf59e0b, // orange/yellow for recycle
+          0xffffff
+        )
       }
-      const progress = 1 - (currentHeight / spriteHeight)
-      const currentPieY = finalY - currentHeight - pieChartRadius - 4
+    }
 
-      drawPieChart(
-        pieChartGraphics,
-        pieChartX,
-        currentPieY,
-        pieChartRadius,
-        progress,
-        0x333333,
-        0xf59e0b, // orange/yellow for recycle
-        0xffffff
-      )
+    // === CONSTRUCT SPRITES - reverse of build animation ===
+    if (!dontDropShadow) {
+      constructMasks.forEach(maskInfo => {
+        let currentConstructHeight = 0
+        
+        const constructPhase3Start = dontDropShadow 
+          ? spriteHeight - diamondHeight / 0.5
+          : spriteHeight - diamondHeight / 1.2
+        
+        // Reverse: map currentHeight to the same phases as build
+        if (currentHeight >= diamondHeight / 2 && currentHeight < constructPhase3Start) {
+          const constructAnimDuration = constructPhase3Start - diamondHeight / 2
+          const progressInConstruct = (currentHeight - diamondHeight / 2) / constructAnimDuration
+          currentConstructHeight = progressInConstruct * maskInfo.height
+        } else if (currentHeight >= constructPhase3Start) {
+          const phase3Duration = spriteHeight - constructPhase3Start
+          const phase3Progress = (currentHeight - constructPhase3Start) / phase3Duration
+          currentConstructHeight = maskInfo.height * (1 - phase3Progress)
+        }
+        
+        const maskTopY = finalY - currentHeight
+        const maskBottomY = maskInfo.initialY
+        const actualMaskHeight = Math.min(currentConstructHeight, maskBottomY - maskTopY)
+        
+        maskInfo.shape.clear()
+        maskInfo.shape.fillStyle(0xffffff)
+        if (actualMaskHeight > 0) {
+          maskInfo.shape.fillRect(
+            maskInfo.sprite.x - maskInfo.sprite.displayWidth / 2,
+            maskBottomY - actualMaskHeight,
+            maskInfo.sprite.displayWidth,
+            actualMaskHeight
+          )
+        }
+      })
+    }
+
+    // === 0.PNG TEMP SPRITE - reverse of build animation ===
+    if (tempSprite && tempSpriteMaskShape) {
+      if (dontDropShadow) {
+        // Reverse for dontDropShadow buildings
+        if (currentHeight < spriteHeight - diamondHeight / 2.2) {
+          tempSprite.y = tempSpriteInitialY
+          const tempPhase1Duration = spriteHeight - diamondHeight / 2.2
+          const tempPhase1Progress = currentHeight / tempPhase1Duration
+          const tempMaskHeight = tempPhase1Progress * tempSpriteHeight
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
+        } else {
+          tempSprite.y = tempSpriteInitialY
+          const phase3Progress = (currentHeight - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
+          const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
+          const newBottomY = tempSpriteInitialY - (tempSpriteHeight - remainingMaskHeight)
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
+        }
+      } else {
+        // Reverse for normal buildings - 3 phases mapped by currentHeight
+        if (currentHeight < diamondHeight / 2) {
+          // Phase 1 of build (low height) - 0.png mask grows from bottom
+          tempSprite.y = tempSpriteInitialY
+          const tempMaskHeight = (currentHeight / (diamondHeight / 2)) * tempSpriteHeight
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSpriteInitialY, tempSprite.displayWidth, tempMaskHeight, tempSpriteHeight)
+          
+          if (shadowSprites[tempBuildingKey]) {
+            shadowSprites[tempBuildingKey].scaleMultiplier = 0
+          }
+        } else if (currentHeight < spriteHeight - diamondHeight / 2.2) {
+          // Phase 2 of build (mid height) - 0.png moves up
+          const traveledHeight = currentHeight - diamondHeight / 2
+          tempSprite.y = tempSpriteInitialY - traveledHeight
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, tempSprite.y, tempSprite.displayWidth, tempSpriteHeight, tempSpriteHeight)
+          
+          const tempPhase2Duration = (spriteHeight - diamondHeight / 2.2) - diamondHeight / 2
+          const tempPhase2Progress = (currentHeight - diamondHeight / 2) / tempPhase2Duration
+          if (shadowSprites[tempBuildingKey]) {
+            shadowSprites[tempBuildingKey].scaleMultiplier = tempPhase2Progress
+            shadowSprites[tempBuildingKey].y = tempSprite.y
+          }
+          redrawShadowsAround(row, col)
+        } else {
+          // Phase 3 of build (high height) - 0.png fades from top
+          const finalTempY = tempSpriteInitialY - (spriteHeight - diamondHeight / 2.2 - diamondHeight / 2)
+          tempSprite.y = finalTempY
+          
+          const phase3Progress = (currentHeight - (spriteHeight - diamondHeight / 2.2)) / (diamondHeight / 2.2)
+          const remainingMaskHeight = tempSpriteHeight * (1 - phase3Progress)
+          const newBottomY = finalTempY - (tempSpriteHeight - remainingMaskHeight)
+          drawIsometricMask(tempSpriteMaskShape, tempSprite.x, newBottomY, tempSprite.displayWidth, remainingMaskHeight, tempSpriteHeight)
+          
+          if (shadowSprites[tempBuildingKey]) {
+            shadowSprites[tempBuildingKey].scaleMultiplier = 1
+            shadowSprites[tempBuildingKey].y = finalTempY
+          }
+        }
+      }
     }
   }
 
-  // Cleanup after reverse animation finishes
+  // === CLEANUP ===
   function cleanupAnimation() {
     buildingSprite.clearMask(true)
     if (maskShape) maskShape.destroy()
@@ -241,6 +444,28 @@ export function startRecycleAnimation(scene, params) {
       pieChartGraphics.destroy()
       pieChartGraphics = null
     }
+    // Cleanup tempSprite
+    if (tempSprite) {
+      tempSprite.destroy()
+      tempSprite = null
+    }
+    if (tempSpriteMaskShape) {
+      tempSpriteMaskShape.destroy()
+      tempSpriteMaskShape = null
+    }
+    if (shadowSprites[tempBuildingKey]) {
+      delete shadowSprites[tempBuildingKey]
+    }
+    // Cleanup construct sprites
+    constructSprites.forEach(sprite => {
+      if (sprite) sprite.destroy()
+    })
+    constructMasks.forEach(maskInfo => {
+      if (maskInfo.shape) maskInfo.shape.destroy()
+    })
+    // Redraw shadows
+    redrawShadowsAround(row, col)
+    
     if (onAnimationComplete) onAnimationComplete()
   }
 
