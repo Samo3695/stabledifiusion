@@ -9,13 +9,21 @@ const props = defineProps({
   roadDeleteMode: {
     type: Boolean,
     default: false
+  },
+  recycleMode: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['road-mode-toggled', 'road-delete-mode-toggled'])
+const emit = defineEmits(['road-mode-toggled', 'road-delete-mode-toggled', 'recycle-mode-toggled'])
 
 const toggleRoadMode = () => {
   emit('road-mode-toggled', !props.roadBuildingMode)
+}
+
+const toggleRecycleMode = () => {
+  emit('recycle-mode-toggled', !props.recycleMode)
 }
 
 const toggleRoadDeleteMode = () => {
@@ -39,11 +47,11 @@ const toggleRoadDeleteMode = () => {
       </svg>
     </button>
 
-    <!-- Recycle (placeholder) -->
+    <!-- Recycle -->
     <button
-      class="toolbar-btn disabled"
-      title="Recycle - coming soon"
-      @click.prevent
+      :class="['toolbar-btn recycle', { active: recycleMode }]"
+      title="Recycle building - returns resources"
+      @click="toggleRecycleMode"
     >
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/>
@@ -115,6 +123,13 @@ const toggleRoadDeleteMode = () => {
   background: linear-gradient(135deg, rgba(239,68,68,0.15) 0%, rgba(220,38,38,0.15) 100%);
   color: #dc2626;
   box-shadow: 0 0 0 2px rgba(239,68,68,0.25);
+}
+
+.toolbar-btn.recycle.active {
+  border-color: #f59e0b;
+  background: linear-gradient(135deg, rgba(245,158,11,0.15) 0%, rgba(217,119,6,0.15) 100%);
+  color: #d97706;
+  box-shadow: 0 0 0 2px rgba(245,158,11,0.25);
 }
 
 .toolbar-btn.disabled {

@@ -90,6 +90,193 @@ function drawIsometricMask(graphics, centerX, bottomY, width, height, maxHeight)
 }
 
 /**
+ * Spustí REVERZNÚ animáciu budovy (recyklácia/demolícia)
+ * Budova sa "rozoberie" zhora dole - maska sa zmenšuje od plnej výšky k nule
+ * 
+ * @param {Object} scene - Phaser scéna
+ * @param {Object} params - Parametre
+ * @returns {Object} - { animationControl }
+ */
+export function startRecycleAnimation(scene, params) {
+  const {
+    buildingSprite,
+    row,
+    col,
+    cellsX = 1,
+    cellsY = 1,
+    shadowSprites,
+    redrawShadowsAround,
+    createConstructionDustEffect,
+    buildCost = null,
+    waitForCar = true,
+    onWaitingForCar = null,
+    onAnimationComplete = null
+  } = params
+
+  const gridKey = `${row}-${col}`
+  const RECYCLE_DURATION = calculateAnimationDuration(buildCost)
+  const spriteHeight = buildingSprite.displayHeight
+  const finalY = buildingSprite.y
+
+  // Pie chart pre progress
+  const pieChartRadius = Math.max(8, Math.min(14, buildingSprite.displayWidth * 0.12))
+  const pieChartX = buildingSprite.x
+  let pieChartGraphics = scene.add.graphics()
+  pieChartGraphics.setDepth(999999)
+  pieChartGraphics.setAlpha(0)
+  let pieChartVisible = false
+
+  // Dust effect
+  let constructionEffects = createConstructionDustEffect(
+    buildingSprite.x,
+    finalY - spriteHeight,
+    buildingSprite.displayWidth,
+    spriteHeight
+  )
+  if (constructionEffects) {
+    constructionEffects.setDepth(Math.max(buildingSprite.depth + 0.2, 1.0))
+  }
+
+  // Mask for building - starts at full height
+  const maskShape = scene.make.graphics()
+  maskShape.fillStyle(0xffffff)
+  maskShape.fillRect(
+    buildingSprite.x - buildingSprite.displayWidth / 2,
+    finalY - spriteHeight,
+    buildingSprite.displayWidth,
+    spriteHeight
+  )
+  const mask = maskShape.createGeometryMask()
+  buildingSprite.setMask(mask)
+
+  const animationControl = {
+    isPaused: false,
+    _tween: null,
+    _phase: 1,
+    _waitingForPhase2: false,
+    _startPhase2: null,
+    _workerCount: 1,
+    _dispatches: [],
+    _buildingData: { buildCost },
+    pause() {
+      if (this._tween && !this.isPaused) {
+        this._tween.pause()
+        this.isPaused = true
+      }
+    },
+    resume() {
+      if (this._waitingForPhase2) {
+        this._waitingForPhase2 = false
+        this.isPaused = false
+        if (this._startPhase2) this._startPhase2()
+      } else if (this._tween && this.isPaused) {
+        this._tween.resume()
+        this.isPaused = false
+      }
+    },
+    setWorkerCount(count) {
+      this._workerCount = Math.max(1, count)
+      if (this._tween && this._phase === 2) {
+        this._tween.setTimeScale(this._workerCount)
+      }
+    }
+  }
+
+  // Update function - height goes from spriteHeight down to 0
+  function updateReverseHeight(currentHeight) {
+    maskShape.clear()
+    maskShape.fillStyle(0xffffff)
+    if (currentHeight > 0) {
+      maskShape.fillRect(
+        buildingSprite.x - buildingSprite.displayWidth / 2,
+        finalY - currentHeight,
+        buildingSprite.displayWidth,
+        currentHeight
+      )
+    }
+
+    // Move dust effects
+    if (constructionEffects) {
+      constructionEffects.setPosition(buildingSprite.x, finalY - currentHeight)
+    }
+
+    // Shadow scale follows reverse progress
+    if (shadowSprites[gridKey]) {
+      shadowSprites[gridKey].scaleMultiplier = currentHeight / spriteHeight
+    }
+
+    // Pie chart progress
+    if (pieChartGraphics) {
+      if (!pieChartVisible) {
+        pieChartVisible = true
+        pieChartGraphics.setAlpha(1)
+      }
+      const progress = 1 - (currentHeight / spriteHeight)
+      const currentPieY = finalY - currentHeight - pieChartRadius - 4
+
+      drawPieChart(
+        pieChartGraphics,
+        pieChartX,
+        currentPieY,
+        pieChartRadius,
+        progress,
+        0x333333,
+        0xf59e0b, // orange/yellow for recycle
+        0xffffff
+      )
+    }
+  }
+
+  // Cleanup after reverse animation finishes
+  function cleanupAnimation() {
+    buildingSprite.clearMask(true)
+    if (maskShape) maskShape.destroy()
+    if (constructionEffects) {
+      constructionEffects.stop()
+      scene.time.delayedCall(1000, () => {
+        constructionEffects.destroy()
+      })
+    }
+    if (pieChartGraphics) {
+      pieChartGraphics.destroy()
+      pieChartGraphics = null
+    }
+    if (onAnimationComplete) onAnimationComplete()
+  }
+
+  // Phase 2: actual reverse animation (after car arrives)
+  function startPhase2Fn() {
+    animationControl._phase = 2
+    const phase2Tween = scene.tweens.addCounter({
+      from: spriteHeight,
+      to: 0,
+      duration: RECYCLE_DURATION,
+      ease: 'Linear',
+      onUpdate: (tween) => updateReverseHeight(tween.getValue()),
+      onComplete: cleanupAnimation
+    })
+    animationControl._tween = phase2Tween
+    if (animationControl._workerCount > 1) {
+      phase2Tween.setTimeScale(animationControl._workerCount)
+    }
+    console.log(`♻️ Recycle fáza 2 [${row}, ${col}]: ${RECYCLE_DURATION}ms, ${animationControl._workerCount}x rýchlosť`)
+  }
+  animationControl._startPhase2 = startPhase2Fn
+
+  if (waitForCar) {
+    // Immediately pause and wait for car
+    animationControl.isPaused = true
+    animationControl._waitingForPhase2 = true
+    console.log(`♻️ Recycle [${row}, ${col}] čaká na auto`)
+    if (onWaitingForCar) onWaitingForCar()
+  } else {
+    startPhase2Fn()
+  }
+
+  return { animationControl }
+}
+
+/**
  * Spustí animáciu stavania budovy
  * @param {Object} scene - Phaser scéna (this z PhaserCanvas)
  * @param {Object} params - Parametre animácie

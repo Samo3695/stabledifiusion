@@ -4,7 +4,7 @@ import Phaser from 'phaser'
 import { PersonManager } from '../utils/personManager.js'
 import { CarManager } from '../utils/carManager.js'
 import { loadPersonGifFrames } from '../utils/gifFrameExtractor.js'
-import { startBuildingAnimation } from '../utils/buildingAnimationService.js'
+import { startBuildingAnimation, startRecycleAnimation } from '../utils/buildingAnimationService.js'
 import { findNearestCar, dispatchCarToBuilding } from '../utils/carDispatchService.js'
 
 const props = defineProps({
@@ -43,6 +43,10 @@ const props = defineProps({
     default: false
   },
   roadDeleteMode: {
+    type: Boolean,
+    default: false
+  },
+  recycleMode: {
     type: Boolean,
     default: false
   },
@@ -88,7 +92,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked', 'destination-tile-clicked', 'building-deleted', 'building-state-changed', 'building-construction-complete'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'road-placed', 'building-clicked', 'destination-tile-clicked', 'building-deleted', 'building-state-changed', 'building-construction-complete', 'building-recycled'])
 
 const gameContainer = ref(null)
 let game = null
@@ -98,6 +102,7 @@ const showPerson = ref(true) // Či zobrazovať pohyblivú osobu
 // Computed pre CSS triedu kurzora
 const cursorClass = computed(() => {
   if (props.isSettingDestination) return 'destination-mode'
+  if (props.recycleMode) return 'recycle-mode'
   if (props.roadDeleteMode || props.deleteMode) return 'delete-mode'
   if (props.roadBuildingMode) return 'road-mode'
   if (props.selectedImageId) return 'has-selection'
@@ -1518,7 +1523,7 @@ class IsoScene extends Phaser.Scene {
     }
     
     // === IDLE HOVER - keď nie je vybraná žiadna budova/template/delete mode ===
-    const canInteract = props.templateSelected || props.deleteMode || props.selectedImageId || props.roadBuildingMode || props.roadDeleteMode || props.isSettingDestination
+    const canInteract = props.templateSelected || props.deleteMode || props.selectedImageId || props.roadBuildingMode || props.roadDeleteMode || props.recycleMode || props.isSettingDestination
     
     // Vyčistime predchádzajúci building highlight (tint)
     if (this.highlightedBuildingSprites.length > 0) {
@@ -2088,7 +2093,7 @@ class IsoScene extends Phaser.Scene {
         }
         
         // Ak nie je žiadny špeciálny mód, skontroluj či sa kliklo na existujúcu budovu
-        if (!props.roadDeleteMode && !props.roadBuildingMode && !props.deleteMode && !props.selectedImageId) {
+        if (!props.roadDeleteMode && !props.roadBuildingMode && !props.deleteMode && !props.selectedImageId && !props.recycleMode) {
           const key = `${cell.row}-${cell.col}`
           const buildingData = cellImages[key]
           
@@ -2097,6 +2102,39 @@ class IsoScene extends Phaser.Scene {
             emit('building-clicked', { row: cell.row, col: cell.col, buildingData })
             return
           }
+        }
+        
+        // Recycle mode - kliknutie na budovu spustí recykláciu
+        if (props.recycleMode) {
+          const key = `${cell.row}-${cell.col}`
+          if (cellImages[key]) {
+            const imageData = cellImages[key]
+            const originRow = imageData.originRow !== undefined ? imageData.originRow : cell.row
+            const originCol = imageData.originCol !== undefined ? imageData.originCol : cell.col
+            const originKey = `${originRow}-${originCol}`
+            const originData = cellImages[originKey]
+            
+            // Len budovy (nie cesty), a len ak nie je už v recyklovom/stavebnom procese
+            if (originData && !originData.isRoadTile && originData.buildingData?.isBuilding) {
+              const activeKey = `${originRow}-${originCol}`
+              if (this.activeAnimations[activeKey]) {
+                // Budova je už v animácii - otvor modal pre zobrazenie detailov
+                console.log(`♻️ Budova [${originRow}, ${originCol}] je už v animácii - otváram detail`)
+                emit('building-clicked', { row: originRow, col: originCol, buildingData: originData })
+                return
+              }
+              
+              console.log(`♻️ Recycle: Kliknuté na budovu [${originRow}, ${originCol}]`)
+              emit('building-recycled', { 
+                row: originRow, 
+                col: originCol, 
+                buildingData: originData.buildingData,
+                cellsX: originData.cellsX || 1,
+                cellsY: originData.cellsY || 1
+              })
+            }
+          }
+          return
         }
         
         // Road delete mode (mazanie budov aj ciest)
@@ -3565,6 +3603,128 @@ defineExpose({
       }
     )
     return true
+  },
+  // Spustí recykláciu budovy - reverzná animácia s dispatchom auta
+  startRecycleForBuilding: (targetRow, targetCol, buildCost, onComplete) => {
+    if (!mainScene) return false
+    const key = `${targetRow}-${targetCol}`
+    const buildingSprite = mainScene.buildingSprites[key]
+    if (!buildingSprite) {
+      console.warn(`⚠️ Žiadny sprite pre budovu [${targetRow}, ${targetCol}]`)
+      return false
+    }
+
+    const cellData = cellImages[key]
+    const cellsX = cellData?.cellsX || 1
+    const cellsY = cellData?.cellsY || 1
+    const hasCars = mainScene.carManager && mainScene.carManager.cars && mainScene.carManager.cars.length > 0
+
+    // Emit initial state
+    emit('building-state-changed', { row: targetRow, col: targetCol, state: hasCars ? 'recycling-waiting' : 'recycling' })
+
+    const animResult = startRecycleAnimation(mainScene, {
+      buildingSprite,
+      row: targetRow,
+      col: targetCol,
+      cellsX,
+      cellsY,
+      shadowSprites: mainScene.shadowSprites,
+      redrawShadowsAround: (r, c) => mainScene.redrawShadowsAround(r, c),
+      createConstructionDustEffect: (cx, cy, cw, ch) => mainScene.createConstructionDustEffect(cx, cy, cw, ch),
+      buildCost,
+      waitForCar: hasCars,
+      onWaitingForCar: () => {
+        // Dispatch car to building
+        if (mainScene.carManager && mainScene.carManager.cars.length > 0) {
+          const carResult = findNearestCar(mainScene.carManager.cars, targetRow, targetCol, cellImages)
+          if (carResult) {
+            const dispatch = dispatchCarToBuilding(
+              mainScene,
+              carResult.car,
+              carResult.path,
+              carResult.nearestRoad,
+              targetRow,
+              targetCol,
+              {
+                onArrive: () => {
+                  console.log(`♻️🚗 Auto dorazilo k recyklovanej budove [${targetRow}, ${targetCol}]`)
+                  emit('building-state-changed', { row: targetRow, col: targetCol, state: 'recycling' })
+                  animResult.animationControl.resume()
+                  animResult.animationControl._dispatches.push(dispatch)
+                },
+                moveSpeed: 400,
+                carManager: mainScene.carManager
+              }
+            )
+          } else {
+            // No car available - start without
+            emit('building-state-changed', { row: targetRow, col: targetCol, state: 'recycling' })
+            animResult.animationControl.resume()
+          }
+        } else {
+          emit('building-state-changed', { row: targetRow, col: targetCol, state: 'recycling' })
+          animResult.animationControl.resume()
+        }
+      },
+      onAnimationComplete: () => {
+        console.log(`♻️✅ Recycle animácia dokončená [${targetRow}, ${targetCol}]`)
+        // Return all dispatched cars
+        const anim = mainScene.activeAnimations[key]
+        if (anim && anim._dispatches) {
+          anim._dispatches.forEach(d => {
+            if (d.instantReturn) d.instantReturn()
+          })
+          anim._dispatches = []
+        }
+        delete mainScene.activeAnimations[key]
+
+        // Remove the building from canvas
+        mainScene.removeBuilding(key)
+        // Remove all cells
+        const cX = cellData?.cellsX || 1
+        const cY = cellData?.cellsY || 1
+        for (let r = 0; r < cX; r++) {
+          for (let c = 0; c < cY; c++) {
+            delete cellImages[`${targetRow + r}-${targetCol + c}`]
+          }
+        }
+        emit('image-placed') // Trigger canvas update
+
+        if (onComplete) onComplete()
+      }
+    })
+
+    // Store animation control
+    mainScene.activeAnimations[key] = animResult.animationControl
+    return true
+  },
+  // Dispatch extra car for recycle
+  dispatchExtraCarToRecycle: (targetRow, targetCol) => {
+    if (!mainScene || !mainScene.carManager) return false
+    const carResult = findNearestCar(mainScene.carManager.cars, targetRow, targetCol, cellImages)
+    if (!carResult) return false
+    const key = `${targetRow}-${targetCol}`
+    const animControl = mainScene.activeAnimations[key]
+
+    const dispatch = dispatchCarToBuilding(
+      mainScene,
+      carResult.car,
+      carResult.path,
+      carResult.nearestRoad,
+      targetRow,
+      targetCol,
+      {
+        onArrive: () => {
+          console.log(`♻️🚗 Extra auto dorazilo k recyklovanej budove [${targetRow}, ${targetCol}]`)
+          if (animControl) {
+            animControl._dispatches.push(dispatch)
+          }
+        },
+        moveSpeed: 400,
+        carManager: mainScene.carManager
+      }
+    )
+    return true
   }
 })
 
@@ -3719,6 +3879,10 @@ onUnmounted(() => {
 
 .game-container.delete-mode {
   cursor: not-allowed;
+}
+
+.game-container.recycle-mode {
+  cursor: crosshair;
 }
 
 .game-container.destination-mode {

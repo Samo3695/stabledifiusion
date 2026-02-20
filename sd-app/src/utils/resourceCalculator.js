@@ -219,7 +219,7 @@ export function returnBuildWorkforce(allocatedWorkItems, resources, allocatedRes
       // Odstráň detailný záznam alokácie
       if (workforceAllocations[item.resourceId]) {
         const idx = workforceAllocations[item.resourceId].findIndex(
-          a => a.row === row && a.col === col && a.type === 'build'
+          a => a.row === row && a.col === col && (a.type === 'build' || a.type === 'recycle')
         )
         if (idx !== -1) {
           workforceAllocations[item.resourceId].splice(idx, 1)

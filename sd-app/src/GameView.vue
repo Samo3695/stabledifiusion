@@ -38,6 +38,8 @@ const environmentColors = ref({ hue: 0, saturation: 100, brightness: 100 })
 const textureSettings = ref({ tilesPerImage: 1, tileResolution: 512, customTexture: null })
 const roadBuildingMode = ref(false)
 const roadDeleteMode = ref(false)
+const recycleMode = ref(false)
+const recyclingBuildings = ref({}) // Budovy v procese recyklácie: { 'row-col': { buildingData, workerCount } }
 const roadTiles = ref([])
 const isLoading = ref(false)
 const loadingProgress = ref(0)
@@ -1277,10 +1279,11 @@ const handleBuildingSelected = (data) => {
     selectedBuildingDestinationTiles.value = []
   }
   
-  // Zruš road building mode a bulldozer mode pri výbere budovy
+  // Zruš road building mode, bulldozer mode a recycle mode pri výbere budovy
   roadBuildingMode.value = false
   roadDeleteMode.value = false
   deleteMode.value = false
+  recycleMode.value = false
   
   console.log(`🏗️ GameView: Vybraná budova: ${building.buildingData?.buildingName} (${cellsX}x${cellsY})`)
 }
@@ -1289,10 +1292,11 @@ const handleBuildingSelected = (data) => {
 const handleRoadModeToggled = (isEnabled) => {
   roadBuildingMode.value = isEnabled
   if (isEnabled) {
-    // Zrušiť výber budovy a delete mode pri zapnutí road mode
+    // Zrušiť výber budovy a ostatné modes pri zapnutí road mode
     selectedBuildingId.value = null
     selectedImageId.value = null
     roadDeleteMode.value = false
+    recycleMode.value = false
   }
   console.log(`🛣️ GameView: Road building mode: ${isEnabled ? 'ON' : 'OFF'}`)
 }
@@ -1301,10 +1305,11 @@ const handleRoadModeToggled = (isEnabled) => {
 const handleRoadDeleteModeToggled = (isEnabled) => {
   roadDeleteMode.value = isEnabled
   if (isEnabled) {
-    // Zrušiť výber budovy a building mode pri zapnutí delete mode
+    // Zrušiť výber budovy a ostatné modes pri zapnutí delete mode
     selectedBuildingId.value = null
     selectedImageId.value = null
     roadBuildingMode.value = false
+    recycleMode.value = false
   }
   console.log(`🚜 GameView: Road delete mode: ${isEnabled ? 'ON' : 'OFF'}`)
 }
@@ -1356,6 +1361,8 @@ const handleBuildingDeleted = ({ row, col, buildingData }) => {
     delete buildingWorkerCount.value[key] // Vyčisti worker count
     // Odstráň z auto-restart sledovania pri zmazaní budovy
     delete stoppedByResources.value[key]
+    // Vyčisti recykláciu ak bola budova v recyklačnom procese
+    delete recyclingBuildings.value[key]
   }
 }
 
@@ -1384,6 +1391,115 @@ const handleBuildingConstructionComplete = ({ row, col }) => {
   
   // Spusti auto produkciu pre túto budovu
   startAutoProductionForBuilding(row, col)
+}
+
+// Handler pre prepnutie recycle mode
+const handleRecycleModeToggled = (isEnabled) => {
+  recycleMode.value = isEnabled
+  if (isEnabled) {
+    // Zrušiť výber budovy a ostatné modes pri zapnutí recycle mode
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    roadBuildingMode.value = false
+    roadDeleteMode.value = false
+    deleteMode.value = false
+  }
+  console.log(`♻️ GameView: Recycle mode: ${isEnabled ? 'ON' : 'OFF'}`)
+}
+
+// Handler pre kliknutie na budovu v recycle mode
+const handleBuildingRecycled = ({ row, col, buildingData, cellsX, cellsY }) => {
+  const key = `${row}-${col}`
+  console.log(`♻️ GameView: Recyklácia budovy [${row}, ${col}]`, buildingData?.buildingName)
+
+  // Kontrola vehicleAnimation resource
+  const vehicleRes = resources.value.find(r => r.vehicleAnimation)
+  if (!vehicleRes || vehicleRes.amount < 1) {
+    console.log(`⛔ Nedostatok vozidiel pre recykláciu`)
+    // Zobraz modal s chybou
+    const missingBuild = []
+    if (vehicleRes) {
+      missingBuild.push({
+        resourceName: vehicleRes.name,
+        required: 1,
+        available: vehicleRes.amount,
+        isVehicle: true
+      })
+    }
+    insufficientResourcesData.value = {
+      buildingName: buildingData?.buildingName || 'Budova',
+      missingBuildResources: missingBuild,
+      missingOperationalResources: []
+    }
+    showInsufficientResourcesModal.value = true
+    return
+  }
+
+  // Zastavenie auto produkcie budovy ak beží
+  stopAutoProduction(row, col, 'recycle')
+
+  // Alokuj 1 vehicleAnimation resource
+  vehicleRes.amount -= 1
+  if (!allocatedResources.value[vehicleRes.id]) {
+    allocatedResources.value[vehicleRes.id] = 0
+  }
+  allocatedResources.value[vehicleRes.id] += 1
+  if (!workforceAllocations.value[vehicleRes.id]) {
+    workforceAllocations.value[vehicleRes.id] = []
+  }
+  workforceAllocations.value[vehicleRes.id].push({
+    row, col, amount: 1, type: 'recycle',
+    buildingName: buildingData?.buildingName || 'Budova'
+  })
+
+  // Track pending allocations for cleanup
+  pendingBuildAllocations.value[key] = [{
+    resourceId: vehicleRes.id,
+    amount: 1,
+    resourceName: vehicleRes.name
+  }]
+
+  // Track as recycling building
+  recyclingBuildings.value[key] = {
+    buildingData,
+    workerCount: 1
+  }
+  buildingWorkerCount.value[key] = 1
+
+  console.log(`♻️🚗 Alokované vozidlo (recycle): 1x ${vehicleRes.name} na [${row},${col}], zostatok: ${vehicleRes.amount}`)
+
+  // Spusti recyklačnú animáciu na canvase
+  const buildCost = buildingData?.buildCost || []
+  canvasRef.value?.startRecycleForBuilding(row, col, buildCost, () => {
+    // onComplete callback - vráť suroviny a vyčisti
+    console.log(`♻️✅ GameView: Recyklácia dokončená [${row}, ${col}], vraciam suroviny`)
+
+    // Vráť build cost suroviny (okrem work-force)
+    refundBuildCostOnDelete(buildingData, resources.value)
+
+    // Vráť alokované vehicleAnimation resources
+    const pendingAlloc = pendingBuildAllocations.value[key]
+    if (pendingAlloc && pendingAlloc.length > 0) {
+      returnBuildWorkforce(pendingAlloc, resources.value, allocatedResources.value, workforceAllocations.value, row, col)
+      delete pendingBuildAllocations.value[key]
+    }
+
+    // Vyčisti tracking
+    delete recyclingBuildings.value[key]
+    delete buildingWorkerCount.value[key]
+    animatingBuildings.value.delete(key)
+    delete stoppedByResources.value[key]
+
+    // Zatvor modal ak je otvorený pre túto budovu
+    if (showBuildingModal.value && clickedBuilding.value && 
+        clickedBuilding.value.row === row && clickedBuilding.value.col === col) {
+      showBuildingModal.value = false
+      clickedBuilding.value = null
+    }
+  })
+
+  // Označ budovu ako animujúcu
+  animatingBuildings.value.set(key, 'recycling')
 }
 
 // Handler pre zmenu počtu pracovníkov na stavbe
@@ -1502,6 +1618,134 @@ const changeConstructionWorkers = (newCount) => {
   if (canvasRef.value?.setConstructionWorkers) {
     canvasRef.value.setConstructionWorkers(row, col, newCount)
   }
+}
+
+// Handler pre zmenu počtu vozidiel na recyklácii (analogické k changeConstructionWorkers)
+const changeRecycleWorkers = (newCount) => {
+  if (!clickedBuilding.value) return
+  const { row, col } = clickedBuilding.value
+  const key = `${row}-${col}`
+  const currentCount = buildingWorkerCount.value[key] || 1
+  newCount = Math.max(1, Math.round(newCount))
+  
+  if (newCount === currentCount) return
+  
+  const vehicleRes = resources.value.find(r => r.vehicleAnimation)
+  if (!vehicleRes) return
+  
+  const diff = newCount - currentCount
+  
+  if (diff > 0) {
+    // Pridávame vozidlá - kontrola dostupnosti
+    if (vehicleRes.amount < diff) {
+      console.log(`⛔ Nedostatok vozidiel pre recykláciu: potreba ${diff}, dostupné ${vehicleRes.amount}`)
+      return
+    }
+    
+    // Alokuj ďalšie vozidlá
+    vehicleRes.amount -= diff
+    if (!allocatedResources.value[vehicleRes.id]) {
+      allocatedResources.value[vehicleRes.id] = 0
+    }
+    allocatedResources.value[vehicleRes.id] += diff
+    
+    // Pridaj do workforce alokácií
+    if (!workforceAllocations.value[vehicleRes.id]) {
+      workforceAllocations.value[vehicleRes.id] = []
+    }
+    const existingAlloc = workforceAllocations.value[vehicleRes.id].find(
+      a => a.row === row && a.col === col && a.type === 'recycle'
+    )
+    if (existingAlloc) {
+      existingAlloc.amount += diff
+    } else {
+      workforceAllocations.value[vehicleRes.id].push({
+        row, col, amount: diff, type: 'recycle',
+        buildingName: clickedBuilding.value.buildingName || 'Budova'
+      })
+    }
+    
+    // Pridaj do pending build alokácií
+    if (!pendingBuildAllocations.value[key]) {
+      pendingBuildAllocations.value[key] = []
+    }
+    const existingPending = pendingBuildAllocations.value[key].find(a => a.resourceId === vehicleRes.id)
+    if (existingPending) {
+      existingPending.amount += diff
+    } else {
+      pendingBuildAllocations.value[key].push({
+        resourceId: vehicleRes.id,
+        amount: diff,
+        resourceName: vehicleRes.name
+      })
+    }
+    
+    // Dispatch extra cars k budove na recykláciu
+    for (let i = 0; i < diff; i++) {
+      if (canvasRef.value?.dispatchExtraCarToRecycle) {
+        canvasRef.value.dispatchExtraCarToRecycle(row, col)
+      }
+    }
+    
+    console.log(`♻️🚗 Pridané ${diff} vozidlá na recykláciu [${row},${col}], celkom: ${newCount}, zostatok: ${vehicleRes.amount}`)
+  } else {
+    // Odoberáme vozidlá
+    const returnCount = Math.abs(diff)
+    vehicleRes.amount += returnCount
+    if (allocatedResources.value[vehicleRes.id]) {
+      allocatedResources.value[vehicleRes.id] -= returnCount
+      if (allocatedResources.value[vehicleRes.id] <= 0) {
+        delete allocatedResources.value[vehicleRes.id]
+      }
+    }
+    
+    // Aktualizuj workforce alokácie
+    if (workforceAllocations.value[vehicleRes.id]) {
+      const alloc = workforceAllocations.value[vehicleRes.id].find(
+        a => a.row === row && a.col === col && a.type === 'recycle'
+      )
+      if (alloc) {
+        alloc.amount -= returnCount
+        if (alloc.amount <= 0) {
+          const idx = workforceAllocations.value[vehicleRes.id].indexOf(alloc)
+          workforceAllocations.value[vehicleRes.id].splice(idx, 1)
+        }
+      }
+    }
+    
+    // Aktualizuj pending build alokácie
+    if (pendingBuildAllocations.value[key]) {
+      const pendingAlloc = pendingBuildAllocations.value[key].find(a => a.resourceId === vehicleRes.id)
+      if (pendingAlloc) {
+        pendingAlloc.amount -= returnCount
+        if (pendingAlloc.amount <= 0) {
+          const idx = pendingBuildAllocations.value[key].indexOf(pendingAlloc)
+          pendingBuildAllocations.value[key].splice(idx, 1)
+        }
+      }
+    }
+    
+    console.log(`♻️🚗 Odobraté ${returnCount} vozidlá z recyklácie [${row},${col}], celkom: ${newCount}, zostatok: ${vehicleRes.amount}`)
+  }
+  
+  // Aktualizuj worker count
+  buildingWorkerCount.value[key] = newCount
+  
+  // Aktualizuj recykláciu tracking
+  if (recyclingBuildings.value[key]) {
+    recyclingBuildings.value[key].workerCount = newCount
+  }
+  
+  // Nastav animation speed
+  if (canvasRef.value?.setConstructionWorkers) {
+    canvasRef.value.setConstructionWorkers(row, col, newCount)
+  }
+}
+
+// Helper - kontrola či je resource typu work-force
+const isWorkResource = (resourceId) => {
+  const resource = resources.value.find(r => r.id === resourceId)
+  return resource?.workResource === true
 }
 
 // Zatvorenie modalu
@@ -1995,6 +2239,7 @@ const handleResourceClicked = (resourceId) => {
       :deleteMode="deleteMode"
       :roadBuildingMode="roadBuildingMode"
       :roadDeleteMode="roadDeleteMode"
+      :recycleMode="recycleMode"
       :roadTiles="roadTiles"
       :personSpawnEnabled="personSpawnEnabled"
       :personSpawnCount="personSpawnCount"
@@ -2010,6 +2255,7 @@ const handleResourceClicked = (resourceId) => {
       @building-deleted="handleBuildingDeleted"
       @building-state-changed="handleBuildingStateChanged"
       @building-construction-complete="handleBuildingConstructionComplete"
+      @building-recycled="handleBuildingRecycled"
     />
     
     <!-- Header -->
@@ -2094,8 +2340,10 @@ const handleResourceClicked = (resourceId) => {
         <RoadSelector 
           :roadBuildingMode="roadBuildingMode"
           :roadDeleteMode="roadDeleteMode"
+          :recycleMode="recycleMode"
           @road-mode-toggled="handleRoadModeToggled"
           @road-delete-mode-toggled="handleRoadDeleteModeToggled"
+          @recycle-mode-toggled="handleRecycleModeToggled"
         />
       </div>
     </aside>
@@ -2230,7 +2478,45 @@ const handleResourceClicked = (resourceId) => {
           </div>
           
           <!-- Port Production Controls - len jednorázový cyklus, bez auto -->
-          <div v-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
+          <div v-if="currentBuildingAnimState === 'recycling-waiting' || currentBuildingAnimState === 'recycling'" class="building-info-section">
+            <template v-if="currentBuildingAnimState === 'recycling-waiting'">
+              <h3>♻️🚚 Čaká na pracovnú silu...</h3>
+              <div class="build-in-progress recycle-in-progress">
+                <div class="build-progress-animation waiting recycle">
+                  <div class="build-progress-bar waiting-bar recycle-bar"></div>
+                </div>
+                <p class="build-progress-text">Čaká sa na príchod auta. Recyklácia začne po príchode.</p>
+                <div class="worker-count-section">
+                  <label>🚗 Vozidlá:</label>
+                  <div class="worker-count-controls">
+                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                  </div>
+                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <h3>♻️ Recyklácia prebieha...</h3>
+              <div class="build-in-progress recycle-in-progress">
+                <div class="build-progress-animation recycle">
+                  <div class="build-progress-bar recycle-bar"></div>
+                </div>
+                <p class="build-progress-text">Budova sa rozoberá. Suroviny sa vrátia po dokončení.</p>
+                <div class="worker-count-section">
+                  <label>🚗 Vozidlá:</label>
+                  <div class="worker-count-controls">
+                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                  </div>
+                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+                </div>
+              </div>
+            </template>
+          </div>
+          <div v-else-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
             <template v-if="currentBuildingAnimState === 'waiting'">
               <h3>🚚 Čaká na pracovnú silu...</h3>
               <div class="build-in-progress">
@@ -2316,7 +2602,62 @@ const handleResourceClicked = (resourceId) => {
         </div>
         
         <!-- Production Controls - zobrazí sa aj pre budovy bez produkcie, ak majú operationalCost -->
-        <div v-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
+        <div v-if="currentBuildingAnimState === 'recycling-waiting' || currentBuildingAnimState === 'recycling'" class="building-info-section">
+          <!-- Recyklácia - čaká na auto -->
+          <template v-if="currentBuildingAnimState === 'recycling-waiting'">
+            <h3>♻️🚚 Čaká na pracovnú silu...</h3>
+            <div class="build-in-progress recycle-in-progress">
+              <div class="build-progress-animation waiting recycle">
+                <div class="build-progress-bar waiting-bar recycle-bar"></div>
+              </div>
+              <p class="build-progress-text">Čaká sa na príchod auta. Recyklácia začne po príchode.</p>
+              <div class="worker-count-section">
+                <label>🚗 Vozidlá:</label>
+                <div class="worker-count-controls">
+                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                </div>
+                <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+              </div>
+            </div>
+          </template>
+          
+          <!-- Recyklácia prebieha -->
+          <template v-else>
+            <h3>♻️ Recyklácia prebieha...</h3>
+            <div class="build-in-progress recycle-in-progress">
+              <div class="build-progress-animation recycle">
+                <div class="build-progress-bar recycle-bar"></div>
+              </div>
+              <p class="build-progress-text">Budova sa rozoberá. Suroviny (okrem work-force) sa vrátia po dokončení.</p>
+              <div class="worker-count-section">
+                <label>🚗 Vozidlá:</label>
+                <div class="worker-count-controls">
+                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                </div>
+                <span class="worker-speed-info">{{ currentBuildingWorkers }}× rýchlosť</span>
+              </div>
+            </div>
+          </template>
+          
+          <!-- Suroviny ktoré sa vrátia -->
+          <div v-if="clickedBuilding.buildCost && clickedBuilding.buildCost.length > 0" class="recycle-refund-info">
+            <h4>📦 Vrátené suroviny po recyklácii:</h4>
+            <div class="resource-list">
+              <div v-for="(cost, index) in clickedBuilding.buildCost" :key="index" class="resource-item"
+                :class="{ 'work-resource-strike': isWorkResource(cost.resourceId) }">
+                <span class="resource-name">{{ cost.resourceName }}</span>
+                <span class="resource-amount" v-if="!isWorkResource(cost.resourceId)">+{{ cost.amount }}</span>
+                <span class="resource-amount strikethrough" v-else>{{ cost.amount }} (work)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div v-else-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
           
           <!-- Čaká na pracovnú silu -->
           <template v-if="currentBuildingAnimState === 'waiting'">
@@ -3200,6 +3541,51 @@ header {
   100% { opacity: 0.4; margin-left: 0; width: 100%; }
 }
 
+/* Recycle progress bar styles */
+.build-progress-animation.recycle {
+  background: #fef3c7;
+}
+
+.build-progress-bar.recycle-bar {
+  background: linear-gradient(90deg, #f97316, #ea580c, #f97316);
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: build-progress-slide 1.5s ease-in-out infinite;
+}
+
+.build-progress-animation.waiting.recycle .build-progress-bar.recycle-bar {
+  animation: build-progress-pulse 2s ease-in-out infinite;
+}
+
+.recycle-in-progress {
+  border-left: 3px solid #f97316;
+  padding-left: 0.5rem;
+}
+
+.recycle-refund-info {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(249, 115, 22, 0.08);
+  border-radius: 8px;
+  border: 1px solid rgba(249, 115, 22, 0.15);
+}
+
+.recycle-refund-info h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.85rem;
+  color: #ea580c;
+}
+
+.work-resource-strike .resource-amount.strikethrough {
+  text-decoration: line-through;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.work-resource-strike .resource-name {
+  color: #9ca3af;
+}
+
 .build-progress-text {
   margin: 0;
   color: #6b7280;
@@ -3216,6 +3602,11 @@ header {
   background: rgba(102, 126, 234, 0.08);
   border-radius: 8px;
   border: 1px solid rgba(102, 126, 234, 0.15);
+}
+
+.recycle-in-progress .worker-count-section {
+  background: rgba(249, 115, 22, 0.08);
+  border: 1px solid rgba(249, 115, 22, 0.15);
 }
 
 .worker-count-section label {
