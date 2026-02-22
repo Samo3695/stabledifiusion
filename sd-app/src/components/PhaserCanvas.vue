@@ -3105,6 +3105,37 @@ class IsoScene extends Phaser.Scene {
       console.log(`💨 Smoke/Light effects ${key} odstránené`)
     }
     
+    // Odstránime warning indikátor ak existuje
+    if (this.warningIndicators && this.warningIndicators[key]) {
+      if (this.warningIndicators[key].elements) {
+        this.warningIndicators[key].elements.forEach(el => el?.destroy())
+      }
+      this.warningIndicators[key].bg?.destroy()
+      this.warningIndicators[key].exclamation?.destroy()
+      delete this.warningIndicators[key]
+      console.log(`🚨 Warning indikátor ${key} odstránený`)
+    }
+    
+    // Odstránime auto-production indikátor ak existuje
+    if (this.autoProductionIndicators && this.autoProductionIndicators[key]) {
+      this.autoProductionIndicators[key].bg?.destroy()
+      this.autoProductionIndicators[key].arrow?.destroy()
+      delete this.autoProductionIndicators[key]
+      console.log(`🔄 Auto-production indikátor ${key} odstránený`)
+    }
+    
+    // Odstránime disabled overlay ak existuje
+    if (this.disabledOverlays && this.disabledOverlays[key]) {
+      const overlay = this.disabledOverlays[key]
+      overlay.tween?.stop()
+      if (overlay.sprite) {
+        overlay.sprite.clearTint()
+        overlay.sprite.setAlpha(1)
+      }
+      delete this.disabledOverlays[key]
+      console.log(`☀️ Disabled overlay ${key} odstránený`)
+    }
+    
     // Aktualizuj PersonManager cache aby postavy vedeli o vymazaní bunky
     if (this.personManager) {
       this.personManager.updateWorkerRoadTiles()

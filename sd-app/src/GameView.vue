@@ -21,6 +21,10 @@ import {
   getMissingOperationalResources,
   canStoreProduction
 } from './utils/resourceCalculator.js'
+import {
+  buildConsumptionMap,
+  evaluateResourcePriority
+} from './utils/resourcePriorityService.js'
 
 const images = ref([])
 const lastImageCellsX = ref(1)
@@ -80,6 +84,7 @@ const insufficientResourcesData = ref({
 const ignoreResourceCheck = ref(false) // Checkbox pre ignorovanie kontroly resources
 const gameEvents = ref([]) // Zoznam herných eventov
 const manuallyStoppedBuildings = ref({}) // Budovy manuálne zastavené používateľom: { 'row-col': true }
+const consumptionMap = ref({}) // Mapa spotreby surovín pre priority service: { resourceId: [{ key, row, col, buildingName, consumption, buildingData }] }
 
 // Filtrované budovy z galérie (zoradené podľa buildingOrder)
 const buildings = computed(() => {
@@ -236,60 +241,75 @@ watch(roadTiles, (newTiles, oldTiles) => {
   }
 }, { deep: true })
 
-// Watch na resources - automatický reštart budov zastavených kvôli nedostatku surovín
-watch(resources, () => {
+// Funkcia na prebudovanie mapy spotreby surovín (volá sa pri zmene budov na canvase)
+const rebuildConsumptionMap = () => {
+  consumptionMap.value = buildConsumptionMap(
+    canvasImagesMap.value, images.value, buildingProductionStates.value,
+    animatingBuildings.value, resources.value
+  )
+  console.log('📊 Consumption map prebudovaná, surovín:', Object.keys(consumptionMap.value).length)
+}
+
+// Periodická kontrola zdrojov - každé 3 sekundy (namiesto deep watch na resources)
+const resourceCheckInterval = setInterval(() => {
+  // Preskočíme ak nemáme žiadne resources alebo budovy
+  if (resources.value.length === 0 || Object.keys(canvasImagesMap.value).length === 0) return
+
+  // Vyčisti neplatné záznamy v stoppedByResources
   const stoppedKeys = Object.keys(stoppedByResources.value)
-  if (stoppedKeys.length === 0) return
-  
   for (const key of stoppedKeys) {
-    const { row, col, buildingData } = stoppedByResources.value[key]
-    
-    // Preskoč budovy manuálne zastavené používateľom
     if (manuallyStoppedBuildings.value[key]) {
       delete stoppedByResources.value[key]
       continue
     }
-    
-    // Skontroluj či budova ešte existuje na canvase
     if (!canvasImagesMap.value[key]) {
       delete stoppedByResources.value[key]
       continue
     }
-    
-    // Skontroluj či už nemá spustenú produkciu (medzitým manuálne)
     if (buildingProductionStates.value[key]?.enabled) {
       delete stoppedByResources.value[key]
       continue
     }
-    
-    // Skontroluj či sú teraz suroviny dostupné (non-work resources)
-    if (!checkProductionResources(buildingData, resources.value)) {
-      continue
-    }
-    
+  }
+
+  // Použi priority service na vyhodnotenie
+  const { toStop, toRestart } = evaluateResourcePriority(
+    resources.value, consumptionMap.value, buildingProductionStates.value,
+    stoppedByResources.value, manuallyStoppedBuildings.value
+  )
+
+  // Zastavenie budov s najväčšou spotrebou
+  for (const key of toStop) {
+    const [row, col] = key.split('-').map(Number)
+    console.log(`⛔ Priority stop: Zastavujem budovu [${row}, ${col}] - najväčšia spotreba deficitnej suroviny`)
+    stopAutoProduction(row, col, 'resources')
+  }
+
+  // Reštart budov ktoré majú teraz dostatok surovín
+  for (const key of toRestart) {
+    const data = stoppedByResources.value[key]
+    if (!data) continue
+    const { row, col, buildingData } = data
+
     // Skontroluj workforce
     let hasEnoughWorkforce = true
     const operationalCost = buildingData.operationalCost || []
-    operationalCost.forEach(cost => {
+    for (const cost of operationalCost) {
       const resource = resources.value.find(r => r.id === cost.resourceId)
       if (resource && resource.workResource && resource.amount < cost.amount) {
         hasEnoughWorkforce = false
+        break
       }
-    })
-    
+    }
     if (!hasEnoughWorkforce) continue
-    
-    // Suroviny sú dostupné - reštartuj produkciu
-    console.log(`🔄 Auto-restart produkcie pre budovu na [${row}, ${col}] - suroviny sú zas dostupné`)
+
+    console.log(`🔄 Priority restart: Reštartujem budovu [${row}, ${col}] - suroviny sú zas dostupné`)
     delete stoppedByResources.value[key]
-    
-    // Skry warning indikátor
     canvasRef.value?.hideWarningIndicator(row, col)
-    
-    // Spusti produkciu
+    canvasRef.value?.hideDisabledOverlay(row, col)
     startAutoProductionForBuilding(row, col)
   }
-}, { deep: true })
+}, 3000)
 
 // Sledovanie predchádzajúcich hodnôt vehicleAnimation/personAnimation resources
 const prevAnimationAmounts = ref({})
@@ -865,6 +885,9 @@ const startAutoProductionForBuilding = (row, col) => {
   // Odstráň z auto-restart sledovania (ak bola zastavená kvôli resources a teraz sa reštartuje)
   delete stoppedByResources.value[key]
   
+  // Skry disabled overlay (tmavý pulzujúci efekt) ak bol zobrazený
+  canvasRef.value?.hideDisabledOverlay(row, col)
+  
   // Skontroluj či budova ešte existuje na canvase a nemá zapnutú produkciu
   const mapData = canvasImagesMap.value[key]
   if (!mapData) {
@@ -897,6 +920,24 @@ const startAutoProductionForBuilding = (row, col) => {
   // Skontroluj či je dosť surovín
   if (!checkProductionResources(buildingDataForProduction, resources.value)) {
     console.log(`⚠️ Nedostatok surovín pre produkciu budovy na [${row}, ${col}]`)
+    // Zaregistruj na auto-restart, zobraz warning + disabled overlay
+    stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
+    const missingResources = []
+    if (buildingDataForProduction.operationalCost) {
+      buildingDataForProduction.operationalCost.forEach(cost => {
+        const resource = resources.value.find(r => r.id === cost.resourceId)
+        if (!resource || resource.amount < cost.amount) {
+          missingResources.push({
+            id: cost.resourceId, name: cost.resourceName || resource?.name || 'Unknown',
+            icon: resource?.icon || '', needed: cost.amount, available: resource?.amount || 0
+          })
+        }
+      })
+    }
+    if (missingResources.length > 0) {
+      canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
+    }
+    canvasRef.value?.showDisabledOverlay(row, col)
     return
   }
   
@@ -912,6 +953,22 @@ const startAutoProductionForBuilding = (row, col) => {
   
   if (!hasEnoughWorkforce) {
     console.log(`⚠️ Nedostatok work-force pre produkciu budovy na [${row}, ${col}]`)
+    // Zaregistruj na auto-restart, zobraz warning + disabled overlay
+    stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
+    const missingResources = []
+    operationalCost.forEach(cost => {
+      const resource = resources.value.find(r => r.id === cost.resourceId)
+      if (resource && resource.workResource && resource.amount < cost.amount) {
+        missingResources.push({
+          id: cost.resourceId, name: resource?.name || 'Unknown',
+          icon: resource?.icon || '', needed: cost.amount, available: resource?.amount || 0
+        })
+      }
+    })
+    if (missingResources.length > 0) {
+      canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
+    }
+    canvasRef.value?.showDisabledOverlay(row, col)
     return
   }
   
@@ -995,6 +1052,8 @@ const startAutoProductionForBuilding = (row, col) => {
       }
       delete buildingProductionStates.value[key]
       canvasRef.value?.hideAutoProductionIndicator(row, col)
+      // Zobraz disabled overlay (tmavý pulzujúci efekt)
+      canvasRef.value?.showDisabledOverlay(row, col)
       // Zaregistruj budovu na auto-restart keď budú suroviny dostupné
       stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
       console.log(`🔄 Budova na [${row}, ${col}] zaregistrovaná na auto-restart`)
@@ -1012,6 +1071,9 @@ const startAutoProductionForBuilding = (row, col) => {
     enabled: true, interval, progressInterval,
     buildingData: buildingDataForProduction
   }
+  
+  // Prebuduj mapu spotreby surovín
+  rebuildConsumptionMap()
   
   console.log(`✅ Post-animácia: Auto-produkcia spustená pre ${bd.buildingName} na [${row}, ${col}]`)
 }
@@ -1092,6 +1154,9 @@ const handleCanvasUpdated = () => {
         // Skrytie warning indikátora
         canvasRef.value?.hideWarningIndicator(row, col)
         
+        // Skrytie disabled overlay
+        canvasRef.value?.hideDisabledOverlay(row, col)
+        
         // Skrytie auto-production indikátora
         canvasRef.value?.hideAutoProductionIndicator(row, col)
       }
@@ -1134,6 +1199,24 @@ const handleCanvasUpdated = () => {
           // Skontroluj či je dosť surovín
           if (!checkProductionResources(buildingDataForProduction, resources.value)) {
             console.log(`⚠️ Nedostatok surovín pre auto produkciu budovy na [${row}, ${col}]`)
+            // Zaregistruj na auto-restart, zobraz warning + disabled overlay
+            stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
+            const missingResources = []
+            if (buildingDataForProduction.operationalCost) {
+              buildingDataForProduction.operationalCost.forEach(cost => {
+                const resource = resources.value.find(r => r.id === cost.resourceId)
+                if (!resource || resource.amount < cost.amount) {
+                  missingResources.push({
+                    id: cost.resourceId, name: cost.resourceName || resource?.name || 'Unknown',
+                    icon: resource?.icon || '', needed: cost.amount, available: resource?.amount || 0
+                  })
+                }
+              })
+            }
+            if (missingResources.length > 0) {
+              canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
+            }
+            canvasRef.value?.showDisabledOverlay(row, col)
             return // Nespúšťaj auto produkciu ak nie sú suroviny
           }
           
@@ -1149,6 +1232,22 @@ const handleCanvasUpdated = () => {
           
           if (!hasEnoughWorkforce) {
             console.log(`⚠️ Nedostatok work-force pre auto produkciu budovy na [${row}, ${col}]`)
+            // Zaregistruj na auto-restart, zobraz warning + disabled overlay
+            stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
+            const missingResources = []
+            operationalCost.forEach(cost => {
+              const resource = resources.value.find(r => r.id === cost.resourceId)
+              if (resource && resource.workResource && resource.amount < cost.amount) {
+                missingResources.push({
+                  id: cost.resourceId, name: resource?.name || 'Unknown',
+                  icon: resource?.icon || '', needed: cost.amount, available: resource?.amount || 0
+                })
+              }
+            })
+            if (missingResources.length > 0) {
+              canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
+            }
+            canvasRef.value?.showDisabledOverlay(row, col)
             return
           }
           
@@ -1258,6 +1357,8 @@ const handleCanvasUpdated = () => {
               }
               delete buildingProductionStates.value[key]
               canvasRef.value?.hideAutoProductionIndicator(row, col)
+              // Zobraz disabled overlay (tmavý pulzujúci efekt)
+              canvasRef.value?.showDisabledOverlay(row, col)
               // Zaregistruj budovu na auto-restart keď budú suroviny dostupné
               stoppedByResources.value[key] = { row, col, buildingData: buildingDataForProduction }
               console.log(`🔄 Budova na [${row}, ${col}] zaregistrovaná na auto-restart`)
@@ -1283,6 +1384,9 @@ const handleCanvasUpdated = () => {
       })
     })
   }
+
+  // Prebuduj mapu spotreby surovín po zmene budov na canvase
+  rebuildConsumptionMap()
 }
 
 // Handler pre výber budovy z BuildingSelector
@@ -1401,6 +1505,8 @@ const handleBuildingDeleted = ({ row, col, buildingData }) => {
     delete manuallyStoppedBuildings.value[key]
     // Vyčisti recykláciu ak bola budova v recyklačnom procese
     delete recyclingBuildings.value[key]
+    // Prebuduj mapu spotreby surovín
+    rebuildConsumptionMap()
   }
 }
 
@@ -1527,6 +1633,9 @@ const handleBuildingRecycled = ({ row, col, buildingData, cellsX, cellsY }) => {
     delete buildingWorkerCount.value[key]
     animatingBuildings.value.delete(key)
     delete stoppedByResources.value[key]
+
+    // Prebuduj mapu spotreby surovín po recyklácii
+    rebuildConsumptionMap()
 
     // Zatvor modal ak je otvorený pre túto budovu
     if (showBuildingModal.value && clickedBuilding.value && 
@@ -1928,6 +2037,8 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
     if (missingResources.length > 0) {
       canvasRef.value?.showWarningIndicator(row, col, 'resources', missingResources)
     }
+    // Zobraz disabled overlay (tmavý pulzujúci efekt) - rovnaký ako pri manuálnom zastavení
+    canvasRef.value?.showDisabledOverlay(row, col)
   } else {
     // Manuálne zastavenie - skry indikátor
     canvasRef.value?.hideWarningIndicator(row, col)
@@ -1946,6 +2057,9 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
   canvasRef.value?.hideAutoProductionIndicator(row, col)
   // Skry produkčné efekty
   canvasRef.value?.hideProductionEffects(row, col)
+  
+  // Prebuduj mapu spotreby surovín
+  rebuildConsumptionMap()
 }
 
 // Toggle auto produkcie pre konkrétnu budovu

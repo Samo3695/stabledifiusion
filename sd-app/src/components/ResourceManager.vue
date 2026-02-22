@@ -107,6 +107,7 @@ const addResource = () => {
     workResource: false,
     vehicleAnimation: false,
     personAnimation: false,
+    mustBeStored: false,
     isComponent: false
   }
   
@@ -125,6 +126,7 @@ const addComponent = () => {
     weight: 0,
     icon: null,
     workResource: false,
+    mustBeStored: false,
     isComponent: true
   }
   
@@ -224,6 +226,14 @@ const togglePersonAnimation = (id) => {
   const resource = allItems.value.find(r => r.id === id)
   if (resource) {
     resource.personAnimation = !resource.personAnimation
+    emitUpdate()
+  }
+}
+
+const toggleMustBeStored = (id) => {
+  const resource = allItems.value.find(r => r.id === id)
+  if (resource) {
+    resource.mustBeStored = !resource.mustBeStored
     emitUpdate()
   }
 }
@@ -356,6 +366,15 @@ const togglePersonAnimation = (id) => {
                 />
                 <span class="work-label">🧑 Person</span>
               </label>
+              <label class="work-resource-toggle stored-toggle" :title="'Must Be Stored: ' + (resource.mustBeStored ? 'Áno' : 'Nie')">
+                <input
+                  type="checkbox"
+                  :checked="resource.mustBeStored"
+                  @change="toggleMustBeStored(resource.id)"
+                  class="work-checkbox"
+                />
+                <span class="work-label">📦 Stored</span>
+              </label>
               <div class="number-inputs-group">
                 <div class="input-wrapper">
                   <label class="input-label">Amount</label>
@@ -479,6 +498,15 @@ const togglePersonAnimation = (id) => {
                   class="work-checkbox"
                 />
                 <span class="work-label">👷 Work</span>
+              </label>
+              <label class="work-resource-toggle stored-toggle" :title="'Must Be Stored: ' + (component.mustBeStored ? 'Áno' : 'Nie')">
+                <input
+                  type="checkbox"
+                  :checked="component.mustBeStored"
+                  @change="toggleMustBeStored(component.id)"
+                  class="work-checkbox"
+                />
+                <span class="work-label">📦 Stored</span>
               </label>
               <div class="number-inputs-group">
                 <div class="input-wrapper">
@@ -833,6 +861,15 @@ const togglePersonAnimation = (id) => {
 
 .person-toggle:has(.work-checkbox:checked) .work-label {
   color: #f59e0b;
+}
+
+.stored-toggle:has(.work-checkbox:checked) {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: #8b5cf6;
+}
+
+.stored-toggle:has(.work-checkbox:checked) .work-label {
+  color: #8b5cf6;
 }
 
 .number-inputs-group {
