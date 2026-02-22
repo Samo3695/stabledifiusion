@@ -33,16 +33,16 @@ const TREND_WINDOW = 30
 const TREND_THRESHOLD = 0.5
 
 // Funkcia na začatie odpočítavania pre resource
-const startCountdown = (resourceId) => {
+const startCountdown = (resourceId, durationSec = 60) => {
   if (countdownIntervals[resourceId]) return // Už beží
   
   countdowns.value[resourceId] = {
     progress: 100,
-    timeLeft: 60
+    timeLeft: durationSec
   }
   
   const startTime = Date.now()
-  const duration = 60000 // 60 sekúnd (1 minúta)
+  const duration = durationSec * 1000
   
   countdownIntervals[resourceId] = setInterval(() => {
     const elapsed = Date.now() - startTime
@@ -94,9 +94,10 @@ watch(() => [props.resources, props.storedResources], () => {
                            (hasStorageDisplay && capacityNum <= 0 && resource.amount > 0)
     
     if (isOverCapacity && !countdownIntervals[resource.id]) {
-      // Začni odpočítavanie
-      console.log(`⏱️ Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum})`)
-      startCountdown(resource.id)
+      // Začni odpočítavanie - 10s ak nie je žiadny sklad, 60s ak je len preplnený
+      const countdownDuration = (capacityNum <= 0) ? 10 : 60
+      console.log(`⏱️ Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum}, duration: ${countdownDuration}s)`)
+      startCountdown(resource.id, countdownDuration)
     } else if (!isOverCapacity && countdownIntervals[resource.id]) {
       // Zastav odpočítavanie ak už nie je over capacity
       stopCountdown(resource.id)
@@ -141,8 +142,9 @@ onMounted(() => {
     const isOverCapacity = (hasStorageDisplay && resource.amount > capacityNum) ||
                            (hasStorageDisplay && capacityNum <= 0 && resource.amount > 0)
     if (isOverCapacity) {
-      console.log(`⏱️ onMounted: Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum})`)
-      startCountdown(resource.id)
+      const countdownDuration = (capacityNum <= 0) ? 10 : 60
+      console.log(`⏱️ onMounted: Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum}, duration: ${countdownDuration}s)`)
+      startCountdown(resource.id, countdownDuration)
     }
 
     // Init trend
