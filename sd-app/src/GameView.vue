@@ -78,10 +78,18 @@ const insufficientResourcesData = ref({
   missingOperationalResources: []
 })
 const ignoreResourceCheck = ref(false) // Checkbox pre ignorovanie kontroly resources
+const gameEvents = ref([]) // Zoznam herných eventov
+const manuallyStoppedBuildings = ref({}) // Budovy manuálne zastavené používateľom: { 'row-col': true }
 
-// Filtrované budovy z galérie
+// Filtrované budovy z galérie (zoradené podľa buildingOrder)
 const buildings = computed(() => {
-  return images.value.filter(img => img.buildingData?.isBuilding === true)
+  return images.value
+    .filter(img => img.buildingData?.isBuilding === true)
+    .sort((a, b) => {
+      const orderA = a.buildingData?.buildingOrder ?? 9999
+      const orderB = b.buildingData?.buildingOrder ?? 9999
+      return orderA - orderB
+    })
 })
 
 // Computed property pre zistenie či má aktuálna budova zapnutú auto produkciu
@@ -235,6 +243,12 @@ watch(resources, () => {
   
   for (const key of stoppedKeys) {
     const { row, col, buildingData } = stoppedByResources.value[key]
+    
+    // Preskoč budovy manuálne zastavené používateľom
+    if (manuallyStoppedBuildings.value[key]) {
+      delete stoppedByResources.value[key]
+      continue
+    }
     
     // Skontroluj či budova ešte existuje na canvase
     if (!canvasImagesMap.value[key]) {
@@ -502,6 +516,14 @@ const handleImagePlaced = (data) => {
   if (data && data.row !== undefined && data.col !== undefined) {
     selectedCell.value = { row: -1, col: -1 }
   }
+  // Po umiestnení budovy ju odznač - používateľ musí kliknúť znova
+  if (selectedBuildingId.value) {
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    selectedImageData.value = null
+    selectedBuildingDestinationTiles.value = []
+    selectedBuildingCanBuildOnlyInDestination.value = false
+  }
   handleCanvasUpdated()
 }
 
@@ -542,6 +564,7 @@ const handleLoadProject = async (projectData) => {
     textureSettings.value = loadedData.textureSettings
     resources.value = loadedData.resources
     workforce.value = loadedData.workforce
+    gameEvents.value = loadedData.events || []
     roadSpriteUrl.value = loadedData.roadSpriteUrl
     roadOpacity.value = loadedData.roadOpacity
     gameTime.value = loadedData.gameTime || 0
@@ -1008,11 +1031,18 @@ const handleCanvasUpdated = () => {
         return
       }
       
-      // Nájdi imageId z URL alebo templateName
-      const matchingImage = images.value.find(img => 
-        img.url === data.url || 
-        (data.templateName && img.templateName === data.templateName)
-      )
+      // Najprv skús matchovať podľa libraryImageId (stabilné - nemení sa pri výmene obrázka)
+      let matchingImage = null
+      if (data.libraryImageId) {
+        matchingImage = images.value.find(img => img.id === data.libraryImageId)
+      }
+      // Fallback na URL alebo templateName
+      if (!matchingImage) {
+        matchingImage = images.value.find(img => 
+          img.url === data.url || 
+          (data.templateName && img.templateName === data.templateName)
+        )
+      }
       
       // Použij buildingData z canvas položky (má prednosť) alebo z image library
       const buildingData = data.buildingData || matchingImage?.buildingData || null
@@ -1024,6 +1054,10 @@ const handleCanvasUpdated = () => {
           templateName: data.templateName,
           isSecondary: false,
           buildingData: buildingData
+        }
+        // Propaguj imageId späť do cellImages ak chýba (napr. po load z JSON)
+        if (matchingImage && !data.libraryImageId && canvasRef.value?.setCellImageLibraryId) {
+          canvasRef.value.setCellImageLibraryId(key, matchingImage.id)
         }
       }
     })
@@ -1077,7 +1111,9 @@ const handleCanvasUpdated = () => {
         
         // Ak budova je building a ešte nemá zapnutú auto produkciu (produkcia môže byť aj prázdna)
         // Preskočíme budovy ktoré sú ešte v stavebnej animácii
+        // Preskočíme port budovy - tie sa spúšťajú manuálne
         if (bd?.isBuilding && 
+            !bd.isPort &&
             !buildingProductionStates.value[key]?.enabled &&
             !animatingBuildings.value.has(key)) {
           
@@ -1361,6 +1397,8 @@ const handleBuildingDeleted = ({ row, col, buildingData }) => {
     delete buildingWorkerCount.value[key] // Vyčisti worker count
     // Odstráň z auto-restart sledovania pri zmazaní budovy
     delete stoppedByResources.value[key]
+    // Odstráň z manuálne zastavených budov
+    delete manuallyStoppedBuildings.value[key]
     // Vyčisti recykláciu ak bola budova v recyklačnom procese
     delete recyclingBuildings.value[key]
   }
@@ -1895,6 +1933,10 @@ const stopAutoProduction = (row, col, reason = 'manual') => {
     canvasRef.value?.hideWarningIndicator(row, col)
     // Odstráň z auto-restart sledovania pri manuálnom zastavení
     delete stoppedByResources.value[key]
+    // Zaregistruj ako manuálne zastavenú budovu
+    manuallyStoppedBuildings.value[key] = true
+    // Zobraz disabled overlay (tmavý pulzujúci efekt)
+    canvasRef.value?.showDisabledOverlay(row, col)
   }
   
   // Vymazať stav budovy
@@ -1930,6 +1972,10 @@ const toggleAutoProduction = () => {
   } else {
     // Zapnúť auto produkciu
     console.log(`🔄 Auto-produkcia zapnutá pre: ${buildingData.buildingName} na [${row}, ${col}]`)
+    
+    // Odstráň z manuálne zastavených a skry disabled overlay
+    delete manuallyStoppedBuildings.value[key]
+    canvasRef.value?.hideDisabledOverlay(row, col)
     
     // Skry prípadný existujúci warning indikátor
     canvasRef.value?.hideWarningIndicator(row, col)
@@ -2209,6 +2255,18 @@ const handleResourceClicked = (resourceId) => {
   filterResourceId.value = resourceId
   sidebarTab.value = 'buildings'
 }
+
+// Handler pre zmenu poradia budov (drag & drop v BuildingSelector)
+const handleReorderBuildings = (newOrder) => {
+  // newOrder = [{ id, order }, ...]
+  newOrder.forEach(({ id, order }) => {
+    const img = images.value.find(i => i.id === id)
+    if (img && img.buildingData) {
+      img.buildingData.buildingOrder = order
+    }
+  })
+  console.log('🔀 Poradie budov aktualizované')
+}
 </script>
 
 <template>
@@ -2282,11 +2340,13 @@ const handleResourceClicked = (resourceId) => {
         :roadOpacity="roadOpacity"
         :buildingProductionStates="buildingProductionStates"
         :gameTime="gameTime"
+        :events="gameEvents"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"
         @update:showGrid="showGrid = $event"
         @update-resources="handleUpdateResources"
+        @update-events="gameEvents = $event"
       />
     </header>
     
@@ -2333,6 +2393,7 @@ const handleResourceClicked = (resourceId) => {
         :filterResourceId="filterResourceId"
         @building-selected="handleBuildingSelected"
         @clear-filter="filterResourceId = null"
+        @reorder-buildings="handleReorderBuildings"
       />
 
       <!-- Road selector - fixed at bottom in buildings tab -->
@@ -2922,7 +2983,7 @@ header {
   right: 0;
   width: 250px;
   height: 100vh;
-  background: white;
+  background: linear-gradient(180deg, #00000036 0%, #b1aeae78 100%);
   overflow-y: auto;
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
   z-index: 20;
@@ -3311,7 +3372,7 @@ header {
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem;
-  background: white;
+  background: linear-gradient(135deg, #f8fafb1f 0%, #f0f2f5 100%);
   border-radius: 8px;
   border: 1px solid #e0e0e0;
   transition: all 0.2s;

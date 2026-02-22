@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import Modal from './Modal.vue'
 import ResourceManager from './ResourceManager.vue'
+import EventEmitter from './EventEmitter.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -67,13 +68,18 @@ const props = defineProps({
   gameTime: {
     type: Number,
     default: 0
+  },
+  events: {
+    type: Array,
+    default: () => []
   }
 })
 
-const emit = defineEmits(['load-project', 'update:showNumbering', 'update:showGallery', 'update:showGrid', 'update-resources', 'mode-changed'])
+const emit = defineEmits(['load-project', 'update:showNumbering', 'update:showGallery', 'update:showGrid', 'update-resources', 'mode-changed', 'update-events'])
 
 const fileInput = ref(null)
 const showResourceModal = ref(false)
+const showEventModal = ref(false)
 
 const openResourceManager = () => {
   showResourceModal.value = true
@@ -81,6 +87,18 @@ const openResourceManager = () => {
 
 const closeResourceManager = () => {
   showResourceModal.value = false
+}
+
+const openEventEmitter = () => {
+  showEventModal.value = true
+}
+
+const closeEventEmitter = () => {
+  showEventModal.value = false
+}
+
+const handleEventsUpdate = (updatedEvents) => {
+  emit('update-events', updatedEvents)
 }
 
 const handleResourceUpdate = (data) => {
@@ -204,6 +222,7 @@ const saveProject = () => {
           row,
           col,
           imageId,  // referencia namiesto url
+          libraryImageId: imageData.libraryImageId || null, // ID z image library pre stabilné matchovanie
           cellsX: imageData.cellsX || 1,
           cellsY: imageData.cellsY || 1,
           isBackground: false,
@@ -264,6 +283,7 @@ const saveProject = () => {
       },
       resources: props.resources || [],
       workforce: props.workforce || [],
+      events: props.events || [],
       gameTime: props.gameTime || 0,
       roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
       roadOpacity: props.roadOpacity || 100,
@@ -372,6 +392,7 @@ const saveGameplayProject = async () => {
         
         placedImages[key] = {
           row, col, imageId,
+          libraryImageId: imageData.libraryImageId || null, // ID z image library pre stabilné matchovanie
           cellsX: imageData.cellsX || 1,
           cellsY: imageData.cellsY || 1,
           isBackground: false,
@@ -432,6 +453,7 @@ const saveGameplayProject = async () => {
       },
       resources: props.resources || [],
       workforce: props.workforce || [],
+      events: props.events || [],
       gameTime: props.gameTime || 0,
       roadSpriteUrl: props.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
       roadOpacity: props.roadOpacity || 100,
@@ -565,6 +587,7 @@ const handleFileUpload = async (event) => {
       textureSettings: projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null },
       resources: projectData.resources || [],
       workforce: projectData.workforce || [],
+      events: projectData.events || [],
       gameTime: projectData.gameTime || 0,
       roadSpriteUrl: projectData.roadSpriteUrl || '/templates/roads/sprites/pastroad.png',
       roadOpacity: projectData.roadOpacity || 100,
@@ -646,13 +669,13 @@ const clearProject = () => {
         📊 Resources
       </button>
       
+      <button @click="openEventEmitter" class="btn btn-events" title="Správa eventov a triggerov">
+        ⚡ Events
+      </button>
+      
       <button @click="clearProject" class="btn btn-clear" title="Vymazať všetky obrázky">
         🗑️ Clear
       </button>
-      
-      <span class="image-count" v-if="images.length > 0">
-        {{ images.length }} {{ images.length === 1 ? 'obrázok' : images.length < 5 ? 'obrázky' : 'obrázkov' }}
-      </span>
     </div>
 
     <!-- Checkboxy pre zobrazenie -->
@@ -705,6 +728,22 @@ const clearProject = () => {
         :initialResources="resources"
         :initialWorkforce="workforce"
         @update="handleResourceUpdate"
+      />
+    </Modal>
+    
+    <!-- Event Emitter Modal -->
+    <Modal 
+      v-if="showEventModal" 
+      title="Event Emitter"
+      width="700px"
+      @close="closeEventEmitter"
+    >
+      <EventEmitter
+        :events="events"
+        :resources="resources"
+        :workforce="workforce"
+        :images="images"
+        @update-events="handleEventsUpdate"
       />
     </Modal>
   </div>
@@ -846,6 +885,15 @@ const clearProject = () => {
 
 .btn-resources:hover {
   background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+}
+
+.btn-events {
+  background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+  color: white;
+}
+
+.btn-events:hover {
+  background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
 }
 
 .btn-clear {

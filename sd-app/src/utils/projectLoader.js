@@ -119,7 +119,7 @@ export async function loadPlacedObjects(canvasRef, placedImages, roadTiles, imag
     
     for (let i = currentIndex; i < batchEnd; i++) {
       const [key, imageData] = objectsToLoad[i]
-      const { row, col, url, cellsX, cellsY, isBackground, isRoadTile, templateName, tileMetadata, buildingData, imageId } = imageData
+      const { row, col, url, cellsX, cellsY, isBackground, isRoadTile, templateName, tileMetadata, buildingData, imageId, libraryImageId } = imageData
       
       let finalUrl = url
       let finalBitmap = null
@@ -169,6 +169,10 @@ export async function loadPlacedObjects(canvasRef, placedImages, roadTiles, imag
             tileMetadata || null,
             finalBuildingData  // Použiť rekonštruované buildingData
           )
+          // Nastav libraryImageId pre stabilné matchovanie budov po výmene obrázka
+          if (libraryImageId && typeof canvasRef.setCellImageLibraryId === 'function') {
+            canvasRef.setCellImageLibraryId(key, libraryImageId)
+          }
           successCount++
         } catch (error) {
           console.error(`❌ ProjectLoader: Chyba pri umiestnení objektu na [${row}, ${col}]:`, error)
@@ -277,7 +281,8 @@ export async function loadProject(projectData, canvasRef, onProgress = null) {
       roadSpriteUrl,
       roadOpacity,
       gameTime: projectData.gameTime || 0,
-      buildingProductionStates: projectData.buildingProductionStates || {}
+      buildingProductionStates: projectData.buildingProductionStates || {},
+      events: projectData.events || []
     }
     
   } catch (error) {

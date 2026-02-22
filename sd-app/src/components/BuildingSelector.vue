@@ -16,12 +16,87 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['building-selected', 'clear-filter'])
+const emit = defineEmits(['building-selected', 'clear-filter', 'reorder-buildings'])
+
+// Drag and drop
+const draggedItemId = ref(null)
+const dragOverItemId = ref(null)
+
+const onDragStart = (event, buildingId) => {
+  draggedItemId.value = buildingId
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', buildingId)
+  setTimeout(() => {
+    const el = event.target.closest('.building-item')
+    if (el) el.classList.add('dragging')
+  }, 0)
+}
+
+const onDragOver = (event, buildingId) => {
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  dragOverItemId.value = buildingId
+}
+
+const onDragLeave = () => {
+  dragOverItemId.value = null
+}
+
+const onDrop = (event, targetId) => {
+  event.preventDefault()
+  if (!draggedItemId.value || draggedItemId.value === targetId) {
+    resetDrag()
+    return
+  }
+  
+  // Vytvor novú zoradenú kópiu
+  const list = [...sortedBuildings.value]
+  const draggedIdx = list.findIndex(b => b.id === draggedItemId.value)
+  const targetIdx = list.findIndex(b => b.id === targetId)
+  
+  if (draggedIdx === -1 || targetIdx === -1) {
+    resetDrag()
+    return
+  }
+  
+  const [movedItem] = list.splice(draggedIdx, 1)
+  if (draggedIdx < targetIdx) {
+    list.splice(targetIdx, 0, movedItem)
+  } else {
+    list.splice(targetIdx, 0, movedItem)
+  }
+  
+  // Emit nové poradie (pole ID v správnom poradí)
+  emit('reorder-buildings', list.map((b, index) => ({ id: b.id, order: index })))
+  
+  resetDrag()
+}
+
+const onDragEnd = (event) => {
+  const el = event.target.closest('.building-item')
+  if (el) el.classList.remove('dragging')
+  resetDrag()
+}
+
+const resetDrag = () => {
+  draggedItemId.value = null
+  dragOverItemId.value = null
+}
+
+// Zoradené budovy podľa buildingOrder
+const sortedBuildings = computed(() => {
+  const sorted = [...props.buildings].sort((a, b) => {
+    const orderA = a.buildingData?.buildingOrder ?? 9999
+    const orderB = b.buildingData?.buildingOrder ?? 9999
+    return orderA - orderB
+  })
+  return sorted
+})
 
 // Filter buildings by resource (production, stored)
 const filteredBuildings = computed(() => {
-  if (!props.filterResourceId) return props.buildings
-  return props.buildings.filter(b => {
+  if (!props.filterResourceId) return sortedBuildings.value
+  return sortedBuildings.value.filter(b => {
     const bd = b.buildingData
     if (!bd) return false
     const check = (arr) => arr && arr.some(r => r.resourceId === props.filterResourceId)
@@ -63,10 +138,7 @@ const totalCount = computed(() => props.buildings.length)
 
 <template>
   <div class="building-selector">
-    <div class="section-header">
-      <h3>🏗️ Buildings</h3>
-      <span class="building-count">{{ buildingCount }}<span v-if="filterResourceId"> / {{ totalCount }}</span></span>
-    </div>
+
 
     <!-- Filter indicator -->
     <div v-if="filterResourceId" class="filter-indicator">
@@ -88,9 +160,15 @@ const totalCount = computed(() => props.buildings.length)
       <div
         v-for="building in filteredBuildings"
         :key="building.id"
-        :class="['building-item', { selected: building.id === selectedBuildingId }]"
+        :class="['building-item', { selected: building.id === selectedBuildingId, 'drag-over': dragOverItemId === building.id }]"
         @click="selectBuilding(building)"
         :title="building.buildingData?.buildingName || 'Building'"
+        draggable="true"
+        @dragstart="onDragStart($event, building.id)"
+        @dragover="onDragOver($event, building.id)"
+        @dragleave="onDragLeave"
+        @drop="onDrop($event, building.id)"
+        @dragend="onDragEnd"
       >
         <img :src="building.url" :alt="building.buildingData?.buildingName || 'Building'" />
         <div class="building-info">
@@ -105,10 +183,8 @@ const totalCount = computed(() => props.buildings.length)
 
 <style scoped>
 .building-selector {
-  background: white;
-  border-radius: 12px;
+  background: rgb(0 0 0 / 30%);
   padding: 1rem;
-  margin-top: 1rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
@@ -216,10 +292,10 @@ const totalCount = computed(() => props.buildings.length)
   aspect-ratio: 1;
   border-radius: 8px;
   overflow: hidden;
-  cursor: pointer;
+  cursor: grab;
   transition: all 0.2s;
-  border: 2px solid transparent;
-  background: #f8f9fa;
+  border: 1px solid #77eaff;
+  background: linear-gradient(135deg, #1e1f1f24 0%, #f0f2f5 100%);
 }
 
 .building-item:hover {
@@ -290,5 +366,21 @@ const totalCount = computed(() => props.buildings.length)
   font-size: 0.75rem;
   font-weight: bold;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Drag and drop */
+.building-item.dragging {
+  opacity: 0.4;
+  transform: scale(0.95);
+}
+
+.building-item.drag-over {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.4);
+  transform: scale(1.05);
+}
+
+.building-item:active {
+  cursor: grabbing;
 }
 </style>

@@ -51,7 +51,8 @@ const emit = defineEmits([
   'command-center-selected',
   'destination-mode-started',
   'destination-mode-finished',
-  'replace-image-url'
+  'replace-image-url',
+  'reorder-images'
 ])
 
 const selectedImage = ref(null)
@@ -63,6 +64,66 @@ const roadBuildingMode = ref(true) // Režim stavby ciest - automatický výber 
 const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 const spawnPersonsEnabled = ref(props.personSpawnEnabled) // Či pridať osoby pri kliknutí na road tile
 const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno umiestnenie road tile
+
+// Drag and drop pre radenie obrázkov v galérii
+const galleryDraggedId = ref(null)
+const galleryDragOverId = ref(null)
+
+const onGalleryDragStart = (event, imageId) => {
+  galleryDraggedId.value = imageId
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', imageId)
+  setTimeout(() => {
+    const el = event.target.closest('.gallery-item')
+    if (el) el.classList.add('dragging')
+  }, 0)
+}
+
+const onGalleryDragOver = (event, imageId) => {
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  galleryDragOverId.value = imageId
+}
+
+const onGalleryDragLeave = () => {
+  galleryDragOverId.value = null
+}
+
+const onGalleryDrop = (event, targetId) => {
+  event.preventDefault()
+  if (!galleryDraggedId.value || galleryDraggedId.value === targetId) {
+    resetGalleryDrag()
+    return
+  }
+  
+  const list = [...props.images]
+  const draggedIdx = list.findIndex(img => img.id === galleryDraggedId.value)
+  const targetIdx = list.findIndex(img => img.id === targetId)
+  
+  if (draggedIdx === -1 || targetIdx === -1) {
+    resetGalleryDrag()
+    return
+  }
+  
+  const [movedItem] = list.splice(draggedIdx, 1)
+  list.splice(targetIdx, 0, movedItem)
+  
+  // Emit nové poradie (pole ID v správnom poradí)
+  emit('reorder-images', list.map(img => img.id))
+  
+  resetGalleryDrag()
+}
+
+const onGalleryDragEnd = (event) => {
+  const el = event.target.closest('.gallery-item')
+  if (el) el.classList.remove('dragging')
+  resetGalleryDrag()
+}
+
+const resetGalleryDrag = () => {
+  galleryDraggedId.value = null
+  galleryDragOverId.value = null
+}
 const spawnCarsEnabled = ref(props.carSpawnEnabled) // Či pridať autá pri kliknutí na road tile
 const carsPerPlacement = ref(props.carSpawnCount) // Počet áut na jedno umiestnenie road tile
 
@@ -881,9 +942,15 @@ defineExpose({
         <div 
           v-for="image in images" 
           :key="image.id" 
-          :class="['gallery-item', { 'selected': image.id === selectedImageId }]"
+          :class="['gallery-item', { 'selected': image.id === selectedImageId, 'drag-over': galleryDragOverId === image.id }]"
           @click="emit('select', { id: image.id, imageData: image })"
           @dblclick="openModal(image)"
+          draggable="true"
+          @dragstart="onGalleryDragStart($event, image.id)"
+          @dragover="onGalleryDragOver($event, image.id)"
+          @dragleave="onGalleryDragLeave"
+          @drop="onGalleryDrop($event, image.id)"
+          @dragend="onGalleryDragEnd"
         >
           <img :src="image.url" :alt="image.prompt" />
           <div class="image-overlay">
@@ -1505,6 +1572,28 @@ h2 {
 .gallery-grid {
   display: flex;
   gap: 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  padding-bottom: 6px;
+}
+
+.gallery-grid::-webkit-scrollbar {
+  height: 6px;
+}
+
+.gallery-grid::-webkit-scrollbar-track {
+  background: #f0f0f0;
+  border-radius: 3px;
+}
+
+.gallery-grid::-webkit-scrollbar-thumb {
+  background: #b0b0b0;
+  border-radius: 3px;
+}
+
+.gallery-grid::-webkit-scrollbar-thumb:hover {
+  background: #888;
 }
 
 .gallery-item {
@@ -1512,16 +1601,33 @@ h2 {
   aspect-ratio: 1;
   border-radius: 12px;
   overflow: hidden;
-  cursor: pointer;
+  cursor: grab;
   transition: all 0.3s;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   border: 3px solid transparent;
-  width: 70px;
+  min-width: 7%;
+  width: 7%;
+  flex-shrink: 0;
 }
 
 .gallery-item:hover {
   transform: translateY(-5px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.gallery-item:active {
+  cursor: grabbing;
+}
+
+.gallery-item.dragging {
+  opacity: 0.4;
+  transform: scale(0.9);
+}
+
+.gallery-item.drag-over {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.4);
+  transform: scale(1.08);
 }
 
 .gallery-item.selected {

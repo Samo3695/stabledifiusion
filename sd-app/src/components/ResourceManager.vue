@@ -20,6 +20,81 @@ const newResourceName = ref('')
 const newComponentName = ref('')
 const editingResourceId = ref(null)
 
+// Drag and drop
+const draggedItemId = ref(null)
+const dragOverItemId = ref(null)
+const dragType = ref(null) // 'resources' alebo 'components'
+
+const onDragStart = (event, itemId, type) => {
+  draggedItemId.value = itemId
+  dragType.value = type
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', itemId)
+  // Pridaj oneskorenie pre lepší vizuálny efekt
+  setTimeout(() => {
+    const el = event.target.closest('.item')
+    if (el) el.classList.add('dragging')
+  }, 0)
+}
+
+const onDragOver = (event, itemId) => {
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  dragOverItemId.value = itemId
+}
+
+const onDragLeave = () => {
+  dragOverItemId.value = null
+}
+
+const onDrop = (event, targetId, type) => {
+  event.preventDefault()
+  if (!draggedItemId.value || draggedItemId.value === targetId || dragType.value !== type) {
+    resetDrag()
+    return
+  }
+  
+  // Nájdi indexy v allItems (nie vo filtrovanom zozname)
+  const filteredList = type === 'resources' ? resources.value : components.value
+  const draggedIdx = filteredList.findIndex(r => r.id === draggedItemId.value)
+  const targetIdx = filteredList.findIndex(r => r.id === targetId)
+  
+  if (draggedIdx === -1 || targetIdx === -1) {
+    resetDrag()
+    return
+  }
+  
+  // Preusporiadaj v rámci allItems
+  const draggedGlobalIdx = allItems.value.findIndex(r => r.id === draggedItemId.value)
+  const targetGlobalIdx = allItems.value.findIndex(r => r.id === targetId)
+  
+  const [movedItem] = allItems.value.splice(draggedGlobalIdx, 1)
+  const newTargetIdx = allItems.value.findIndex(r => r.id === targetId)
+  
+  if (draggedIdx < targetIdx) {
+    // Presun za cieľový prvok
+    allItems.value.splice(newTargetIdx + 1, 0, movedItem)
+  } else {
+    // Presun pred cieľový prvok
+    allItems.value.splice(newTargetIdx, 0, movedItem)
+  }
+  
+  resetDrag()
+  emitUpdate()
+}
+
+const onDragEnd = (event) => {
+  const el = event.target.closest('.item')
+  if (el) el.classList.remove('dragging')
+  resetDrag()
+}
+
+const resetDrag = () => {
+  draggedItemId.value = null
+  dragOverItemId.value = null
+  dragType.value = null
+}
+
 const addResource = () => {
   if (!newResourceName.value.trim()) return
   
@@ -198,8 +273,20 @@ const togglePersonAnimation = (id) => {
           v-for="resource in resources" 
           :key="resource.id" 
           class="item"
+          :class="{
+            'drag-over': dragOverItemId === resource.id,
+            'dragging': draggedItemId === resource.id
+          }"
+          draggable="true"
+          @dragstart="onDragStart($event, resource.id, 'resources')"
+          @dragover="onDragOver($event, resource.id)"
+          @dragleave="onDragLeave"
+          @drop="onDrop($event, resource.id, 'resources')"
+          @dragend="onDragEnd"
         >
           <div class="item-content">
+            <!-- Drag handle -->
+            <div class="drag-handle" title="Potiahni pre zoradenie">⠿</div>
             <!-- Ikonka -->
             <div class="icon-wrapper">
               <div v-if="resource.icon" class="icon-preview">
@@ -328,8 +415,20 @@ const togglePersonAnimation = (id) => {
           v-for="component in components" 
           :key="component.id" 
           class="item"
+          :class="{
+            'drag-over': dragOverItemId === component.id,
+            'dragging': draggedItemId === component.id
+          }"
+          draggable="true"
+          @dragstart="onDragStart($event, component.id, 'components')"
+          @dragover="onDragOver($event, component.id)"
+          @dragleave="onDragLeave"
+          @drop="onDrop($event, component.id, 'components')"
+          @dragend="onDragEnd"
         >
           <div class="item-content">
+            <!-- Drag handle -->
+            <div class="drag-handle" title="Potiahni pre zoradenie">⠿</div>
             <!-- Ikonka -->
             <div class="icon-wrapper">
               <div v-if="component.icon" class="icon-preview">
@@ -784,6 +883,41 @@ const togglePersonAnimation = (id) => {
 .btn-delete:hover {
   background: #fee;
   transform: scale(1.1);
+}
+
+/* Drag and Drop */
+.drag-handle {
+  cursor: grab;
+  font-size: 1.2rem;
+  color: #aaa;
+  user-select: none;
+  padding: 0.25rem;
+  border-radius: 4px;
+  transition: all 0.2s;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.drag-handle:hover {
+  color: #667eea;
+  background: rgba(102, 126, 234, 0.1);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.item.dragging {
+  opacity: 0.4;
+  border-color: #667eea;
+  background: rgba(102, 126, 234, 0.05);
+}
+
+.item.drag-over {
+  border-color: #667eea;
+  border-top: 3px solid #667eea;
+  margin-top: -1px;
+  background: rgba(102, 126, 234, 0.08);
 }
 
 /* Scrollbar styling */

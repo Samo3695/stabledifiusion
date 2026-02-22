@@ -385,7 +385,7 @@ onUnmounted(() => {
 .resource-display {
   display: flex;
   flex-direction: column;
-  background: white;
+  background: rgb(0 0 0 / 26%);
 }
 
 .resource-list {
@@ -436,9 +436,9 @@ onUnmounted(() => {
   gap: 0.5rem;
   padding: 0.4rem 0.5rem;
   margin-bottom: 0.25rem;
-  background: #f8f9fa;
+  background: linear-gradient(135deg, #f8fafb1f 0%, #f0f2f5 100%);
   border-radius: 6px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid #9effea;
   transition: all 0.2s;
 }
 
@@ -491,7 +491,7 @@ onUnmounted(() => {
 
 .resource-name {
   font-weight: 600;
-  color: #333;
+  color: #000;
   font-size: 0.75rem;
   white-space: nowrap;
   overflow: hidden;
@@ -523,7 +523,7 @@ onUnmounted(() => {
 .amount-current {
   font-weight: 700;
   font-size: 0.95rem;
-  color: #667eea;
+  color: #518a85;
 }
 
 .amount-stored {

@@ -39,6 +39,7 @@ const carSpawnEnabled = ref(false)
 const carSpawnCount = ref(0)
 const resources = ref([]) // Resources list
 const workforce = ref([]) // Workforce list
+const gameEvents = ref([]) // Zoznam herných eventov
 const roadSpriteUrl = ref('/templates/roads/sprites/pastroad.png') // Aktuálny road sprite URL
 const roadOpacity = ref(100) // Aktuálna opacity pre road tiles
 const viewMode = ref('editor') // 'editor' alebo 'gameplay'
@@ -237,9 +238,31 @@ const handleReplaceImageUrl = (imageId, newUrl) => {
       seed: images.value[imageIndex].seed,
       buildingData: images.value[imageIndex].buildingData ? '✅' : '❌'
     })
+    
+    // Aktualizuj aj všetky cellImages na canvase ktoré používajú tento obrázok
+    if (canvasRef.value && canvasRef.value.updateCellImagesByLibraryId) {
+      canvasRef.value.updateCellImagesByLibraryId(imageId, newUrl, images.value[imageIndex].buildingData)
+      handleCanvasUpdated()
+    }
   } else {
     console.warn('⚠️ App.vue: Obrázok s ID', imageId, 'nebol nájdený')
   }
+}
+
+// Handler pre zmenu poradia obrázkov v galérii (drag & drop)
+const handleReorderImages = (orderedIds) => {
+  // orderedIds = pole ID v novom poradí
+  const reordered = []
+  for (const id of orderedIds) {
+    const img = images.value.find(i => i.id === id)
+    if (img) reordered.push(img)
+  }
+  // Pridaj obrázky ktoré neboli v orderedIds (safety)
+  for (const img of images.value) {
+    if (!reordered.includes(img)) reordered.push(img)
+  }
+  images.value = reordered
+  console.log('🔀 App.vue: Poradie obrázkov v galérii aktualizované')
 }
 
 // Watch pre zmenu roadTiles - keď sa zmení opacity, regeneruj canvas
@@ -566,6 +589,7 @@ const handleLoadProject = (projectData) => {
   // Obnov resources a workforce
   resources.value = loadedResources
   workforce.value = loadedWorkforce
+  gameEvents.value = projectData.events || []
   console.log('📊 App.vue: Resources a workforce načítané:', loadedResources.length, loadedWorkforce.length)
   
   // Obnov road sprite URL a opacity
@@ -1012,17 +1036,28 @@ const handleCanvasUpdated = () => {
     const newMap = {}
     
     Object.entries(cellImages).forEach(([key, data]) => {
-      // Nájdi imageId z URL alebo templateName
-      const matchingImage = images.value.find(img => 
-        img.url === data.url || 
-        (data.templateName && img.templateName === data.templateName)
-      )
+      // Najprv skús matchovať podľa libraryImageId (stabilné - nemení sa pri výmene obrázka)
+      let matchingImage = null
+      if (data.libraryImageId) {
+        matchingImage = images.value.find(img => img.id === data.libraryImageId)
+      }
+      // Fallback na URL alebo templateName
+      if (!matchingImage) {
+        matchingImage = images.value.find(img => 
+          img.url === data.url || 
+          (data.templateName && img.templateName === data.templateName)
+        )
+      }
       
       if (matchingImage) {
         newMap[key] = {
           imageId: matchingImage.id,
           url: data.url,
           templateName: data.templateName
+        }
+        // Propaguj imageId späť do cellImages ak chýba (napr. po load z JSON)
+        if (!data.libraryImageId && canvasRef.value.setCellImageLibraryId) {
+          canvasRef.value.setCellImageLibraryId(key, matchingImage.id)
         }
       }
     })
@@ -1094,11 +1129,13 @@ const handleCanvasUpdated = () => {
         :workforce="workforce"
         :roadSpriteUrl="roadSpriteUrl"
         :roadOpacity="roadOpacity"
+        :events="gameEvents"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
         @update:showGallery="showGallery = $event"
         @update:showGrid="showGrid = $event"
         @update-resources="handleUpdateResources"
+        @update-events="gameEvents = $event"
         @mode-changed="handleModeChanged"
       />
     </header>
@@ -1191,6 +1228,7 @@ const handleCanvasUpdated = () => {
         @destination-mode-started="handleDestinationModeStarted"
         @destination-mode-finished="handleDestinationModeFinished"
         @replace-image-url="handleReplaceImageUrl"
+        @reorder-images="handleReorderImages"
       />
     </div>
     

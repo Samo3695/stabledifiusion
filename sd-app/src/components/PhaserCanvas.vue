@@ -167,6 +167,9 @@ class IsoScene extends Phaser.Scene {
     // Hover highlight tracking (keď nie je vybraná žiadna budova)
     this.highlightedBuildingKey = null // Kľúč aktuálne zvýraznenej budovy
     this.highlightedBuildingSprites = [] // Sprite-y s aplikovaným tintom
+    
+    // Mapa disabled overlay efektov pre manuálne zastavené budovy
+    this.disabledOverlays = {}
   }
 
   preload() {
@@ -193,7 +196,7 @@ class IsoScene extends Phaser.Scene {
     mainScene = this
     
     // Nastavenie kamery
-    this.cameras.main.setBackgroundColor(0x667eea)
+    this.cameras.main.setBackgroundColor(0x000000)
     this.cameras.main.centerOn(0, GRID_SIZE * TILE_HEIGHT / 2)
     
     // Vytvoríme kontajnery pre vrstvy
@@ -998,6 +1001,68 @@ class IsoScene extends Phaser.Scene {
       }
       delete this.flyAwayEffects[key]
     }
+  }
+
+  // Zobrazí disabled overlay nad budovou (tmavý pulzujúci odtieň - brightness)
+  showDisabledOverlay(row, col) {
+    let key = `${row}-${col}`
+    const originCellData = cellImages[key]
+    if (originCellData?.isSecondary) {
+      row = originCellData.originRow
+      col = originCellData.originCol
+      key = `${row}-${col}`
+    }
+    
+    // Ak už existuje overlay, preskočíme
+    if (this.disabledOverlays[key]) return
+    
+    const buildingSprite = this.buildingSprites[key]
+    if (!buildingSprite) return
+    
+    // Pulzujúca animácia brightness cez tint (0xffffff = normálne, 0x555555 = tmavé)
+    const tweenData = { brightness: 1.0 }
+    const tween = this.tweens.add({
+      targets: tweenData,
+      brightness: { from: 1.0, to: 0.35 },
+      duration: 1500,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1,
+      onUpdate: () => {
+        const b = Math.floor(tweenData.brightness * 255)
+        const tintColor = (b << 16) | (b << 8) | b
+        buildingSprite.setTint(tintColor)
+      }
+    })
+    
+    this.disabledOverlays[key] = { tween, sprite: buildingSprite }
+    console.log(`🌑 Disabled overlay zobrazený pre [${row}, ${col}]`)
+  }
+  
+  // Skryje disabled overlay
+  hideDisabledOverlay(row, col) {
+    let key = `${row}-${col}`
+    const originCellData = cellImages[key]
+    if (originCellData?.isSecondary) {
+      row = originCellData.originRow
+      col = originCellData.originCol
+      key = `${row}-${col}`
+    }
+    
+    const overlay = this.disabledOverlays[key]
+    if (!overlay) return
+    
+    // Zastav tween
+    overlay.tween?.stop()
+    
+    // Obnov pôvodný vzhľad
+    if (overlay.sprite) {
+      overlay.sprite.clearTint()
+      overlay.sprite.setAlpha(1)
+    }
+    
+    delete this.disabledOverlays[key]
+    console.log(`☀️ Disabled overlay skrytý pre [${row}, ${col}]`)
   }
 
   // Spustí fly-away efekt podľa row/col (wrapper pre volanie z vonku)
@@ -2455,6 +2520,29 @@ class IsoScene extends Phaser.Scene {
     return particles
   }
 
+  // Aktualizuje textúru existujúcej budovy na canvase (pri výmene obrázka v galérii)
+  updateBuildingTexture(key, newUrl) {
+    const sprite = this.buildingSprites[key]
+    if (!sprite) return
+    
+    const newTextureKey = `building_${key}_${Date.now()}`
+    this.load.image(newTextureKey, newUrl)
+    this.load.once('complete', () => {
+      this.time.delayedCall(0, () => {
+        if (sprite && sprite.active) {
+          const oldScaleX = sprite.scaleX
+          const oldScaleY = sprite.scaleY
+          sprite.setTexture(newTextureKey)
+          // Zachovaj pôvodné škálovanie podľa pômeru šírok
+          const newScale = (TILE_WIDTH * (cellImages[key]?.cellsX || 1)) / sprite.width
+          sprite.setScale(newScale)
+          console.log(`🔄 Textúra budovy aktualizovaná: ${key}`)
+        }
+      })
+    })
+    this.load.start()
+  }
+
   // Pridanie obrázka s tieňom
   addBuildingWithShadow(key, imageUrl, row, col, cellsX, cellsY, isBackground = false, templateName = '', isRoadTile = false, bitmap = null, skipShadows = false, dontDropShadow = false, buildingData = null) {
     console.log('🏗️ addBuildingWithShadow called with dontDropShadow:', dontDropShadow, 'buildingData:', buildingData)
@@ -3083,6 +3171,8 @@ const placeImageAtSelectedCell = (imageUrl, cellsX, cellsY, imageDataOrIsBackgro
     isBackground,
     templateName,
     isRoadTile,
+    // Ulož ID obrázka z image library pre stabilné matchovanie (nemení sa pri výmene obrázka)
+    libraryImageId: imageData?.id || null,
     // Ulož building metadata ak existujú
     buildingData: imageData?.buildingData || null,
     // Ulož aj metaúdaje road tile-u (optimalizácia - pri load sa rekreuje z sprite)
@@ -3342,6 +3432,7 @@ defineExpose({
       isRoadTile,
       bitmap,
       templateName: tileName,
+      libraryImageId: null, // Pri load z JSON sa nastaví cez updateCellImageLibraryId
       tileMetadata: tileMetadata || (isRoadTile && tileName ? { name: tileName } : null),
       buildingData: buildingData || null,
       originRow: row,
@@ -3430,6 +3521,14 @@ defineExpose({
   // Spustí fly-away efekt pre budovu
   triggerFlyAwayEffect: (row, col) => {
     mainScene?.triggerFlyAwayEffect(row, col)
+  },
+  // Zobrazí disabled overlay (tmavý pulzujúci odtieň) - manuálne zastavená budova
+  showDisabledOverlay: (row, col) => {
+    mainScene?.showDisabledOverlay(row, col)
+  },
+  // Skryje disabled overlay
+  hideDisabledOverlay: (row, col) => {
+    mainScene?.hideDisabledOverlay(row, col)
   },
   // Zobrazí ikony work-force alokácií na canvase
   showWorkforceAllocations: (positions) => {
@@ -3769,6 +3868,47 @@ defineExpose({
       }
     )
     return true
+  },
+  // Aktualizuje URL a buildingData vo všetkých cellImages ktoré majú dané libraryImageId
+  updateCellImagesByLibraryId: (libraryImageId, newUrl, newBuildingData) => {
+    if (!libraryImageId) return
+    let updatedCount = 0
+    Object.entries(cellImages).forEach(([key, data]) => {
+      if (data.libraryImageId === libraryImageId) {
+        data.url = newUrl
+        if (newBuildingData !== undefined) {
+          data.buildingData = newBuildingData
+        }
+        // Aktualizuj aj sprite na canvase
+        if (mainScene && !data.isSecondary) {
+          mainScene.updateBuildingTexture(key, newUrl)
+        }
+        updatedCount++
+      }
+    })
+    if (updatedCount > 0) {
+      console.log(`🔄 PhaserCanvas: Aktualizovaných ${updatedCount} cellImages pre libraryImageId ${libraryImageId}`)
+    }
+    return updatedCount
+  },
+  // Nastaví libraryImageId pre cellImage na danom kľúči (používa sa po load z JSON)
+  setCellImageLibraryId: (key, libraryImageId) => {
+    if (cellImages[key]) {
+      cellImages[key].libraryImageId = libraryImageId
+      // Aktualizuj aj sekundárne bunky
+      const data = cellImages[key]
+      if (data.cellsX > 1 || data.cellsY > 1) {
+        for (let r = 0; r < data.cellsX; r++) {
+          for (let c = 0; c < data.cellsY; c++) {
+            if (r === 0 && c === 0) continue
+            const cellKey = `${data.originRow + r}-${data.originCol + c}`
+            if (cellImages[cellKey]) {
+              cellImages[cellKey].libraryImageId = libraryImageId
+            }
+          }
+        }
+      }
+    }
   }
 })
 
@@ -3823,7 +3963,7 @@ onMounted(() => {
     parent: gameContainer.value,
     width: window.innerWidth,
     height: window.innerHeight,
-    backgroundColor: '#667eea',
+    backgroundColor: '#000000',
     scene: IsoScene,
     scale: {
       mode: Phaser.Scale.RESIZE,
