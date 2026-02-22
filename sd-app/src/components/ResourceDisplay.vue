@@ -95,7 +95,7 @@ watch(() => [props.resources, props.storedResources], () => {
     
     if (isOverCapacity && !countdownIntervals[resource.id]) {
       // Začni odpočítavanie - 10s ak nie je žiadny sklad, 60s ak je len preplnený
-      const countdownDuration = (capacityNum <= 0) ? 10 : 60
+      const countdownDuration = 10;
       console.log(`⏱️ Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum}, duration: ${countdownDuration}s)`)
       startCountdown(resource.id, countdownDuration)
     } else if (!isOverCapacity && countdownIntervals[resource.id]) {
