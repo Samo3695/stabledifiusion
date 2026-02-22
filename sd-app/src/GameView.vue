@@ -2323,16 +2323,118 @@ const handleReduceToCapacity = (resourceId) => {
   const capacity = storedResources.value[resourceId]
   const capacityNum = capacity !== undefined ? Number(capacity) : 0
   
-  // Ak je capacity 0 (alebo undefined ale zobrazuje sa /0), dáme surovinu na 0
+  console.log(`📉 handleReduceToCapacity: ${resource.name}, amount: ${resource.amount}, allocated: ${allocatedResources.value[resourceId] || 0}, capacity: ${capacityNum}`)
+  
+  // Najprv uvoľni alokované resources - zastav produkciu budov ktoré používajú tento resource
+  const allocations = workforceAllocations.value[resourceId]
+  if (allocations && allocations.length > 0) {
+    // Skopíruj pole lebo stopAutoProduction ho modifikuje
+    const allocationsCopy = [...allocations]
+    allocationsCopy.forEach(alloc => {
+      if (alloc.type === 'production') {
+        console.log(`📉 Zastavujem produkciu budovy ${alloc.buildingName} na [${alloc.row}, ${alloc.col}] kvôli nedostatku skladu pre ${resource.name}`)
+        const key = `${alloc.row}-${alloc.col}`
+        const hasState = !!buildingProductionStates.value[key]
+        
+        if (hasState) {
+          stopAutoProduction(alloc.row, alloc.col, 'resources')
+        } else {
+          // stopAutoProduction by preskočil (state neexistuje) - manuálne dealokuj
+          console.log(`📉 Produkčný stav neexistuje pre [${alloc.row}, ${alloc.col}], manuálna dealokácia ${alloc.amount}x ${resource.name}`)
+          resource.amount += alloc.amount
+          
+          if (allocatedResources.value[resourceId]) {
+            allocatedResources.value[resourceId] -= alloc.amount
+            if (allocatedResources.value[resourceId] <= 0) {
+              delete allocatedResources.value[resourceId]
+            }
+          }
+          
+          // Odstráň detailný záznam alokácie
+          const allocList = workforceAllocations.value[resourceId]
+          if (allocList) {
+            const idx = allocList.indexOf(alloc)
+            if (idx !== -1) {
+              allocList.splice(idx, 1)
+              if (allocList.length === 0) {
+                delete workforceAllocations.value[resourceId]
+              }
+            }
+          }
+        }
+      } else if (alloc.type === 'build' || alloc.type === 'recycle') {
+        // Uvoľni build/recycle alokácie - vráť workforce
+        const key = `${alloc.row}-${alloc.col}`
+        resource.amount += alloc.amount
+        
+        // Aktualizuj allocatedResources
+        if (allocatedResources.value[resourceId]) {
+          allocatedResources.value[resourceId] -= alloc.amount
+          if (allocatedResources.value[resourceId] <= 0) {
+            delete allocatedResources.value[resourceId]
+          }
+        }
+        
+        // Odstráň detailný záznam alokácie
+        const allocList = workforceAllocations.value[resourceId]
+        if (allocList) {
+          const idx = allocList.indexOf(alloc)
+          if (idx !== -1) {
+            allocList.splice(idx, 1)
+            if (allocList.length === 0) {
+              delete workforceAllocations.value[resourceId]
+            }
+          }
+        }
+        
+        // Vyčisti aj pendingBuildAllocations
+        const pending = pendingBuildAllocations.value[key]
+        if (pending) {
+          const pIdx = pending.findIndex(p => p.resourceId === resourceId)
+          if (pIdx !== -1) {
+            pending.splice(pIdx, 1)
+            if (pending.length === 0) {
+              delete pendingBuildAllocations.value[key]
+            }
+          }
+        }
+        
+        console.log(`📉 Uvoľnená build/recycle alokácia: ${alloc.amount}x ${resource.name} z [${alloc.row}, ${alloc.col}]`)
+      }
+    })
+  }
+  
+  // Teraz zníži amount na kapacitu (po dealokácii sa amount mohol zvýšiť)
   if (capacityNum <= 0 && resource.amount > 0) {
     console.log(`📉 Znižujem ${resource.name} z ${resource.amount} na 0 (bez skladu)`)
     resource.amount = 0
-  }
-  // Ak je capacity väčšia ako 0 a resource je nad kapacitou
-  else if (capacityNum > 0 && resource.amount > capacityNum) {
+  } else if (capacityNum > 0 && resource.amount > capacityNum) {
     console.log(`📉 Znižujem ${resource.name} z ${resource.amount} na kapacitu ${capacityNum}`)
     resource.amount = capacityNum
   }
+  
+  // Fallback: Ak po všetkých dealokáciách stále existujú alokácie a kapacita je 0,
+  // vynuluj všetko - ochrana proti desync medzi allocatedResources a workforceAllocations
+  const remainingAllocated = allocatedResources.value[resourceId] || 0
+  const totalAfter = resource.amount + remainingAllocated
+  if (totalAfter > capacityNum) {
+    console.log(`📉 Fallback cleanup: ${resource.name} - stále total=${totalAfter} > capacity=${capacityNum}, allocated=${remainingAllocated}`)
+    
+    // Vymaž všetky zvyšné alokácie pre tento resource
+    if (allocatedResources.value[resourceId]) {
+      delete allocatedResources.value[resourceId]
+      console.log(`📉 Fallback: Vymazané allocatedResources pre ${resource.name}`)
+    }
+    if (workforceAllocations.value[resourceId]) {
+      delete workforceAllocations.value[resourceId]
+      console.log(`📉 Fallback: Vymazané workforceAllocations pre ${resource.name}`)
+    }
+    
+    // Nastav amount na kapacitu
+    resource.amount = Math.min(resource.amount, capacityNum)
+  }
+  
+  console.log(`📉 handleReduceToCapacity DONE: ${resource.name}, amount: ${resource.amount}, allocated: ${allocatedResources.value[resourceId] || 0}`)
 }
 
 // Handler pre kliknutie na alokovanú work force - zobrazí ikony na canvase

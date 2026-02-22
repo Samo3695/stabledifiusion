@@ -75,23 +75,26 @@ const stopCountdown = (resourceId) => {
 }
 
 // Watch pre detekciu over-capacity
-watch(() => [props.resources, props.storedResources], () => {
+watch(() => [props.resources, props.storedResources, props.allocatedResources], () => {
   props.resources.forEach(resource => {
     const capacity = props.storedResources[resource.id]
     // Konvertuj capacity - ak je undefined, použi 0 ak sa zobrazuje /0
     const capacityNum = capacity !== undefined ? Number(capacity) : 0
     
     // Debug log
-    if ((capacityNum <= 0 && resource.amount > 0) || resource.amount > capacityNum) {
-      console.log(`🔍 Resource: ${resource.name}, amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum}, typeof capacity: ${typeof capacity}`)
+    const allocatedAmount = props.allocatedResources[resource.id] || 0
+    const totalAmount = resource.amount + allocatedAmount
+    if (totalAmount > 0 && (resource.mustBeStored || capacity !== undefined)) {
+      console.log(`🔍 Resource: ${resource.name}, amount: ${resource.amount}, allocated: ${allocatedAmount}, totalAmount: ${totalAmount}, capacity: ${capacity}, capacityNum: ${capacityNum}, mustBeStored: ${resource.mustBeStored}, hasStorageDisplay: ${resource.mustBeStored || capacity !== undefined}`)
     }
     
     // Spusti countdown ak:
     // 1. resource.amount > capacity (nad kapacitou)
     // 2. capacity je 0 alebo undefined a zobrazuje sa /0 a má suroviny
+    // 3. amount + allocated > capacity (alokované resources tiež potrebujú sklad)
     const hasStorageDisplay = resource.mustBeStored || capacity !== undefined
-    const isOverCapacity = (hasStorageDisplay && resource.amount > capacityNum) || 
-                           (hasStorageDisplay && capacityNum <= 0 && resource.amount > 0)
+    const isOverCapacity = (hasStorageDisplay && totalAmount > capacityNum) || 
+                           (hasStorageDisplay && capacityNum <= 0 && totalAmount > 0)
     
     if (isOverCapacity && !countdownIntervals[resource.id]) {
       // Začni odpočítavanie - 10s ak nie je žiadny sklad, 60s ak je len preplnený
@@ -139,8 +142,10 @@ onMounted(() => {
     const capacity = props.storedResources[resource.id]
     const capacityNum = capacity !== undefined ? Number(capacity) : 0
     const hasStorageDisplay = resource.mustBeStored || capacity !== undefined
-    const isOverCapacity = (hasStorageDisplay && resource.amount > capacityNum) ||
-                           (hasStorageDisplay && capacityNum <= 0 && resource.amount > 0)
+    const allocatedAmount = props.allocatedResources[resource.id] || 0
+    const totalAmount = resource.amount + allocatedAmount
+    const isOverCapacity = (hasStorageDisplay && totalAmount > capacityNum) ||
+                           (hasStorageDisplay && capacityNum <= 0 && totalAmount > 0)
     if (isOverCapacity) {
       const countdownDuration = (capacityNum <= 0) ? 10 : 60
       console.log(`⏱️ onMounted: Spúšťam countdown pre ${resource.name} (amount: ${resource.amount}, capacity: ${capacity}, capacityNum: ${capacityNum}, duration: ${countdownDuration}s)`)

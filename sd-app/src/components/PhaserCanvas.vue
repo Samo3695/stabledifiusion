@@ -2646,7 +2646,8 @@ class IsoScene extends Phaser.Scene {
         
         // === ANIMÁCIA STAVBY - len pri manuálnom umiestnení (nie pri načítavaní projektu) ===
         // Preskočíme stavebné animáciu pre budovy s fly-away efektom - tie sa objavia plynule
-        const shouldAnimate = !skipShadows && !this.batchLoading && !buildingData?.hasFlyAwayEffect
+        // V editor mode (alwaysShowEffects) sa budovy stavajú okamžite bez animácie
+        const shouldAnimate = !skipShadows && !this.batchLoading && !buildingData?.hasFlyAwayEffect && !props.alwaysShowEffects
         
         // Zistíme či existujú autá na mape (ak áno, animácia čaká na auto)
         const hasCars = this.carManager && this.carManager.cars && this.carManager.cars.length > 0
