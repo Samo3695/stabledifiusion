@@ -96,6 +96,7 @@ const eventQueue = ref([]) // Queue of events waiting to be shown
 // Astronaut sprite
 const astronautActive = ref(false)
 const astronautRef = ref(null)
+const overproductionCycles = ref({}) // Consecutive full-storage cycles per building: { 'row-col': count }
 
 // Filtrované budovy z galérie (zoradené podľa buildingOrder)
 const buildings = computed(() => {
@@ -320,12 +321,14 @@ const deallocateWorkforceFor = (row, col, buildingData) => {
   })
 }
 
-// Show resource warning indicator on canvas
+// Show resource warning indicator on canvas (only for non-work-force resources)
 const showResourceWarning = (row, col, buildingData) => {
   const missingResources = []
   if (buildingData?.operationalCost) {
     buildingData.operationalCost.forEach(cost => {
       const resource = resources.value.find(r => r.id === cost.resourceId)
+      // Skip work-force resources — they don't trigger the warning icon
+      if (resource?.workResource) return
       if (!resource || resource.amount < cost.amount) {
         missingResources.push({
           id: cost.resourceId, name: cost.resourceName || resource?.name || 'Unknown',
@@ -356,6 +359,27 @@ const createProductionInterval = (row, col, buildingData) => {
     const storageCheck = canStoreProduction(buildingData, resources.value, storedResources.value)
     if (!storageCheck.hasSpace) {
       canvasRef.value?.showWarningIndicator(row, col, 'storage')
+      // Track consecutive overproduction cycles
+      if (!overproductionCycles.value[key]) overproductionCycles.value[key] = 0
+      if (overproductionCycles.value[key] !== 'shown') overproductionCycles.value[key]++
+      // Show astronaut warning only after 3+ consecutive cycles (~15s), then once until resolved
+      if (overproductionCycles.value[key] >= 3) {
+        const hasNonWorkCost = buildingData.operationalCost?.some(c => {
+          const res = resources.value.find(r => r.id === c.resourceId)
+          return res && !res.workResource
+        })
+        if (hasNonWorkCost && astronautRef.value && storageCheck.fullResources?.length > 0) {
+          const fullRes = storageCheck.fullResources[0]
+          const resObj = resources.value.find(r => r.id === fullRes.resourceId)
+          const icon = resObj?.icon || null
+          const bName = buildingData.buildingName || 'Building'
+          astronautRef.value.showMessage(`${bName} produces more ${fullRes.resourceName} than can be stored! Build more storage or reduce production.`, icon, 'storage', astronautRef.value.PRIORITY.STORAGE_FULL, fullRes.resourceId)
+          overproductionCycles.value[key] = 'shown' // Mark as shown — won't repeat until storage has space again
+        }
+      }
+    } else {
+      // Storage has space again — reset counter
+      delete overproductionCycles.value[key]
     }
     executeProduction(buildingData, resources.value, storedResources.value)
   }, 5000)
@@ -431,11 +455,14 @@ const fullStopProduction = (row, col, reason = 'manual', deficitResources = null
     canvasRef.value?.showDisabledOverlay(row, col)
   } else if (reason === 'resources') {
     stoppedByResources.value[key] = { row, col, buildingData: state.buildingData }
-    // If we have deficit info from the priority system, show it directly
-    // (don't re-check resource amounts — they may have changed after deallocation)
-    if (deficitResources && deficitResources.length > 0) {
-      canvasRef.value?.showWarningIndicator(row, col, 'resources', deficitResources)
-    } else {
+    // Filter out work-force resources — only show warning for material deficits
+    const nonWorkDeficit = deficitResources?.filter(d => {
+      const res = resources.value.find(r => r.id === d.id)
+      return !res?.workResource
+    }) || []
+    if (nonWorkDeficit.length > 0) {
+      canvasRef.value?.showWarningIndicator(row, col, 'resources', nonWorkDeficit)
+    } else if (!deficitResources || deficitResources.length === 0) {
       showResourceWarning(row, col, state.buildingData)
     }
     canvasRef.value?.showDisabledOverlay(row, col)
@@ -470,6 +497,19 @@ const resourceCheckInterval = setInterval(() => {
   for (const [key, deficitResources] of toPause) {
     const [row, col] = key.split('-').map(Number)
     console.log(`⛔ Priority stop: [${row}, ${col}] - highest consumer of deficit resource`)
+    // Show astronaut warning only for non-work-force resource shortages
+    const bldState = buildingProductionStates.value[key]
+    const bldName = bldState?.buildingData?.buildingName || 'Building'
+    const nonWorkDeficit = deficitResources?.filter(d => {
+      const res = resources.value.find(r => r.id === d.id)
+      return !res?.workResource
+    }) || []
+    if (nonWorkDeficit.length > 0 && astronautRef.value) {
+      const deficit = nonWorkDeficit[0]
+      const resObj = resources.value.find(r => r.id === deficit.id)
+      const icon = resObj?.icon || null
+      astronautRef.value.showMessage(`Not enough ${deficit.name} to keep ${bldName} running!`, icon, 'resources', astronautRef.value.PRIORITY.RESOURCE_DEFICIT, deficit.id)
+    }
     fullStopProduction(row, col, 'resources', deficitResources)
   }
 
@@ -483,7 +523,11 @@ const resourceCheckInterval = setInterval(() => {
     console.log(`🔄 Priority restart: [${row}, ${col}] - resources available`)
     canvasRef.value?.hideWarningIndicator(row, col)
     canvasRef.value?.hideDisabledOverlay(row, col)
-    tryStartProduction(row, col, buildingData)
+    const started = tryStartProduction(row, col, buildingData)
+    // Only show astronaut message if production actually started
+    if (started && astronautRef.value) {
+      astronautRef.value.showMessage(`${buildingData.buildingName || 'Building'} is back in operation!`, null, null, astronautRef.value.PRIORITY.BUILDING_RESUME)
+    }
   }
 }, 3000)
 
@@ -856,6 +900,14 @@ const handleCellSelected = ({ row, col }) => {
 const handleImagePlaced = (data) => {
   if (data && data.row !== undefined && data.col !== undefined) {
     selectedCell.value = { row: -1, col: -1 }
+  }
+  // Show astronaut message for building placement
+  if (selectedBuildingId.value) {
+    const building = images.value.find(img => img.id === selectedBuildingId.value)
+    const name = building?.buildingData?.buildingName || 'a building'
+    if (astronautRef.value) {
+      astronautRef.value.showMessage(`Time to build ${name}!`, null, null, astronautRef.value.PRIORITY.BUILDING_PLACED)
+    }
   }
   // Po umiestnení budovy ju odznač - používateľ musí kliknúť znova
   if (selectedBuildingId.value) {
@@ -1368,6 +1420,12 @@ const handleBuildingConstructionComplete = ({ row, col }) => {
   const builtBuildingData = canvasRef.value?.cellImages?.()[key]
   const builtBuildingId = builtBuildingData?.buildingData?.id || null
   checkBuildingEvents('built', builtBuildingId)
+  
+  // Show astronaut message for completed building
+  const buildingName = builtBuildingData?.buildingData?.buildingName || 'Building'
+  if (astronautRef.value) {
+    astronautRef.value.showMessage(`${buildingName} is ready!`, null, null, astronautRef.value.PRIORITY.BUILDING_COMPLETE)
+  }
   
   // Spusti auto produkciu pre túto budovu
   startAutoProductionForBuilding(row, col)
@@ -2706,9 +2764,10 @@ const handleReorderBuildings = (newOrder) => {
       spriteUrl="/templates/all/advisor3.png"
       :cols="3"
       :rows="2"
-      :frameWidth="101"
-      :frameHeight="97"
+      :frameWidth="116"
+      :frameHeight="112"
       :frameSpeed="180"
+      @bubble-clicked="handleResourceClicked"
     />
 
     <!-- Game Event Modal -->
