@@ -90,6 +90,7 @@ let animationInterval = null
 let bubbleTimeout = null
 let stopTimeout = null
 let shakeInterval = null
+let hideTimeout = null
 
 // Message queue — sorted by priority, highest first
 const messageQueue = ref([])
@@ -143,9 +144,9 @@ const startAnimation = () => {
   // Start sprite frame cycling (randomly skip frame 3 sometimes, 50% chance to skip 2 frames)
   animationInterval = setInterval(() => {
     let next = (currentFrame.value + 1) % totalFrames.value
-    if (next === 2 && Math.random() < 0.75) {
+    if (next === 2 && Math.random() < 0.8) {
       next = (next + 1) % totalFrames.value
-      if (Math.random() < 0.5) next = (next + 1) % totalFrames.value
+      if (Math.random() < 0.2) next = (next + 1) % totalFrames.value
     }
     currentFrame.value = next
   }, animSpeed.value)
@@ -167,6 +168,10 @@ const startAnimation = () => {
     currentFrame.value = totalFrames.value - 1
     // Start idle shake — subtle vibration like sitting in a car
     startIdleShake()
+    // Hide everything 5s after animation loop ends
+    hideTimeout = setTimeout(() => {
+      hide()
+    }, 5000)
   }, totalWait)
 }
 
@@ -205,6 +210,10 @@ const stopAnimation = () => {
   if (queueProcessTimeout) {
     clearTimeout(queueProcessTimeout)
     queueProcessTimeout = null
+  }
+  if (hideTimeout) {
+    clearTimeout(hideTimeout)
+    hideTimeout = null
   }
   stopIdleShake()
   showBubble.value = false
@@ -246,6 +255,7 @@ const displayMessage = (text, icon, warningType, priority, resourceId) => {
   if (bubbleTimeout) { clearTimeout(bubbleTimeout); bubbleTimeout = null }
   if (stopTimeout) { clearTimeout(stopTimeout); stopTimeout = null }
   if (queueProcessTimeout) { clearTimeout(queueProcessTimeout); queueProcessTimeout = null }
+  if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null }
   stopIdleShake()
   showBubble.value = false
   
@@ -281,10 +291,17 @@ const displayMessage = (text, icon, warningType, priority, resourceId) => {
     currentFrame.value = totalFrames.value - 1
     startIdleShake()
 
-    // After the message is done, process the queue
-    queueProcessTimeout = setTimeout(() => {
-      processQueue()
-    }, 2000) // 2s pause before showing next queued message
+    // After the message is done, process the queue or hide
+    if (messageQueue.value.length > 0) {
+      queueProcessTimeout = setTimeout(() => {
+        processQueue()
+      }, 2000) // 2s pause before showing next queued message
+    } else {
+      // Hide everything 5s after animation loop ends
+      hideTimeout = setTimeout(() => {
+        hide()
+      }, 5000)
+    }
   }, totalWait)
 }
 
