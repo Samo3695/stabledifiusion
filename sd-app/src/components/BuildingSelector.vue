@@ -199,7 +199,6 @@ const totalCount = computed(() => props.buildings.length)
         <img :src="building.url" :alt="building.buildingData?.buildingName || 'Building'" />
         <div class="building-info">
           <span class="building-name">{{ building.buildingData?.buildingName || 'Building' }}</span>
-          <span class="building-size">{{ building.buildingData?.buildingSize || '1x1' }}</span>
         </div>
         <div v-if="building.id === selectedBuildingId" class="selected-indicator">✓</div>
         <button class="info-btn" @click="openInfoModal($event, building)" title="Building info">ℹ</button>
@@ -431,22 +430,17 @@ const totalCount = computed(() => props.buildings.length)
   display: flex;
   flex-direction: column;
   align-items: center;
-  opacity: 0;
+  opacity: 1;
   transition: opacity 0.2s;
 }
 
-.building-item:hover .building-info {
-  opacity: 1;
-}
 
 .building-name {
   color: white;
   font-size: 0.7rem;
   font-weight: 600;
   text-align: center;
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   max-width: 100%;
 }
 
