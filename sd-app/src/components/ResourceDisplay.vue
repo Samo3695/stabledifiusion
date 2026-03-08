@@ -492,9 +492,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: white;
-  border-radius: 6px;
-  border: 1px solid #e0e0e0;
   flex-shrink: 0;
 }
 
@@ -502,7 +499,7 @@ onUnmounted(() => {
   width: 28px;
   height: 28px;
   object-fit: contain;
-  border-radius: 3px;
+  border-radius: 100%;
 }
 
 .icon-placeholder {
@@ -615,7 +612,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 2px;
   padding: 0.3rem 0.6rem;
-  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  background: linear-gradient(135deg, #f0f2f5 0%, #f0f2f5 100%);
   border: 1px solid #f59e0b;
   border-radius: 6px;
   cursor: pointer;
@@ -624,7 +621,6 @@ onUnmounted(() => {
   align-self: center;
   transition: all 0.2s;
   min-width: 4.5rem;
-  background: linear-gradient(135deg, #f8fafb1f 0%, #f0f2f5 100%);
 }
 
 .components-btn:hover {

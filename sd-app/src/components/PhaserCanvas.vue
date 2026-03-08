@@ -177,6 +177,9 @@ class IsoScene extends Phaser.Scene {
     // Night overlay
     this.nightOverlay = null
     this.nightTween = null
+    
+    // Building detail highlight
+    this.buildingHighlightGraphics = null
   }
 
   preload() {
@@ -1252,6 +1255,35 @@ class IsoScene extends Phaser.Scene {
       this.workforceHighlights.forEach(obj => obj?.destroy())
       this.workforceHighlights = []
       console.log('👷 Work-force alokácie skryté z canvasu')
+    }
+  }
+
+  // Zvýrazní tile pod budovou (pri otvorenom building detail paneli)
+  highlightBuildingTile(row, col, cellsX = 1, cellsY = 1) {
+    this.clearBuildingHighlight()
+    this.buildingHighlightGraphics = this.add.graphics()
+    this.uiContainer.add(this.buildingHighlightGraphics)
+    
+    const cells = this.getAffectedCells(row, col, cellsX, cellsY)
+    for (const cell of cells) {
+      const { x, y } = this.gridToIso(cell.row, cell.col)
+      this.buildingHighlightGraphics.fillStyle(0x667eea, 0.35)
+      this.buildingHighlightGraphics.beginPath()
+      this.buildingHighlightGraphics.moveTo(x, y)
+      this.buildingHighlightGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.buildingHighlightGraphics.lineTo(x, y + TILE_HEIGHT)
+      this.buildingHighlightGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+      this.buildingHighlightGraphics.closePath()
+      this.buildingHighlightGraphics.fillPath()
+      this.buildingHighlightGraphics.lineStyle(2, 0x667eea, 0.8)
+      this.buildingHighlightGraphics.strokePath()
+    }
+  }
+  
+  clearBuildingHighlight() {
+    if (this.buildingHighlightGraphics) {
+      this.buildingHighlightGraphics.destroy()
+      this.buildingHighlightGraphics = null
     }
   }
 
@@ -3953,6 +3985,14 @@ defineExpose({
   // Skryje ikony work-force alokácií
   hideWorkforceAllocations: () => {
     mainScene?.hideWorkforceAllocations()
+  },
+  // Zvýrazní tile pod budovou
+  highlightBuildingTile: (row, col, cellsX, cellsY) => {
+    mainScene?.highlightBuildingTile(row, col, cellsX, cellsY)
+  },
+  // Zruší zvýraznenie tile pod budovou
+  clearBuildingHighlight: () => {
+    mainScene?.clearBuildingHighlight()
   },
   // Aplikuje efekt na hraciu plochu
   applyEffect: (effectName) => {

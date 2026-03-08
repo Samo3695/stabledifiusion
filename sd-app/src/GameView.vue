@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, nextTick, computed } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from 'vue'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import ProjectManager from './components/ProjectManager.vue'
 import GameClock from './components/GameClock.vue'
@@ -77,6 +77,7 @@ const clickedBuilding = ref(null) // Údaje o kliknutej budove
 const portPayload = ref([]) // Payload pre port budovu: [{resourceId, resourceName, amount}]
 const selectedPayloadResource = ref('') // Vybraná resource pre payload
 const payloadAmount = ref(1) // Množstvo pre payload
+const payloadDropdownOpen = ref(false) // Či je custom dropdown otvorený
 const showInsufficientResourcesModal = ref(false) // Modal pre nedostatok resources
 const insufficientResourcesData = ref({ 
   buildingName: '',
@@ -935,14 +936,6 @@ const handleImagePlaced = (data) => {
       astronautRef.value.showMessage(`Time to build ${name}!`, null, null, astronautRef.value.PRIORITY.BUILDING_PLACED)
     }
   }
-  // Po umiestnení budovy ju odznač - používateľ musí kliknúť znova
-  if (selectedBuildingId.value) {
-    selectedBuildingId.value = null
-    selectedImageId.value = null
-    selectedImageData.value = null
-    selectedBuildingDestinationTiles.value = []
-    selectedBuildingCanBuildOnlyInDestination.value = false
-  }
   handleCanvasUpdated()
 }
 
@@ -1382,6 +1375,12 @@ const handleBuildingClicked = ({ row, col, buildingData }) => {
       imageUrl: buildingData.url
     }
     showBuildingModal.value = true
+    
+    // Zvýrazni tile pod budovou
+    const size = buildingData.buildingData?.buildingSize || '1x1'
+    const [bsX, bsY] = size.split('x').map(Number)
+    canvasRef.value?.highlightBuildingTile(originRow, originCol, bsX || 1, bsY || 1)
+    
     console.log('📋 Zobrazujem metadata budovy:', clickedBuilding.value)
   } else {
     console.warn('⚠️ Budova nemá metadata:', buildingData)
@@ -1815,6 +1814,12 @@ const isWorkResource = (resourceId) => {
   return resource?.workResource === true
 }
 
+// Helper - získaj ikonu resource podľa ID
+const getResourceIcon = (resourceId) => {
+  const resource = resources.value.find(r => r.id === resourceId)
+  return resource?.icon || ''
+}
+
 // Zatvorenie modalu
 const closeBuildingModal = () => {
   showBuildingModal.value = false
@@ -1822,6 +1827,23 @@ const closeBuildingModal = () => {
   portPayload.value = []
   selectedPayloadResource.value = ''
   payloadAmount.value = 1
+  canvasRef.value?.clearBuildingHighlight()
+}
+
+// Kliknutie mimo building detail panel - zavrie ho
+const handleDocumentClick = (e) => {
+  // Zatvor payload dropdown ak kliknem mimo neho
+  if (payloadDropdownOpen.value) {
+    const dropdown = document.querySelector('.payload-custom-select')
+    if (!dropdown || !dropdown.contains(e.target)) {
+      payloadDropdownOpen.value = false
+    }
+  }
+  if (!showBuildingModal.value) return
+  const panel = document.querySelector('.building-detail-panel')
+  if (panel && !panel.contains(e.target)) {
+    closeBuildingModal()
+  }
 }
 
 // Pridanie resource do payloadu portu
@@ -2200,6 +2222,15 @@ const handleReorderBuildings = (newOrder) => {
   })
   console.log('🔀 Poradie budov aktualizované')
 }
+
+// Lifecycle - document click outside listener
+onMounted(() => {
+  document.addEventListener('pointerdown', handleDocumentClick)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('pointerdown', handleDocumentClick)
+})
 </script>
 
 <template>
@@ -2356,399 +2387,358 @@ const handleReorderBuildings = (newOrder) => {
       </div>
     </aside>
     
-    <!-- Modal s metadátami budovy -->
-    <Modal 
-      v-if="showBuildingModal && clickedBuilding"
-      :title="clickedBuilding.buildingName || 'Building'"
-      @close="closeBuildingModal"
-    >
-      <div class="building-modal-content">
-        <!-- Obrázok budovy -->
-        <div class="building-image-preview">
-          <img :src="clickedBuilding.imageUrl" alt="Building" />
+    <!-- Panel s detailom budovy - fixný vľavo, priesvitný, bez overlay -->
+    <Teleport to="body">
+      <div 
+        v-if="showBuildingModal && clickedBuilding"
+        class="building-detail-panel"
+      >
+        <!-- Header -->
+        <div class="bdp-header">
+          <span class="bdp-title">{{ clickedBuilding.buildingName || 'Building' }}</span>
+          <button class="bdp-close" @click="closeBuildingModal">✕</button>
         </div>
         
-        <!-- Základné info -->
-        <div class="building-info-section">
-          <h3>Basic Information</h3>
-          <div class="info-row">
-            <span class="info-label">Name:</span>
-            <span class="info-value">{{ clickedBuilding.buildingName || 'Unnamed' }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Size:</span>
-            <span class="info-value">{{ clickedBuilding.buildingSize || 'default' }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Position:</span>
-            <span class="info-value">[{{ clickedBuilding.row }}, {{ clickedBuilding.col }}]</span>
-          </div>
-          <div v-if="clickedBuilding.isCommandCenter" class="info-row">
-            <span class="info-label">Typ:</span>
-            <span class="info-value command-center-badge">🏛️ Command Center</span>
-          </div>
-          <div v-if="clickedBuilding.isPort" class="info-row">
-            <span class="info-label">Typ:</span>
-            <span class="info-value port-badge">🚢 Port</span>
-          </div>
-        </div>
-        
-        <!-- Build Cost -->
-        <div v-if="clickedBuilding.buildCost && clickedBuilding.buildCost.length > 0" class="building-info-section">
-          <h3>💰 Build Cost</h3>
-          <div class="resource-list">
-            <div v-for="(cost, index) in clickedBuilding.buildCost" :key="index" class="resource-item">
-              <span class="resource-name">{{ cost.resourceName }}</span>
-              <span class="resource-amount">{{ cost.amount }}</span>
+        <!-- Body -->
+        <div class="bdp-body">
+          <!-- Horizontálny riadok: Build Cost | Storage Capacity | Production -->
+          <div class="bdp-columns">
+            <!-- Build Cost -->
+            <div v-if="clickedBuilding.buildCost && clickedBuilding.buildCost.length > 0" class="bdp-col">
+              <h4>💰 Build Cost</h4>
+              <div class="bdp-resource-list">
+                <div v-for="(cost, index) in clickedBuilding.buildCost" :key="'bc'+index" class="bdp-resource-row">
+                  <img v-if="getResourceIcon(cost.resourceId)" :src="getResourceIcon(cost.resourceId)" class="bdp-res-icon" />
+                  <span class="bdp-res-name">{{ cost.resourceName }}</span>
+                  <span class="bdp-res-amount">{{ cost.amount }}</span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        
-        <!-- Operational Cost -->
-        <div v-if="clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0" class="building-info-section">
-          <h3>⚙️ Operating Cost</h3>
-          <div class="resource-list">
-            <div 
-              v-for="(cost, index) in clickedBuilding.operationalCost" 
-              :key="index" 
-              class="resource-item"
-              :class="{ 'insufficient': missingOperationalResources.has(cost.resourceId) }"
-            >
-              <span class="resource-name">{{ cost.resourceName }}</span>
-              <span class="resource-amount">{{ cost.amount }}</span>
+            
+            <!-- Storage Capacity (normálna budova) -->
+            <div v-if="!clickedBuilding.isPort && clickedBuilding.stored && clickedBuilding.stored.length > 0" class="bdp-col">
+              <h4>🏪 Storage Capacity</h4>
+              <div class="bdp-resource-list">
+                <div v-for="(store, index) in clickedBuilding.stored" :key="'st'+index" class="bdp-resource-row stored">
+                  <img v-if="getResourceIcon(store.resourceId)" :src="getResourceIcon(store.resourceId)" class="bdp-res-icon" />
+                  <span class="bdp-res-name">{{ store.resourceName }}</span>
+                  <span class="bdp-res-amount">{{ store.amount }}</span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        
-        <!-- PORT: Payload a Capacity -->
-        <template v-if="clickedBuilding.isPort">
-          <!-- Capacity Progress Bar -->
-          <div class="building-info-section">
-            <h3>📊 Port Capacity</h3>
-            <div class="port-capacity-section">
-              <div class="port-capacity-bar-container">
+            
+            <!-- Production (normálna budova) -->
+            <div v-if="!clickedBuilding.isPort && clickedBuilding.production && clickedBuilding.production.length > 0" class="bdp-col">
+              <h4>📦 Production</h4>
+              <div class="bdp-resource-list">
+                <div v-for="(prod, index) in clickedBuilding.production" :key="'pr'+index" class="bdp-resource-row production">
+                  <img v-if="getResourceIcon(prod.resourceId)" :src="getResourceIcon(prod.resourceId)" class="bdp-res-icon" />
+                  <span class="bdp-res-name">{{ prod.resourceName }}</span>
+                  <span class="bdp-res-amount">+{{ prod.amount }}</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Operational Cost -->
+            <div v-if="clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0" class="bdp-col">
+              <h4>⚙️ Operating Cost</h4>
+              <div class="bdp-resource-list">
                 <div 
-                  class="port-capacity-bar-fill" 
-                  :style="{ width: portFillPercent + '%' }"
-                  :class="{ 'near-full': portFillPercent > 80, 'full': portFillPercent >= 100 }"
-                ></div>
-              </div>
-              <div class="port-capacity-text">
-                {{ currentPortWeight }} / {{ portMaxCapacity }} ({{ Math.round(portFillPercent) }}%)
-              </div>
-            </div>
-          </div>
-          
-          <!-- Payload sekcia -->
-          <div class="building-info-section">
-            <h3>📦 Payload</h3>
-            
-            <!-- Pridanie do payloadu -->
-            <div class="payload-add-section">
-              <select v-model="selectedPayloadResource" class="payload-select">
-                <option value="" disabled>Select resource...</option>
-                <option 
-                  v-for="ar in (clickedBuilding.allowedResources || [])" 
-                  :key="ar.resourceId" 
-                  :value="ar.resourceId"
+                  v-for="(cost, index) in clickedBuilding.operationalCost" 
+                  :key="'oc'+index" 
+                  class="bdp-resource-row"
+                  :class="{ 'insufficient': missingOperationalResources.has(cost.resourceId) }"
                 >
-                  {{ ar.resourceName }}
-                </option>
-              </select>
-              <input 
-                type="number" 
-                v-model.number="payloadAmount" 
-                min="1" 
-                class="payload-amount-input"
-                placeholder="Amount"
-              />
-              <button 
-                class="payload-add-button" 
-                @click="addPortPayload"
-                :disabled="!selectedPayloadResource || payloadAmount <= 0 || portFillPercent >= 100"
-              >
-                ➕ Add
-              </button>
-            </div>
-            
-            <!-- Zoznam payloadu -->
-            <div v-if="portPayload.length > 0" class="payload-list">
-              <div v-for="(item, index) in portPayload" :key="index" class="payload-item">
-                <span class="payload-resource-name">{{ item.resourceName }}</span>
-                <span class="payload-resource-amount">× {{ item.amount }}</span>
-                <span class="payload-resource-weight">
-                  (⚖️ {{ (resources.find(r => r.id === item.resourceId)?.weight || 0) * item.amount }})
-                </span>
-                <button class="payload-remove-button" @click="removePortPayload(index)">✕</button>
+                  <img v-if="getResourceIcon(cost.resourceId)" :src="getResourceIcon(cost.resourceId)" class="bdp-res-icon" />
+                  <span class="bdp-res-name">{{ cost.resourceName }}</span>
+                  <span class="bdp-res-amount">{{ cost.amount }}</span>
+                </div>
               </div>
             </div>
-            <p v-else class="payload-empty">No cost</p>
           </div>
           
-          <!-- Port Production Controls - len jednorázový cyklus, bez auto -->
-          <div v-if="currentBuildingAnimState === 'recycling-waiting' || currentBuildingAnimState === 'recycling'" class="building-info-section">
-            <template v-if="currentBuildingAnimState === 'recycling-waiting'">
-              <h3>♻️🚚 Waiting for workforce...</h3>
-              <div class="build-in-progress recycle-in-progress">
-                <div class="build-progress-animation waiting recycle">
-                  <div class="build-progress-bar waiting-bar recycle-bar"></div>
+          <!-- PORT sekcie -->
+          <template v-if="clickedBuilding.isPort">
+            <!-- Capacity Progress Bar -->
+            <div class="bdp-section">
+              <h4>📊 Payload Capacity</h4>
+              <div class="port-capacity-section">
+                <div class="port-capacity-bar-container">
+                  <div 
+                    class="port-capacity-bar-fill" 
+                    :style="{ width: portFillPercent + '%' }"
+                    :class="{ 'near-full': portFillPercent > 80, 'full': portFillPercent >= 100 }"
+                  ></div>
                 </div>
-                <p class="build-progress-text">Waiting for vehicle arrival. Recycling will begin upon arrival.</p>
-                <div class="worker-count-section">
-                  <label>🚗 Vehicles:</label>
-                  <div class="worker-count-controls">
-                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
-                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
-                  </div>
-                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                <div class="port-capacity-text">
+                  {{ currentPortWeight }} / {{ portMaxCapacity }} ({{ Math.round(portFillPercent) }}%)
                 </div>
               </div>
-            </template>
-            <template v-else>
-              <h3>♻️ Recycling in progress...</h3>
-              <div class="build-in-progress recycle-in-progress">
-                <div class="build-progress-animation recycle">
-                  <div class="build-progress-bar recycle-bar"></div>
-                </div>
-                <p class="build-progress-text">Building is being dismantled. Resources will be returned upon completion.</p>
-                <div class="worker-count-section">
-                  <label>🚗 Vehicles:</label>
-                  <div class="worker-count-controls">
-                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
-                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+            </div>
+            
+            <!-- Payload + Port Controls vedľa seba -->
+            <div class="port-payload-row">
+              <!-- Payload -->
+              <div class="bdp-section port-payload-left">
+                <h4>📦 Reqested Payload</h4>
+                <div class="payload-add-section">
+                  <div class="payload-custom-select" @click.stop="payloadDropdownOpen = !payloadDropdownOpen">
+                    <div class="payload-custom-selected">
+                      <template v-if="selectedPayloadResource">
+                        <img v-if="getResourceIcon(selectedPayloadResource)" :src="getResourceIcon(selectedPayloadResource)" class="payload-option-icon" />
+                        <span>{{ (clickedBuilding.allowedResources || []).find(a => a.resourceId === selectedPayloadResource)?.resourceName }}</span>
+                      </template>
+                      <span v-else class="payload-placeholder">Select resource...</span>
+                      <span class="payload-select-arrow">▾</span>
+                    </div>
+                    <div v-if="payloadDropdownOpen" class="payload-dropdown">
+                      <div 
+                        v-for="ar in (clickedBuilding.allowedResources || [])" 
+                        :key="ar.resourceId" 
+                        class="payload-dropdown-item"
+                        :class="{ selected: selectedPayloadResource === ar.resourceId }"
+                        @click.stop="selectedPayloadResource = ar.resourceId; payloadDropdownOpen = false"
+                      >
+                        <img v-if="getResourceIcon(ar.resourceId)" :src="getResourceIcon(ar.resourceId)" class="payload-option-icon" />
+                        <span>{{ ar.resourceName }}</span>
+                      </div>
+                    </div>
                   </div>
-                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                  <input 
+                    type="number" 
+                    v-model.number="payloadAmount" 
+                    min="1" 
+                    class="payload-amount-input"
+                    placeholder="Amt"
+                  />
+                  <button 
+                    class="payload-add-button" 
+                    @click="addPortPayload"
+                    :disabled="!selectedPayloadResource || payloadAmount <= 0 || portFillPercent >= 100"
+                  >
+                    + Add
+                  </button>
+                </div>
+                <div v-if="portPayload.length > 0" class="payload-list">
+                  <div v-for="(item, index) in portPayload" :key="index" class="payload-item">
+                    <img v-if="getResourceIcon(item.resourceId)" :src="getResourceIcon(item.resourceId)" class="payload-option-icon" />
+                    <span class="payload-resource-name">{{ item.resourceName }}</span>
+                    <span class="payload-resource-amount">× {{ item.amount }}</span>
+                    <span class="payload-resource-weight">
+                      (⚖️ {{ (resources.find(r => r.id === item.resourceId)?.weight || 0) * item.amount }})
+                    </span>
+                    <button class="payload-remove-button" @click="removePortPayload(index)">✕</button>
+                  </div>
+                </div>
+                <p v-else class="payload-empty">No cost</p>
+              </div>
+
+              <!-- Port Controls (vpravo) -->
+              <div v-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="bdp-section port-payload-right">
+                <h4>⚙️ Port Controls</h4>
+                <div class="production-controls">
+                  <button 
+                    class="production-button"
+                    :class="{ disabled: !canStartProduction() || portPayload.length === 0 }"
+                    :disabled="!canStartProduction() || portPayload.length === 0"
+                    @click="startPortProduction"
+                  >
+                    <span v-if="!canStartProduction()">⛔ Insufficient resources</span>
+                    <span v-else-if="portPayload.length === 0">📦 Empty payload</span>
+                    <span v-else>▶️ Start</span>
+                  </button>
+                </div>
+                <p v-if="!canStartProduction()" class="production-warning">
+                  ⚠️ You don't have enough resources for operation!
+                </p>
+              </div>
+            </div>
+
+            <!-- Port: Recyklácia / Stavba stavy -->
+            <div v-if="currentBuildingAnimState === 'recycling-waiting' || currentBuildingAnimState === 'recycling'" class="bdp-section">
+              <template v-if="currentBuildingAnimState === 'recycling-waiting'">
+                <h4>♻️🚚 Waiting for workforce...</h4>
+                <div class="build-in-progress recycle-in-progress">
+                  <div class="build-progress-animation waiting recycle"><div class="build-progress-bar waiting-bar recycle-bar"></div></div>
+                  <p class="build-progress-text">Waiting for vehicle arrival.</p>
+                  <div class="worker-count-section">
+                    <label>🚗 Vehicles:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <h4>♻️ Recycling in progress...</h4>
+                <div class="build-in-progress recycle-in-progress">
+                  <div class="build-progress-animation recycle"><div class="build-progress-bar recycle-bar"></div></div>
+                  <p class="build-progress-text">Building is being dismantled.</p>
+                  <div class="worker-count-section">
+                    <label>🚗 Vehicles:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div v-else-if="currentBuildingAnimState === 'waiting' || currentBuildingAnimState === 'building'" class="bdp-section">
+              <template v-if="currentBuildingAnimState === 'waiting'">
+                <h4>🚚 Waiting for workforce...</h4>
+                <div class="build-in-progress">
+                  <div class="build-progress-animation waiting"><div class="build-progress-bar waiting-bar"></div></div>
+                  <p class="build-progress-text">Waiting for workforce arrival.</p>
+                  <div class="worker-count-section">
+                    <label>👷 Workers:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <h4>🏗️ Construction in progress...</h4>
+                <div class="build-in-progress">
+                  <div class="build-progress-animation"><div class="build-progress-bar"></div></div>
+                  <p class="build-progress-text">Building is under construction.</p>
+                  <div class="worker-count-section">
+                    <label>👷 Workers:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+          
+          <!-- NORMÁLNA BUDOVA: Production Controls -->
+          <template v-else>
+            <!-- Recyklácia -->
+            <div v-if="currentBuildingAnimState === 'recycling-waiting' || currentBuildingAnimState === 'recycling'" class="bdp-section">
+              <template v-if="currentBuildingAnimState === 'recycling-waiting'">
+                <h4>♻️🚚 Waiting for workforce...</h4>
+                <div class="build-in-progress recycle-in-progress">
+                  <div class="build-progress-animation waiting recycle"><div class="build-progress-bar waiting-bar recycle-bar"></div></div>
+                  <p class="build-progress-text">Waiting for vehicle arrival.</p>
+                  <div class="worker-count-section">
+                    <label>🚗 Vehicles:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <h4>♻️ Recycling in progress...</h4>
+                <div class="build-in-progress recycle-in-progress">
+                  <div class="build-progress-animation recycle"><div class="build-progress-bar recycle-bar"></div></div>
+                  <p class="build-progress-text">Building is being dismantled.</p>
+                  <div class="worker-count-section">
+                    <label>🚗 Vehicles:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
+                  </div>
+                </div>
+              </template>
+              <div v-if="clickedBuilding.buildCost && clickedBuilding.buildCost.length > 0" class="recycle-refund-info">
+                <h4>📦 Returned resources after recycling:</h4>
+                <div class="resource-list">
+                  <div v-for="(cost, index) in clickedBuilding.buildCost" :key="index" class="resource-item"
+                    :class="{ 'work-resource-strike': isWorkResource(cost.resourceId) }">
+                    <span class="resource-name">{{ cost.resourceName }}</span>
+                    <span class="resource-amount" v-if="!isWorkResource(cost.resourceId)">+{{ cost.amount }}</span>
+                    <span class="resource-amount strikethrough" v-else>{{ cost.amount }} (work)</span>
+                  </div>
                 </div>
               </div>
-            </template>
-          </div>
-          <div v-else-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
-            <template v-if="currentBuildingAnimState === 'waiting'">
-              <h3>🚚 Waiting for workforce...</h3>
-              <div class="build-in-progress">
-                <div class="build-progress-animation waiting">
-                  <div class="build-progress-bar waiting-bar"></div>
-                </div>
-                <p class="build-progress-text">Waiting for workforce arrival.</p>
-                <div class="worker-count-section">
-                  <label>👷 Workers:</label>
-                  <div class="worker-count-controls">
-                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
-                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+            </div>
+            
+            <!-- Stavba (pre všetky budovy vrátane tých bez production/operationalCost) -->
+            <div v-else-if="currentBuildingAnimState === 'waiting' || currentBuildingAnimState === 'building'" class="bdp-section">
+              <template v-if="currentBuildingAnimState === 'waiting'">
+                <h4>🚚 Waiting for workforce...</h4>
+                <div class="build-in-progress">
+                  <div class="build-progress-animation waiting"><div class="build-progress-bar waiting-bar"></div></div>
+                  <p class="build-progress-text">Waiting for workforce arrival.</p>
+                  <div class="worker-count-section">
+                    <label>👷 Workers:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
                   </div>
-                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
                 </div>
-              </div>
-            </template>
-            <template v-else-if="currentBuildingAnimState === 'building'">
-              <h3>🏗️ Construction in progress...</h3>
-              <div class="build-in-progress">
-                <div class="build-progress-animation">
-                  <div class="build-progress-bar"></div>
-                </div>
-                <p class="build-progress-text">Building is under construction.</p>
-                <div class="worker-count-section">
-                  <label>👷 Workers:</label>
-                  <div class="worker-count-controls">
-                    <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
-                    <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                    <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+              </template>
+              <template v-else>
+                <h4>🏗️ Construction in progress...</h4>
+                <div class="build-in-progress">
+                  <div class="build-progress-animation"><div class="build-progress-bar"></div></div>
+                  <p class="build-progress-text">Building is under construction.</p>
+                  <div class="worker-count-section">
+                    <label>👷 Workers:</label>
+                    <div class="worker-count-controls">
+                      <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
+                      <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
+                      <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
+                    </div>
+                    <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
                   </div>
-                  <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
                 </div>
-              </div>
-            </template>
-            <template v-else>
-              <h3>⚙️ Port Controls</h3>
+              </template>
+            </div>
+            
+            <!-- Produkcia (len pre budovy s production alebo operationalCost) -->
+            <div v-else-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="bdp-section">
+              <h4 v-if="clickedBuilding.production && clickedBuilding.production.length > 0">⚙️ Production Controls</h4>
+              <h4 v-else>⚙️ Operation Controls</h4>
               <div class="production-controls">
-                <button 
-                  class="production-button"
-                  :class="{ disabled: !canStartProduction() || portPayload.length === 0 }"
-                  :disabled="!canStartProduction() || portPayload.length === 0"
-                  @click="startPortProduction"
-                >
-                  <span v-if="!canStartProduction()">⛔ Insufficient resources</span>
-                  <span v-else-if="portPayload.length === 0">📦 Empty payload</span>
-                  <span v-else>▶️ Start</span>
-                </button>
+                
+                <label class="auto-production-toggle" :class="{ 'with-progress': currentBuildingAutoEnabled }">
+                  <input 
+                    type="checkbox" 
+                    :checked="currentBuildingAutoEnabled"
+                    @change="toggleAutoProduction"
+                    :disabled="!canStartProduction()"
+                  />
+                  <span class="toggle-content">
+                    <span class="toggle-text"> {{ currentBuildingAutoEnabled ? 'Stop' : 'Start' }}</span>
+                    <div v-if="currentBuildingAutoEnabled" class="progress-bar-container">
+                      <div class="progress-bar-fill" :style="{ width: currentBuildingProgress + '%' }"></div>
+                    </div>
+                  </span>
+                </label>
               </div>
               <p v-if="!canStartProduction()" class="production-warning">
                 ⚠️ You don't have enough resources for operation!
               </p>
-              <p v-else-if="portPayload.length === 0" class="production-warning">
-                📦 Add resources to payload before starting.
-              </p>
-            </template>
-          </div>
-        </template>
-        
-        <!-- NORMÁLNA BUDOVA: Stored, Production, Production Controls -->
-        <template v-else>
-        <!-- Stored (Sklad) -->
-        <div v-if="clickedBuilding.stored && clickedBuilding.stored.length > 0" class="building-info-section">
-          <h3>🏪 Storage Capacity</h3>
-          <div class="resource-list">
-            <div v-for="(store, index) in clickedBuilding.stored" :key="index" class="resource-item stored">
-              <span class="resource-name">{{ store.resourceName }}</span>
-              <span class="resource-amount">{{ store.amount }}</span>
             </div>
-          </div>
-        </div>
-        
-        <!-- Production -->
-        <div v-if="clickedBuilding.production && clickedBuilding.production.length > 0" class="building-info-section">
-          <h3>📦 Production</h3>
-          <div class="resource-list">
-            <div v-for="(prod, index) in clickedBuilding.production" :key="index" class="resource-item production">
-              <span class="resource-name">{{ prod.resourceName }}</span>
-              <span class="resource-amount">+{{ prod.amount }}</span>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Production Controls - zobrazí sa aj pre budovy bez produkcie, ak majú operationalCost -->
-        <div v-if="currentBuildingAnimState === 'recycling-waiting' || currentBuildingAnimState === 'recycling'" class="building-info-section">
-          <!-- Recyklácia - čaká na auto -->
-          <template v-if="currentBuildingAnimState === 'recycling-waiting'">
-            <h3>♻️🚚 Waiting for workforce...</h3>
-            <div class="build-in-progress recycle-in-progress">
-              <div class="build-progress-animation waiting recycle">
-                <div class="build-progress-bar waiting-bar recycle-bar"></div>
-              </div>
-              <p class="build-progress-text">Waiting for vehicle arrival. Recycling will begin upon arrival.</p>
-              <div class="worker-count-section">
-                <label>🚗 Vehicles:</label>
-                <div class="worker-count-controls">
-                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
-                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
-                </div>
-                <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
-              </div>
-            </div>
-          </template>
-          
-          <!-- Recyklácia prebieha -->
-          <template v-else>
-            <h3>♻️ Recycling in progress...</h3>
-            <div class="build-in-progress recycle-in-progress">
-              <div class="build-progress-animation recycle">
-                <div class="build-progress-bar recycle-bar"></div>
-              </div>
-              <p class="build-progress-text">Building is being dismantled. Resources (except workforce) will be returned upon completion.</p>
-              <div class="worker-count-section">
-                <label>🚗 Vehicles:</label>
-                <div class="worker-count-controls">
-                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeRecycleWorkers(currentBuildingWorkers - 1)">−</button>
-                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeRecycleWorkers(currentBuildingWorkers + 1)">+</button>
-                </div>
-                <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
-              </div>
-            </div>
-          </template>
-          
-          <!-- Suroviny ktoré sa vrátia -->
-          <div v-if="clickedBuilding.buildCost && clickedBuilding.buildCost.length > 0" class="recycle-refund-info">
-            <h4>📦 Returned resources after recycling:</h4>
-            <div class="resource-list">
-              <div v-for="(cost, index) in clickedBuilding.buildCost" :key="index" class="resource-item"
-                :class="{ 'work-resource-strike': isWorkResource(cost.resourceId) }">
-                <span class="resource-name">{{ cost.resourceName }}</span>
-                <span class="resource-amount" v-if="!isWorkResource(cost.resourceId)">+{{ cost.amount }}</span>
-                <span class="resource-amount strikethrough" v-else>{{ cost.amount }} (work)</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <div v-else-if="(clickedBuilding.production && clickedBuilding.production.length > 0) || (clickedBuilding.operationalCost && clickedBuilding.operationalCost.length > 0)" class="building-info-section">
-          
-          <!-- Čaká na pracovnú silu -->
-          <template v-if="currentBuildingAnimState === 'waiting'">
-            <h3>🚚 Waiting for workforce...</h3>
-            <div class="build-in-progress">
-              <div class="build-progress-animation waiting">
-                <div class="build-progress-bar waiting-bar"></div>
-              </div>
-              <p class="build-progress-text">Waiting for workforce arrival. Construction will begin upon vehicle arrival.</p>
-              <div class="worker-count-section">
-                <label>👷 Workers:</label>
-                <div class="worker-count-controls">
-                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
-                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
-                </div>
-                <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
-              </div>
-            </div>
-          </template>
-          
-          <!-- Stavba prebieha -->
-          <template v-else-if="currentBuildingAnimState === 'building'">
-            <h3>🏗️ Construction in progress...</h3>
-            <div class="build-in-progress">
-              <div class="build-progress-animation">
-                <div class="build-progress-bar"></div>
-              </div>
-              <p class="build-progress-text">Building is under construction. Production will start automatically after completion.</p>
-              <div class="worker-count-section">
-                <label>👷 Workers:</label>
-                <div class="worker-count-controls">
-                  <button class="worker-btn" :disabled="currentBuildingWorkers <= 1" @click="changeConstructionWorkers(currentBuildingWorkers - 1)">−</button>
-                  <span class="worker-count-value">{{ currentBuildingWorkers }}</span>
-                  <button class="worker-btn" :disabled="currentBuildingWorkers >= maxBuildingWorkers" @click="changeConstructionWorkers(currentBuildingWorkers + 1)">+</button>
-                </div>
-                <span class="worker-speed-info">{{ currentBuildingWorkers }}× speed</span>
-              </div>
-            </div>
-          </template>
-          
-          <!-- Normálne ovládanie produkcie -->
-          <template v-else>
-            <h3 v-if="clickedBuilding.production && clickedBuilding.production.length > 0">⚙️ Production Controls</h3>
-            <h3 v-else>⚙️ Operation Controls</h3>
-            
-            <!-- Tlačidlo na spustenie produkcie -->
-            <div class="production-controls">
-              <button 
-                v-if="clickedBuilding.production && clickedBuilding.production.length > 0"
-                class="production-button"
-                :class="{ disabled: !canStartProduction() || currentBuildingAutoEnabled }"
-                :disabled="!canStartProduction() || currentBuildingAutoEnabled"
-                @click="startProduction"
-              >
-                <span v-if="canStartProduction()">▶️ Start Production</span>
-                <span v-else>⛔ Insufficient resources</span>
-              </button>
-              
-              <label class="auto-production-toggle" :class="{ 'with-progress': currentBuildingAutoEnabled }">
-                <input 
-                  type="checkbox" 
-                  :checked="currentBuildingAutoEnabled"
-                  @change="toggleAutoProduction"
-                  :disabled="!canStartProduction()"
-                />
-                <span class="toggle-content">
-                  <span class="toggle-text">🔄 Auto (5s)</span>
-                  <div v-if="currentBuildingAutoEnabled" class="progress-bar-container">
-                    <div class="progress-bar-fill" :style="{ width: currentBuildingProgress + '%' }"></div>
-                  </div>
-                </span>
-              </label>
-            </div>
-            
-            <p v-if="!canStartProduction()" class="production-warning">
-              ⚠️ You don't have enough resources for operation!
-            </p>
           </template>
         </div>
-        </template>
       </div>
-    </Modal>
+    </Teleport>
     
     <!-- Insufficient Resources Modal -->
     <Modal 
@@ -3182,7 +3172,219 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-/* Building modal styles */
+/* ===== Building Detail Panel (fixed left, transparent, no overlay) ===== */
+.building-detail-panel {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 9000;
+  width: 638px;
+  max-height: 84vh;
+  background: rgba(255, 255, 255, 0.3);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: bdp-slide-in 0.25s ease-out;
+  pointer-events: auto;
+}
+
+@keyframes bdp-slide-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.bdp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 1rem;
+  flex-shrink: 0;
+}
+
+.bdp-title {
+  color: #2b2b2b;
+  font-size: 1.05rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bdp-close {
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  color: rgb(51, 51, 51);
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.bdp-close:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.bdp-body {
+  padding: 0.75rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+/* Horizontal columns for Build Cost / Storage / Production */
+.bdp-columns {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.bdp-col {
+  flex: 1;
+  min-width: 0;
+  background: rgba(248, 249, 250, 0.7);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #e0e0e0;
+}
+
+.bdp-col h4 {
+  margin: 0 0 0.45rem 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #667eea;
+  white-space: nowrap;
+}
+
+.bdp-resource-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.bdp-resource-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+  font-size: 0.82rem;
+}
+
+.bdp-resource-row.insufficient {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.bdp-resource-row.insufficient .bdp-res-name {
+  color: #dc2626;
+}
+
+.bdp-resource-row.insufficient .bdp-res-amount {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.bdp-res-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  border-radius: 4px;
+  flex-shrink: 0;
+  border-radius: 100%
+}
+
+.bdp-res-name {
+  font-weight: 500;
+  color: #333;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bdp-res-amount {
+  font-weight: 600;
+  color: #667eea;
+  padding: 0.15rem 0.5rem;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 10px;
+  font-size: 0.82rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.bdp-resource-row.production .bdp-res-amount {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.bdp-resource-row.stored .bdp-res-amount {
+  color: #2196f3;
+  background: rgba(33, 150, 243, 0.1);
+}
+
+/* Generic section inside panel */
+.bdp-section {
+  background: rgba(248, 249, 250, 0.7);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #e0e0e0;
+}
+
+.bdp-section h4 {
+  margin: 0 0 0.45rem 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #667eea;
+}
+
+/* Compact overrides for controls inside the panel */
+.building-detail-panel .production-controls {
+  margin-top: 0.4rem;
+  gap: 0.4rem;
+}
+
+.building-detail-panel .production-button {
+  padding: 0.55rem 1rem;
+  font-size: 0.9rem;
+  margin-top: 0.4rem;
+}
+
+.building-detail-panel .auto-production-toggle {
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.building-detail-panel .build-in-progress {
+  padding: 0.5rem;
+}
+
+.building-detail-panel .worker-count-section {
+  margin-top: 0.4rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.building-detail-panel .production-warning {
+  font-size: 0.8rem;
+  padding: 0.5rem;
+  margin-top: 0.4rem;
+}
+/* ===== End Building Detail Panel ===== */
+
+/* Building modal styles (legacy, kept for other modals) */
 .building-modal-content {
   display: flex;
   flex-direction: column;
@@ -3305,6 +3507,22 @@ body {
   font-weight: 600;
 }
 
+/* Port Payload Row - side by side layout */
+.port-payload-row {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0 0.75rem;
+}
+
+.port-payload-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.port-payload-right {
+  flex: 0 0 200px;
+}
+
 /* Payload Section */
 .payload-add-section {
   display: flex;
@@ -3313,26 +3531,98 @@ body {
   align-items: center;
 }
 
-.payload-select {
+/* Custom select dropdown */
+.payload-custom-select {
   flex: 1;
-  padding: 0.5rem;
+  position: relative;
+  min-width: 0;
+}
+
+.payload-custom-selected {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
   border: 1px solid #d1d5db;
   border-radius: 6px;
   font-size: 0.85rem;
   background: white;
+  cursor: pointer;
+  min-height: 34px;
+  user-select: none;
+}
+
+.payload-custom-selected span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payload-select-arrow {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.payload-placeholder {
+  color: #9ca3af;
+}
+
+.payload-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  margin-bottom: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.15);
+}
+
+.payload-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s;
+}
+
+.payload-dropdown-item:hover {
+  background: #eff6ff;
+}
+
+.payload-dropdown-item.selected {
+  background: #dbeafe;
+  font-weight: 600;
+}
+
+.payload-option-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  object-fit: contain;
 }
 
 .payload-amount-input {
-  width: 70px;
-  padding: 0.5rem;
+  width: 55px;
+  padding: 0.4rem;
   border: 1px solid #d1d5db;
   border-radius: 6px;
   font-size: 0.85rem;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .payload-add-button {
-  padding: 0.5rem 0.75rem;
+  padding: 0.4rem 0.6rem;
   background: #2563eb;
   color: white;
   border: none;
@@ -3342,6 +3632,7 @@ body {
   font-weight: 600;
   white-space: nowrap;
   transition: background 0.2s;
+  flex-shrink: 0;
 }
 
 .payload-add-button:hover:not(:disabled) {
