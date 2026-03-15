@@ -1009,6 +1009,14 @@ const handleLoadProject = async (projectData) => {
       canvasRef.value.updateStructureSprite('tempBuilding', loadedData.tempBuildingSpriteUrl)
     }
     
+    // Apply car sprites from JSON (base64)
+    if (loadedData.carSprite1Url && canvasRef.value?.updateCarSprite) {
+      canvasRef.value.updateCarSprite('car1', loadedData.carSprite1Url)
+    }
+    if (loadedData.carSprite2Url && canvasRef.value?.updateCarSprite) {
+      canvasRef.value.updateCarSprite('car2', loadedData.carSprite2Url)
+    }
+    
     // Načítaj images
     const loadedImages = loadedData.images || []
     

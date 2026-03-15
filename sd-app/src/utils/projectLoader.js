@@ -292,6 +292,8 @@ export async function loadProject(projectData, canvasRef, onProgress = null) {
       roadOpacity,
       constructSpriteUrl: projectData.constructSpriteUrl || null,
       tempBuildingSpriteUrl: projectData.tempBuildingSpriteUrl || null,
+      carSprite1Url: projectData.carSprite1Url || null,
+      carSprite2Url: projectData.carSprite2Url || null,
       gameTime: projectData.gameTime || 0,
       buildingProductionStates: projectData.buildingProductionStates || {},
       events: projectData.events || []

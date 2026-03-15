@@ -71,6 +71,14 @@ const props = defineProps({
     type: String,
     default: import.meta.env.BASE_URL + 'templates/cubes1/0.png'
   },
+  carSprite1Url: {
+    type: String,
+    default: import.meta.env.BASE_URL + 'templates/roads/sprites/car-dawn-top-right.png'
+  },
+  carSprite2Url: {
+    type: String,
+    default: import.meta.env.BASE_URL + 'templates/roads/sprites/car-down-top-left.png'
+  },
   allocatedResources: {
     type: Object,
     default: () => ({})
@@ -325,6 +333,8 @@ const saveProject = () => {
       roadOpacity: props.roadOpacity || 100,
       constructSpriteUrl: props.constructSpriteUrl || (BASE_URL + 'templates/cubes1/contruct.png'),
       tempBuildingSpriteUrl: props.tempBuildingSpriteUrl || (BASE_URL + 'templates/cubes1/0.png'),
+      carSprite1Url: props.carSprite1Url || (BASE_URL + 'templates/roads/sprites/car-dawn-top-right.png'),
+      carSprite2Url: props.carSprite2Url || (BASE_URL + 'templates/roads/sprites/car-down-top-left.png'),
       buildingProductionStates: Object.entries(props.buildingProductionStates || {}).reduce((acc, [key, state]) => {
         // Uloží len enabled flag a buildingData, nie interval (funkciu)
         acc[key] = {
@@ -501,6 +511,8 @@ const saveGameplayProject = async () => {
       roadOpacity: props.roadOpacity || 100,
       constructSpriteUrl: props.constructSpriteUrl || (BASE_URL + 'templates/cubes1/contruct.png'),
       tempBuildingSpriteUrl: props.tempBuildingSpriteUrl || (BASE_URL + 'templates/cubes1/0.png'),
+      carSprite1Url: props.carSprite1Url || (BASE_URL + 'templates/roads/sprites/car-dawn-top-right.png'),
+      carSprite2Url: props.carSprite2Url || (BASE_URL + 'templates/roads/sprites/car-down-top-left.png'),
       buildingProductionStates: Object.entries(props.buildingProductionStates || {}).reduce((acc, [key, state]) => {
         // Uloží len enabled flag a buildingData, nie interval (funkciu)
         acc[key] = {
@@ -637,6 +649,8 @@ const handleFileUpload = async (event) => {
       roadOpacity: projectData.roadOpacity || 100,
       constructSpriteUrl: projectData.constructSpriteUrl || (BASE_URL + 'templates/cubes1/contruct.png'),
       tempBuildingSpriteUrl: projectData.tempBuildingSpriteUrl || (BASE_URL + 'templates/cubes1/0.png'),
+      carSprite1Url: projectData.carSprite1Url || (BASE_URL + 'templates/roads/sprites/car-dawn-top-right.png'),
+      carSprite2Url: projectData.carSprite2Url || (BASE_URL + 'templates/roads/sprites/car-down-top-left.png'),
       buildingProductionStates: projectData.buildingProductionStates || {}
     })
 

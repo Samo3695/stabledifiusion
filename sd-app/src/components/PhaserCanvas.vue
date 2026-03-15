@@ -3898,6 +3898,18 @@ defineExpose({
       console.log('🏠 Temp building sprite URL updated')
     }
   },
+  // Update car sprite (car1 or car2)
+  updateCarSprite: (type, url) => {
+    if (!mainScene) return
+    if (mainScene.textures.exists(type)) {
+      mainScene.textures.remove(type)
+    }
+    mainScene.load.image(type, url)
+    mainScene.load.once('complete', () => {
+      console.log(`🚗 Car sprite '${type}' texture updated`)
+    })
+    mainScene.load.start()
+  },
   // Zapne batch loading mode - preskakuje tiene a osoby
   startBatchLoading: () => {
     isBatchLoading = true

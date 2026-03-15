@@ -46,6 +46,8 @@ const roadSpriteUrl = ref(BASE_URL + 'templates/roads/sprites/pastroad.png') // 
 const roadOpacity = ref(100) // Aktuálna opacity pre road tiles
 const constructSpriteUrl = ref(BASE_URL + 'templates/cubes1/contruct.png') // Construction sprite URL
 const tempBuildingSpriteUrl = ref(BASE_URL + 'templates/cubes1/0.png') // Temp building sprite URL
+const carSprite1Url = ref(BASE_URL + 'templates/roads/sprites/car-dawn-top-right.png') // Car sprite 1 URL
+const carSprite2Url = ref(BASE_URL + 'templates/roads/sprites/car-down-top-left.png') // Car sprite 2 URL
 const viewMode = ref('editor') // 'editor' alebo 'gameplay'
 const canvasImagesMap = ref({}) // Mapa budov na canvase (pre vypočítanie použitých resources)
 const showInsufficientResourcesModal = ref(false)
@@ -308,6 +310,21 @@ const handleStructureSpriteChanged = ({ type, url }) => {
     }
   }
   console.log(`🏗️ App.vue: Structure sprite '${type}' updated`)
+}
+
+const handleCarSpriteChanged = ({ type, url }) => {
+  if (type === 'car1') {
+    carSprite1Url.value = url
+    if (canvasRef.value && canvasRef.value.updateCarSprite) {
+      canvasRef.value.updateCarSprite('car1', url)
+    }
+  } else if (type === 'car2') {
+    carSprite2Url.value = url
+    if (canvasRef.value && canvasRef.value.updateCarSprite) {
+      canvasRef.value.updateCarSprite('car2', url)
+    }
+  }
+  console.log(`🚗 App.vue: Car sprite '${type}' updated`)
 }
 
 const handleRoadPlaced = ({ path }) => {
@@ -576,6 +593,8 @@ const handleLoadProject = (projectData) => {
   const loadedRoadOpacity = projectData.roadOpacity || 100
   const loadedConstructSpriteUrl = projectData.constructSpriteUrl || (BASE_URL + 'templates/cubes1/contruct.png')
   const loadedTempBuildingSpriteUrl = projectData.tempBuildingSpriteUrl || (BASE_URL + 'templates/cubes1/0.png')
+  const loadedCarSprite1Url = projectData.carSprite1Url || (BASE_URL + 'templates/roads/sprites/car-dawn-top-right.png')
+  const loadedCarSprite2Url = projectData.carSprite2Url || (BASE_URL + 'templates/roads/sprites/car-down-top-left.png')
   
   // Obnov farby prostredia
   environmentColors.value = loadedColors
@@ -630,6 +649,15 @@ const handleLoadProject = (projectData) => {
     canvasRef.value.updateStructureSprite('tempBuilding', loadedTempBuildingSpriteUrl)
   }
   console.log('🏗️ App.vue: Structure sprites načítané')
+  
+  // Obnov car sprites
+  carSprite1Url.value = loadedCarSprite1Url
+  carSprite2Url.value = loadedCarSprite2Url
+  if (canvasRef.value && canvasRef.value.updateCarSprite) {
+    canvasRef.value.updateCarSprite('car1', loadedCarSprite1Url)
+    canvasRef.value.updateCarSprite('car2', loadedCarSprite2Url)
+  }
+  console.log('🚗 App.vue: Car sprites načítané')
   
   // Aplikuj background tiles na šachovnicu
   if (loadedTiles.length > 0 && canvasRef.value && canvasRef.value.setBackgroundTiles) {
@@ -1167,6 +1195,8 @@ const handleCanvasUpdated = () => {
         :roadOpacity="roadOpacity"
         :constructSpriteUrl="constructSpriteUrl"
         :tempBuildingSpriteUrl="tempBuildingSpriteUrl"
+        :carSprite1Url="carSprite1Url"
+        :carSprite2Url="carSprite2Url"
         :events="gameEvents"
         @load-project="handleLoadProject"
         @update:showNumbering="showNumbering = $event"
@@ -1254,6 +1284,8 @@ const handleCanvasUpdated = () => {
         :roadSpriteUrl="roadSpriteUrl"
         :constructSpriteUrl="constructSpriteUrl"
         :tempBuildingSpriteUrl="tempBuildingSpriteUrl"
+        :carSprite1Url="carSprite1Url"
+        :carSprite2Url="carSprite2Url"
         @delete="handleDelete" 
         @select="handleSelectImage"
         @place-on-board="handlePlaceOnBoard"
@@ -1271,6 +1303,7 @@ const handleCanvasUpdated = () => {
         @replace-image-url="handleReplaceImageUrl"
         @reorder-images="handleReorderImages"
         @structure-sprite-changed="handleStructureSpriteChanged"
+        @car-sprite-changed="handleCarSpriteChanged"
       />
     </div>
     

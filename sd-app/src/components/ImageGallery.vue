@@ -41,6 +41,14 @@ const props = defineProps({
   tempBuildingSpriteUrl: {
     type: String,
     default: import.meta.env.BASE_URL + 'templates/cubes1/0.png'
+  },
+  carSprite1Url: {
+    type: String,
+    default: import.meta.env.BASE_URL + 'templates/roads/sprites/car-dawn-top-right.png'
+  },
+  carSprite2Url: {
+    type: String,
+    default: import.meta.env.BASE_URL + 'templates/roads/sprites/car-down-top-left.png'
   }
 })
 
@@ -61,7 +69,8 @@ const emit = defineEmits([
   'destination-mode-finished',
   'replace-image-url',
   'reorder-images',
-  'structure-sprite-changed'
+  'structure-sprite-changed',
+  'car-sprite-changed'
 ])
 
 const selectedImage = ref(null)
@@ -74,6 +83,10 @@ const roadOpacity = ref(100) // Opacity pre road tiles (0-100)
 // Structure sprites
 const localConstructSpriteUrl = ref(props.constructSpriteUrl)
 const localTempBuildingSpriteUrl = ref(props.tempBuildingSpriteUrl)
+
+// Car sprites
+const localCarSprite1Url = ref(props.carSprite1Url)
+const localCarSprite2Url = ref(props.carSprite2Url)
 
 const spawnPersonsEnabled = ref(props.personSpawnEnabled) // Či pridať osoby pri kliknutí na road tile
 const personsPerPlacement = ref(props.personSpawnCount) // Počet osôb na jedno umiestnenie road tile
@@ -348,6 +361,12 @@ watch(() => props.constructSpriteUrl, (newUrl) => {
 watch(() => props.tempBuildingSpriteUrl, (newUrl) => {
   if (newUrl) localTempBuildingSpriteUrl.value = newUrl
 })
+watch(() => props.carSprite1Url, (newUrl) => {
+  if (newUrl) localCarSprite1Url.value = newUrl
+})
+watch(() => props.carSprite2Url, (newUrl) => {
+  if (newUrl) localCarSprite2Url.value = newUrl
+})
 
 // Upload handler pre structure sprites
 const handleStructureSpriteUpload = (event, type) => {
@@ -363,6 +382,25 @@ const handleStructureSpriteUpload = (event, type) => {
     }
     emit('structure-sprite-changed', { type, url: dataUrl })
     console.log(`🏗️ Structure sprite '${type}' updated`)
+  }
+  reader.readAsDataURL(file)
+  event.target.value = ''
+}
+
+// Upload handler pre car sprites
+const handleCarSpriteUpload = (event, type) => {
+  const file = event.target.files[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const dataUrl = e.target.result
+    if (type === 'car1') {
+      localCarSprite1Url.value = dataUrl
+    } else {
+      localCarSprite2Url.value = dataUrl
+    }
+    emit('car-sprite-changed', { type, url: dataUrl })
+    console.log(`🚗 Car sprite '${type}' updated`)
   }
   reader.readAsDataURL(file)
   event.target.value = ''
@@ -841,7 +879,9 @@ defineExpose({
   isDestinationTile,
   finishSettingDestination,
   localConstructSpriteUrl,
-  localTempBuildingSpriteUrl
+  localTempBuildingSpriteUrl,
+  localCarSprite1Url,
+  localCarSprite2Url
 })
 </script>
 
@@ -975,6 +1015,33 @@ defineExpose({
         step="1"
         v-model.number="carsPerPlacement"
       />
+    </div>
+  </div>
+
+  <!-- Car sprite upload controls -->
+  <div v-if="activeGalleryTab === 'roads'" class="car-sprites-section">
+    <div class="car-sprites-label">Car Sprites</div>
+    <div class="car-sprites-grid">
+      <div class="structure-sprite-card">
+        <div class="structure-label">🚗 Car Sprite 1 (↗)</div>
+        <div class="structure-preview">
+          <img :src="localCarSprite1Url" alt="Car sprite 1" />
+        </div>
+        <label class="btn-upload-sprite">
+          Upload
+          <input type="file" accept="image/*" @change="handleCarSpriteUpload($event, 'car1')" hidden />
+        </label>
+      </div>
+      <div class="structure-sprite-card">
+        <div class="structure-label">🚗 Car Sprite 2 (↖)</div>
+        <div class="structure-preview">
+          <img :src="localCarSprite2Url" alt="Car sprite 2" />
+        </div>
+        <label class="btn-upload-sprite">
+          Upload
+          <input type="file" accept="image/*" @change="handleCarSpriteUpload($event, 'car2')" hidden />
+        </label>
+      </div>
     </div>
   </div>
   
@@ -2065,6 +2132,25 @@ h2 {
   border: 1px solid #d0d7de;
   border-radius: 6px;
   font-weight: 600;
+}
+
+/* Car sprites section */
+.car-sprites-section {
+  padding: 0.5rem 0.75rem;
+  background: #f0f8ff;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.car-sprites-label {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.car-sprites-grid {
+  display: flex;
+  gap: 0.75rem;
 }
 
 /* Roads grid */
