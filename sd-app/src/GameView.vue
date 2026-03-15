@@ -1001,6 +1001,14 @@ const handleLoadProject = async (projectData) => {
     roadOpacity.value = loadedData.roadOpacity
     gameTime.value = loadedData.gameTime || 0
     
+    // Apply construct/temp building sprites from JSON (base64)
+    if (loadedData.constructSpriteUrl && canvasRef.value?.updateStructureSprite) {
+      canvasRef.value.updateStructureSprite('construct', loadedData.constructSpriteUrl)
+    }
+    if (loadedData.tempBuildingSpriteUrl && canvasRef.value?.updateStructureSprite) {
+      canvasRef.value.updateStructureSprite('tempBuilding', loadedData.tempBuildingSpriteUrl)
+    }
+    
     // Načítaj images
     const loadedImages = loadedData.images || []
     
