@@ -23,12 +23,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: sd-app/package-lock.json
 
       - name: Install dependencies
         working-directory: sd-app
-        run: npm install
+        run: npm install --no-optional
 
       - name: Build
         working-directory: sd-app
