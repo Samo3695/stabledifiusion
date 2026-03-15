@@ -28,7 +28,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: sd-app
-        run: npm ci
+        run: npm install --no-optional
 
       - name: Build
         working-directory: sd-app
