@@ -1333,9 +1333,6 @@ const handleLoadProject = async (projectData) => {
         
         // Trigger astronaut sprite animation
         astronautActive.value = true
-
-        // Auto-save after project is fully loaded
-        saveToLocalStorage()
       }, 500)
     }, 500)
     
