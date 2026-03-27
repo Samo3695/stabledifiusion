@@ -1041,6 +1041,7 @@ const handleCellSelected = ({ row, col }) => {
           }
           showInsufficientResourcesModal.value = true
           console.log('⛔ GameView: Nedostatok resources:', resourceCheck, missingVehicle ? '(žiadne dostupné vozidlo)' : '')
+          canvasRef.value?.clearHover()
           return // Nezakladať budovu
         }
         

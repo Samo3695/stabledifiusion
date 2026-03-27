@@ -2159,8 +2159,10 @@ class IsoScene extends Phaser.Scene {
     // Skontrolujeme kolíziu
     const hasCollision = this.checkCollision(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
     
-    // Skontrolujeme či budova susedí s cestou
-    const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
+    // Skontrolujeme či budova susedí s cestou (len pre isBuilding budovy)
+    const selectedImg = props.images?.find(img => img.id === props.selectedImageId)
+    const requiresRoadAdjacency = selectedImg?.buildingData?.isBuilding === true
+    const hasSomeRoads = requiresRoadAdjacency ? Object.values(cellImages).some(cell => cell.isRoadTile) : false
     const hasAdjacentToRoad = !hasSomeRoads || this.hasBuildingAdjacentToRoad(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
     
     // Určíme farbu - červená ak je kolízia alebo ak nesusedí s cestou
@@ -2201,10 +2203,16 @@ class IsoScene extends Phaser.Scene {
     // Použijeme URL ako kľúč pre cachovanie textúry
     const previewKey = `preview_${selectedImage.id}`
     
+    // Inkrementujeme counter pre tracking asynchrónnych loadov
+    this._previewLoadId = (this._previewLoadId || 0) + 1
+    const currentLoadId = this._previewLoadId
+    
     // Načítame textúru ak ešte nie je načítaná
     if (!this.textures.exists(previewKey)) {
       this.load.image(previewKey, selectedImage.url)
       this.load.once('complete', () => {
+        // Skontroluj či medzitým nebol spustený novší load
+        if (this._previewLoadId !== currentLoadId) return
         this.createPreviewSprite(previewKey, row, col, cellsX, cellsY)
       })
       this.load.start()
@@ -2217,6 +2225,12 @@ class IsoScene extends Phaser.Scene {
     // Kontrola či sa hover nezmenil medzitým (asynchrónne načítanie)
     if (this.hoveredCell.row !== row || this.hoveredCell.col !== col) {
       return // Hover sa už zmenil, nechceme vytvoriť starý preview
+    }
+    
+    // Vymaž prípadný starý preview sprite pred vytvorením nového
+    if (this.hoverPreviewSprite) {
+      this.hoverPreviewSprite.destroy()
+      this.hoverPreviewSprite = null
     }
     
     // Vypočítaj izometrickú pozíciu
@@ -2793,11 +2807,14 @@ class IsoScene extends Phaser.Scene {
             return
           }
           
-          // Kontrola či budova susedí s cestou
-          const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
-          if (hasSomeRoads && !this.hasBuildingAdjacentToRoad(cell.row, cell.col, cellsX, cellsY)) {
-            console.log('❌ Budova musí susediť s cestou!')
-            return
+          // Kontrola či budova susedí s cestou (len pre isBuilding budovy)
+          const selImg = props.images?.find(img => img.id === props.selectedImageId)
+          if (selImg?.buildingData?.isBuilding) {
+            const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
+            if (hasSomeRoads && !this.hasBuildingAdjacentToRoad(cell.row, cell.col, cellsX, cellsY)) {
+              console.log('❌ Budova musí susediť s cestou!')
+              return
+            }
           }
         }
         
@@ -4092,6 +4109,24 @@ defineExpose({
   // Zruší zvýraznenie tile pod budovou
   clearBuildingHighlight: () => {
     mainScene?.clearBuildingHighlight()
+  },
+  // Vyčistí hover grafiku, preview sprite a selekciu
+  clearHover: () => {
+    if (mainScene) {
+      if (mainScene.hoverGraphics) {
+        mainScene.hoverGraphics.destroy()
+        mainScene.hoverGraphics = null
+      }
+      if (mainScene.hoverPreviewSprite) {
+        mainScene.hoverPreviewSprite.destroy()
+        mainScene.hoverPreviewSprite = null
+      }
+      if (mainScene.selectedGraphics) {
+        mainScene.selectedGraphics.destroy()
+        mainScene.selectedGraphics = null
+      }
+      mainScene.selectedCell = { row: -1, col: -1 }
+    }
   },
   // Aplikuje efekt na hraciu plochu
   applyEffect: (effectName) => {
