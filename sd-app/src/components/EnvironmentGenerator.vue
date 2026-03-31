@@ -22,12 +22,12 @@ const customTexture = ref(null) // Nahratá vlastná textúra
 
 // Farebné hodnoty z TextureColorPicker
 const textureColors = ref({
-  hue: 0,
-  saturation: 100,
-  brightness: 100
+  hue: props.initialColors?.hue ?? 0,
+  saturation: props.initialColors?.saturation ?? 100,
+  brightness: props.initialColors?.brightness ?? 100
 })
-const tilesPerImage = ref(1) // Cez koľko políčok pôjde jeden obrázok
-const tileResolution = ref(512) // Rozlíšenie tile
+const tilesPerImage = ref(props.initialTextureSettings?.tilesPerImage ?? 1)
+const tileResolution = ref(props.initialTextureSettings?.tileResolution ?? 512)
 
 // AI generovanie textúr
 const generationPrompt = ref('')
@@ -222,17 +222,10 @@ const downloadTexture = () => {
   document.body.removeChild(link)
 }
 
-// Inicializuj farby z props pri načítaní
+// Inicializuj custom texture z props pri načítaní
 onMounted(() => {
-  if (props.initialColors) {
-    textureColors.value = { ...props.initialColors }
-  }
-  if (props.initialTextureSettings) {
-    tilesPerImage.value = props.initialTextureSettings.tilesPerImage || 1
-    tileResolution.value = props.initialTextureSettings.tileResolution || 512
-    if (props.initialTextureSettings.customTexture) {
-      customTexture.value = props.initialTextureSettings.customTexture
-    }
+  if (props.initialTextureSettings?.customTexture) {
+    customTexture.value = props.initialTextureSettings.customTexture
   }
 })
 

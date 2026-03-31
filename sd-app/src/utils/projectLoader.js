@@ -22,14 +22,23 @@ export async function loadRoadTilesFromSprite(spriteUrl, opacity = 100) {
  * Aplikuje background textúru na canvas
  * @param {Object} canvasRef - Referencia na PhaserCanvas
  * @param {Object} textureSettings - Nastavenia textúry
+ * @param {Object} environmentColors - Farby prostredia (hue, saturation, brightness)
  * @returns {Promise<void>}
  */
-export async function applyBackgroundTexture(canvasRef, textureSettings) {
-  if (!textureSettings.customTexture || !canvasRef) {
+export async function applyBackgroundTexture(canvasRef, textureSettings, environmentColors) {
+  if (!canvasRef) {
     return
   }
   
-  console.log('🎨 ProjectLoader: Aplikujem background textúru')
+  const colors = environmentColors || { hue: 0, saturation: 100, brightness: 100 }
+  const hasColorChanges = colors.hue !== 0 || colors.saturation !== 100 || colors.brightness !== 100
+  const textureSrc = textureSettings.customTexture || (hasColorChanges ? (BASE_URL + 'enviroment/grass.jpg') : null)
+  
+  if (!textureSrc) {
+    return
+  }
+  
+  console.log('🎨 ProjectLoader: Aplikujem background textúru s farbami:', colors)
   
   return new Promise((resolve) => {
     const img = new Image()
@@ -41,6 +50,9 @@ export async function applyBackgroundTexture(canvasRef, textureSettings) {
       canvas.width = resolution
       canvas.height = resolution
       const ctx = canvas.getContext('2d')
+      
+      // Aplikuj farebný filter (hue, saturation, brightness)
+      ctx.filter = `hue-rotate(${colors.hue}deg) saturate(${colors.saturation}%) brightness(${colors.brightness}%)`
       ctx.drawImage(img, 0, 0, resolution, resolution)
       const processedTexture = canvas.toDataURL('image/jpeg', 0.9)
       
@@ -48,7 +60,7 @@ export async function applyBackgroundTexture(canvasRef, textureSettings) {
         await canvasRef.setBackgroundTiles([processedTexture], textureSettings.tilesPerImage || 1)
       }
       
-      console.log('✅ ProjectLoader: Background textúra aplikovaná')
+      console.log('✅ ProjectLoader: Background textúra aplikovaná s filtrami')
       resolve()
     }
     
@@ -57,7 +69,7 @@ export async function applyBackgroundTexture(canvasRef, textureSettings) {
       resolve() // Resolve aj pri chybe, aby sme mohli pokračovať
     }
     
-    img.src = textureSettings.customTexture
+    img.src = textureSrc
   })
 }
 
@@ -274,7 +286,8 @@ export async function loadProject(projectData, canvasRef, onProgress = null) {
     }
     
     const textureSettings = projectData.textureSettings || { tilesPerImage: 1, tileResolution: 512, customTexture: null }
-    await applyBackgroundTexture(canvasRef, textureSettings)
+    const environmentColors = projectData.environmentColors || { hue: 0, saturation: 100, brightness: 100 }
+    await applyBackgroundTexture(canvasRef, textureSettings, environmentColors)
     
     // 3. Aplikuj background tiles (only if no customTexture, since it was already applied in step 2)
     const backgroundTiles = projectData.backgroundTiles || []

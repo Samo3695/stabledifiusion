@@ -657,10 +657,12 @@ const handleLoadProject = (projectData) => {
   textureSettings.value = loadedTextureSettings
   console.log('📐 App.vue: Textúrové nastavenia načítané:', loadedTextureSettings)
   
-  // Ak existuje vlastná textúra, automaticky ju aplikuj na canvas
-  if (loadedTextureSettings.customTexture && canvasRef.value) {
-    console.log('🎨 App.vue: Detekovaná vlastná textúra, aplikujem na canvas...')
-    // Vytvor jednoduchý canvas pre spracovanie textúry
+  // Aplikuj textúru s farbami (custom textúra alebo default s farebnými úpravami)
+  const hasColorChanges = loadedColors.hue !== 0 || loadedColors.saturation !== 100 || loadedColors.brightness !== 100
+  const textureSrc = loadedTextureSettings.customTexture || (hasColorChanges ? (BASE_URL + 'enviroment/grass.jpg') : null)
+  
+  if (textureSrc && canvasRef.value) {
+    console.log('🎨 App.vue: Aplikujem textúru s farbami:', loadedColors)
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.onload = async () => {
@@ -669,14 +671,17 @@ const handleLoadProject = (projectData) => {
       canvas.width = resolution
       canvas.height = resolution
       const ctx = canvas.getContext('2d')
+      
+      // Aplikuj farebný filter (hue, saturation, brightness)
+      ctx.filter = `hue-rotate(${loadedColors.hue}deg) saturate(${loadedColors.saturation}%) brightness(${loadedColors.brightness}%)`
       ctx.drawImage(img, 0, 0, resolution, resolution)
       const processedTexture = canvas.toDataURL('image/jpeg', 0.9)
       
       // Aplikuj na canvas
       await canvasRef.value.setBackgroundTiles([processedTexture], loadedTextureSettings.tilesPerImage || 1)
-      console.log('✅ App.vue: Vlastná textúra automaticky aplikovaná na canvas')
+      console.log('✅ App.vue: Textúra aplikovaná s filtrami')
     }
-    img.src = loadedTextureSettings.customTexture
+    img.src = textureSrc
   }
   
   // Obnov resources a workforce

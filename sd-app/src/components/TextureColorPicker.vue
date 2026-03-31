@@ -30,31 +30,19 @@ const props = defineProps({
   }
 })
 
-const hueRotation = ref(0)
-const saturation = ref(100)
-const brightness = ref(100)
-const tilesPerImage = ref(1)
-const tileResolution = ref(512)
-const perspective = ref(0)
-
-// Inicializuj farby z props
-onMounted(() => {
-  if (props.initialColors) {
-    hueRotation.value = props.initialColors.hue || 0
-    saturation.value = props.initialColors.saturation || 100
-    brightness.value = props.initialColors.brightness || 100
-  }
-  tilesPerImage.value = props.initialTilesPerImage || 1
-  tileResolution.value = props.initialTileResolution || 512
-  perspective.value = props.initialPerspective || 0
-})
+const hueRotation = ref(props.initialColors?.hue ?? 0)
+const saturation = ref(props.initialColors?.saturation ?? 100)
+const brightness = ref(props.initialColors?.brightness ?? 100)
+const tilesPerImage = ref(props.initialTilesPerImage ?? 1)
+const tileResolution = ref(props.initialTileResolution ?? 512)
+const perspective = ref(props.initialPerspective ?? 0)
 
 // Watch na zmenu initialColors (pri načítaní projektu)
 watch(() => props.initialColors, (newColors) => {
   if (newColors) {
-    hueRotation.value = newColors.hue || 0
-    saturation.value = newColors.saturation || 100
-    brightness.value = newColors.brightness || 100
+    hueRotation.value = newColors.hue ?? 0
+    saturation.value = newColors.saturation ?? 100
+    brightness.value = newColors.brightness ?? 100
   }
 }, { deep: true })
 
@@ -138,7 +126,7 @@ watch([hueRotation, saturation, brightness], () => {
     saturation: saturation.value,
     brightness: brightness.value
   })
-}, { immediate: true })
+})
 
 // Emituj zmenu počtu políčok a automaticky aplikuj textúru
 watch(tilesPerImage, async (newValue) => {
