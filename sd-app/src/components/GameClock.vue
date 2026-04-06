@@ -130,15 +130,11 @@ onUnmounted(() => {
 
 <style scoped>
 .game-clock {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 250px;
+  width: 210px;
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
   border-bottom: 2px solid #0f3460;
   padding: 0.5rem 0.75rem;
   color: white;
-  z-index: 25;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 

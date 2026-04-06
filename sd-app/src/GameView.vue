@@ -108,10 +108,14 @@ const hamburgerOpen = ref(false)
 
 // Fullscreen state
 const isFullscreen = ref(false)
+const gameViewRef = ref(null)
+const showSaveToast = ref(false)
 
 const toggleFullscreen = () => {
   if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen()
+    if (gameViewRef.value) {
+      gameViewRef.value.requestFullscreen({ navigationUI: 'hide' })
+    }
   } else {
     document.exitFullscreen()
   }
@@ -119,6 +123,22 @@ const toggleFullscreen = () => {
 
 const onFullscreenChange = () => {
   isFullscreen.value = !!document.fullscreenElement
+  if (document.fullscreenElement) {
+    document.body.style.overscrollBehavior = 'none'
+    document.documentElement.style.overscrollBehavior = 'none'
+    document.body.style.touchAction = 'none'
+  } else {
+    document.body.style.overscrollBehavior = ''
+    document.documentElement.style.overscrollBehavior = ''
+    document.body.style.touchAction = ''
+  }
+}
+
+const handleFullscreenKey = (e) => {
+  if (e.key === 'F11') {
+    e.preventDefault()
+    toggleFullscreen()
+  }
 }
 
 // Event trigger system
@@ -136,6 +156,7 @@ const overproductionCycles = ref({}) // Consecutive full-storage cycles per buil
 // Quest / Mission Objectives system
 const showQuestModal = ref(false)
 const completedQuestIds = ref(new Set()) // IDs of completed quests
+const questSeen = ref(false) // Whether user has opened modal for current quest
 const questJustCompleted = ref(false) // Flash notification on button
 const questCompletedName = ref('') // Name of quest that was just completed
 const showQuestCompletedBanner = ref(false) // Show completed banner inside modal
@@ -345,6 +366,7 @@ const checkQuestCompletion = () => {
     questCompletedName.value = quest.name
     questJustCompleted.value = true
     showQuestCompletedBanner.value = true
+    questSeen.value = false // Reset so button blinks for next quest
     // Auto-hide the button notification after 10 seconds
     setTimeout(() => {
       questJustCompleted.value = false
@@ -800,6 +822,8 @@ const saveToLocalStorage = () => {
     writeAutosave(data).then(() => {
       localStorage.setItem(AUTOSAVE_KEY + '-exists', '1')
       console.log('💾 Auto-save: Game saved to IndexedDB')
+      showSaveToast.value = true
+      setTimeout(() => { showSaveToast.value = false }, 2500)
       // Update URL to ?restore so refresh reloads saved game
       if (route.query.restore !== '1') {
         router.replace({ path: '/gameplay', query: { restore: '1' } })
@@ -1525,6 +1549,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
   const image = images.value.find(img => img.id === imageId)
   if (image) {
     image.buildingData = {
+      isTerrain: buildingData.isTerrain,
       isBuilding: buildingData.isBuilding,
       isCommandCenter: buildingData.isCommandCenter,
       isPort: buildingData.isPort,
@@ -2661,7 +2686,9 @@ const handleReorderBuildings = (newOrder) => {
 // Lifecycle - document click outside listener
 onMounted(() => {
   document.addEventListener('pointerdown', handleDocumentClick)
+  document.addEventListener('keydown', handleFullscreenKey)
   document.addEventListener('fullscreenchange', onFullscreenChange)
+
   // Auto-load project if navigated from Play button
   if (route.query.autoload === '1') {
     setTimeout(async () => {
@@ -2694,13 +2721,13 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('pointerdown', handleDocumentClick)
+  document.removeEventListener('keydown', handleFullscreenKey)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
-
 })
 </script>
 
 <template>
-  <div id="game-view">
+  <div id="game-view" ref="gameViewRef">
     <!-- Loading overlay -->
     <div v-if="isLoading" class="loading-overlay">
       <div class="loading-content">
@@ -2767,6 +2794,11 @@ onUnmounted(() => {
       </button>
       </div>
 
+      <!-- Save toast -->
+      <transition name="toast-fade">
+        <div v-if="showSaveToast" class="save-toast">💾 Game saved</div>
+      </transition>
+
       <!-- ResourceDisplay in top bar -->
       <ResourceDisplay 
         :resources="resources"
@@ -2778,23 +2810,23 @@ onUnmounted(() => {
       />
     </div>
 
-    <!-- Game Clock - fixná pozícia -->
-    <GameClock 
-      :initialTime="gameTime"
-      @update:gameTime="gameTime = $event"
-    />
-
-    <!-- Mission Objectives button - next to game clock -->
-    <button 
-      v-if="gameQuests.length > 0"
-      class="mission-btn" 
-      :class="{ 'quest-notify': questJustCompleted }"
-      @click="showQuestModal = true; showQuestCompletedBanner = false"
-      title="Mission Objectives"
-    >
-      📋
-      <span v-if="questJustCompleted" class="mission-badge">!</span>
-    </button>
+    <!-- Game Clock + Mission Objectives - one column -->
+    <div class="clock-mission-wrapper">
+      <button 
+        v-if="gameQuests.length > 0"
+        class="mission-btn" 
+        :class="{ 'quest-notify': activeQuest != null && !questSeen }"
+        @click="showQuestModal = true; showQuestCompletedBanner = false; questSeen = true"
+        title="Mission Objectives"
+      >
+        📋
+        <span v-if="activeQuest" class="mission-badge">!</span>
+      </button>
+      <GameClock 
+        :initialTime="gameTime"
+        @update:gameTime="gameTime = $event"
+      />
+    </div>
 
     <!-- Quest / Mission Objectives Modal -->
     <Modal v-if="showQuestModal" title="Mission Objectives" width="500px" @close="showQuestModal = false">
@@ -3435,6 +3467,17 @@ top-warpper {
   position: relative;
   overflow: hidden;
   padding: 0;
+  touch-action: pan-x pan-y;
+  overscroll-behavior: none;
+}
+
+#game-view:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  touch-action: none;
+  overscroll-behavior: contain;
+  -ms-scroll-chaining: none;
 }
 
 /* Top Resource Bar */
@@ -3541,6 +3584,38 @@ top-warpper {
 .save-game-btn:hover {
   background: rgba(16, 185, 129, 1);
   transform: scale(1.05);
+}
+
+/* Save Toast */
+.save-toast {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(16, 185, 129, 0.95);
+  color: white;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  z-index: 99999;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.toast-fade-enter-active {
+  transition: opacity 0.3s, transform 0.3s;
+}
+.toast-fade-leave-active {
+  transition: opacity 0.5s, transform 0.5s;
+}
+.toast-fade-enter-from {
+  opacity: 0;
+  transform: translateX(-50%) translateY(10px);
+}
+.toast-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-10px);
 }
 
 .hamburger-line {
@@ -4847,17 +4922,25 @@ top-warpper {
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
-/* ===== Mission Objectives Button & Modal ===== */
-.mission-btn {
+/* ===== Clock + Mission Wrapper ===== */
+.clock-mission-wrapper {
   position: fixed;
   top: 0;
-  right: 250px;
-  height: 52px;
-  width: 44px;
+  right: 0;
+  z-index: 25;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+/* ===== Mission Objectives Button & Modal ===== */
+.mission-btn {
+  height: auto;
+  width: 40px;
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
   border: none;
   border-bottom: 2px solid #0f3460;
-  border-left: 1px solid rgba(255,255,255,0.08);
+  border-right: 1px solid rgba(255,255,255,0.08);
   color: white;
   font-size: 1.2rem;
   cursor: pointer;
@@ -4866,6 +4949,7 @@ top-warpper {
   align-items: center;
   justify-content: center;
   transition: background 0.2s;
+  position: relative;
 }
 
 .mission-btn:hover {
@@ -4873,7 +4957,7 @@ top-warpper {
 }
 
 .mission-btn.quest-notify {
-  animation: quest-pulse 1s ease-in-out infinite;
+  animation: quest-pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes quest-pulse {

@@ -293,7 +293,7 @@ class IsoScene extends Phaser.Scene {
 
     // Edge scrolling - scroll camera when mouse is near screen edge (only in fullscreen)
     this._edgeScrollMargin = 1
-    this._edgeScrollMarginTop = 7
+    this._edgeScrollMarginTop = 50
     this._edgeScrollSpeed = 6
     this._edgeScrollDx = 0
     this._edgeScrollDy = 0
@@ -2161,12 +2161,13 @@ class IsoScene extends Phaser.Scene {
     
     // Skontrolujeme či budova susedí s cestou (len pre isBuilding budovy)
     const selectedImg = props.images?.find(img => img.id === props.selectedImageId)
-    const requiresRoadAdjacency = selectedImg?.buildingData?.isBuilding === true
+    const isTerrainImage = selectedImg?.buildingData?.isTerrain === true
+    const requiresRoadAdjacency = selectedImg?.buildingData?.isBuilding === true && !isTerrainImage
     const hasSomeRoads = requiresRoadAdjacency ? Object.values(cellImages).some(cell => cell.isRoadTile) : false
     const hasAdjacentToRoad = !hasSomeRoads || this.hasBuildingAdjacentToRoad(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
     
-    // Určíme farbu - červená ak je kolízia alebo ak nesusedí s cestou
-    const isInvalid = hasCollision || !hasAdjacentToRoad
+    // Určíme farbu - terén je vždy validný, inak červená ak je kolízia alebo ak nesusedí s cestou
+    const isInvalid = isTerrainImage ? false : (hasCollision || !hasAdjacentToRoad)
     let fillColor = props.deleteMode ? 0xff0000 : (isInvalid ? 0xff0000 : 0x667eea)
     let alpha = props.deleteMode ? 0.5 : (isInvalid ? 0.3 : 0.5)
     
@@ -2189,8 +2190,8 @@ class IsoScene extends Phaser.Scene {
       this.hoverGraphics.strokePath()
     }
     
-    // Ak NIE JE kolízia a máme vybraný obrázok, zobrazíme preview budovy
-    if (!hasCollision && props.selectedImageId && !props.deleteMode) {
+    // Ak NIE JE kolízia (alebo je terén) a máme vybraný obrázok, zobrazíme preview budovy
+    if ((!hasCollision || isTerrainImage) && props.selectedImageId && !props.deleteMode) {
       this.showBuildingPreview(this.hoveredCell.row, this.hoveredCell.col, cellsX, cellsY)
     }
   }
@@ -2361,6 +2362,9 @@ class IsoScene extends Phaser.Scene {
     for (const key in cellImages) {
       const existing = cellImages[key]
       if (existing.isBackground) continue
+      
+      // Terén neblokuje umiestňovanie iných obrázkov
+      if (existing.buildingData?.isTerrain) continue
       
       // Preskočíme sekundárne bunky multi-cell budov
       if (existing.isSecondary) continue
@@ -2802,14 +2806,17 @@ class IsoScene extends Phaser.Scene {
           const cellsX = props.lastImageCellsX || 1
           const cellsY = props.lastImageCellsY || 1
           
-          if (this.checkCollision(cell.row, cell.col, cellsX, cellsY)) {
+          // Terén sa môže umiestniť kdekoľvek bez obmedzení
+          const selImg = props.images?.find(img => img.id === props.selectedImageId)
+          const isTerrainPlacement = selImg?.buildingData?.isTerrain === true
+          
+          if (!isTerrainPlacement && this.checkCollision(cell.row, cell.col, cellsX, cellsY)) {
             console.log('❌ Kolízia!')
             return
           }
           
-          // Kontrola či budova susedí s cestou (len pre isBuilding budovy)
-          const selImg = props.images?.find(img => img.id === props.selectedImageId)
-          if (selImg?.buildingData?.isBuilding) {
+          // Kontrola či budova susedí s cestou (len pre isBuilding budovy, nie pre terén)
+          if (!isTerrainPlacement && selImg?.buildingData?.isBuilding) {
             const hasSomeRoads = Object.values(cellImages).some(cell => cell.isRoadTile)
             if (hasSomeRoads && !this.hasBuildingAdjacentToRoad(cell.row, cell.col, cellsX, cellsY)) {
               console.log('❌ Budova musí susediť s cestou!')

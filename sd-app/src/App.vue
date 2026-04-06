@@ -976,6 +976,7 @@ const handleUpdateBuildingData = ({ imageId, buildingData }) => {
   if (image) {
     // Ulož do buildingData objektu (nie priamo do image properties)
     image.buildingData = {
+      isTerrain: buildingData.isTerrain,
       isBuilding: buildingData.isBuilding,
       isCommandCenter: buildingData.isCommandCenter,
       isPort: buildingData.isPort,

@@ -183,6 +183,7 @@ const roadCostResourceId = ref(props.roadCostResourceId)
 const roadCostAmount = ref(props.roadCostAmount)
 
 // Building data
+const isTerrain = ref(false) // Či je obrázok terén (žiadne obmedzenia pri ukladaní)
 const isBuilding = ref(false)
 const isCommandCenter = ref(false) // Či je budova command center
 const isPort = ref(false) // Či je budova prístav
@@ -537,6 +538,7 @@ watch(roadCostAmount, () => emitRoadCostSettings())
 const saveBuildingData = () => {
   if (selectedImage.value) {
     const buildingData = {
+      isTerrain: isTerrain.value,
       isBuilding: isBuilding.value,
       isCommandCenter: isCommandCenter.value,
       isPort: isPort.value,
@@ -573,7 +575,7 @@ const saveBuildingData = () => {
 }
 
 // Watch na building data - automaticky ukladaj pri každej zmene
-watch([isBuilding, isCommandCenter, isPort, canBuildOnlyInDestination, destinationTiles, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, allowedResources, portCapacity, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, hasFlyAwayEffect, lightBlinkSpeed, lightColor, lightSize], () => {
+watch([isTerrain, isBuilding, isCommandCenter, isPort, canBuildOnlyInDestination, destinationTiles, buildingName, buildingSize, dontDropShadow, buildCost, operationalCost, production, stored, allowedResources, portCapacity, hasSmokeEffect, smokeSpeed, smokeScale, smokeAlpha, smokeTint, hasLightEffect, hasFlyAwayEffect, lightBlinkSpeed, lightColor, lightSize], () => {
   saveBuildingData()
 }, { deep: true })
 
@@ -663,6 +665,7 @@ const openModal = (image) => {
   
   // Načítaj building data ak existujú
   if (image.buildingData) {
+    isTerrain.value = image.buildingData.isTerrain || false
     isBuilding.value = image.buildingData.isBuilding || false
     isCommandCenter.value = image.buildingData.isCommandCenter || false
     isPort.value = image.buildingData.isPort || false
@@ -689,6 +692,7 @@ const openModal = (image) => {
     lightSize.value = image.buildingData.lightSize || 1
     console.log('🔍 Loading building data (smoke & light):', image.buildingData)
   } else {
+    isTerrain.value = false
     isBuilding.value = false
     isCommandCenter.value = false
     isPort.value = false
@@ -718,6 +722,7 @@ const openModal = (image) => {
 
 const closeModal = () => {
   selectedImage.value = null
+  isTerrain.value = false
   isBuilding.value = false
   isCommandCenter.value = false
   isPort.value = false
@@ -1329,6 +1334,11 @@ defineExpose({
             <div class="info-section building-section">
               <div class="building-header">
                 <label class="building-checkbox">
+                  <input type="checkbox" v-model="isTerrain" />
+                  <span>🌍 Is it terrain?</span>
+                </label>
+
+                <label class="building-checkbox" style="margin-top: 0.5rem;">
                   <input type="checkbox" v-model="isBuilding" />
                   <span>Is it a building?</span>
                 </label>
