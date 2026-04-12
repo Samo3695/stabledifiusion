@@ -91,9 +91,19 @@
 6. Nahrať na HuggingFace
 7. Použiť v browseri rovnako ako teraz
 
+### 6. Text Encoder na backend (CPU server) zatial nerobit
+- Text Encoder (CLIP) presunúť na lacný backend server
+- Browser pošle prompt → server vráti embeddings (77×1024, ~300 KB JSON)
+- Browser sťahuje len UNet + VAE (~1.9 GB namiesto ~2.5 GB)
+- **GPU nepotrebné** — CLIP na CPU zvládne ~30-60 req/s (~2000-3600/min)
+- S cache (rovnaký prompt = rovnaký výsledok): prakticky neobmedzene
+- Latencia: +0.5-2s na HTTP request (zanedbateľné oproti generovaniu)
+- Hosting: lacný VPS ~5€/mesiac stačí
+- Kombinovateľné s kvantizáciou: INT8 UNet (~865 MB) + VAE (~200 MB) = **~1.1 GB v browseri**
+
 ---
 
-## Poznámky
+## Poznámky 
 - LoRA sa MUSÍ mergnúť PRED kvantizáciou (nie po)
 - Pix2Pix: pre variabilitu pridať noise na vstup alebo conditional GAN s noise vektorom
 - Modely sa cachujú v IndexedDB - sťahovanie len pri prvom použití

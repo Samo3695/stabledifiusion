@@ -13,8 +13,58 @@ import * as ort from 'onnxruntime-web/webgpu'
 const HF_CDN = 'https://huggingface.co'
 
 // Default model repo - SD Turbo ONNX (FP16, optimized for web)
-const DEFAULT_MODEL_REPO = 'schmuell/sd-turbo-ort-web'
+export const DEFAULT_MODEL_REPO = 'schmuell/sd-turbo-ort-web'
 const DEFAULT_TOKENIZER_REPO = 'openai/clip-vit-base-patch32'
+
+// Isometric merged UNet models on HuggingFace (LoRA-merged, no local server needed)
+export const LOCAL_ISOMETRIC_UNET_URL = 'https://huggingface.co/Samo629/sd-turbo-isometric-onnx/resolve/main/fp16/unet/model.onnx'
+export const LOCAL_ISOMETRIC_QUANTIZED_UNET_URL = 'https://huggingface.co/Samo629/sd-turbo-isometric-onnx/resolve/main/quantized/unet/model.onnx'
+
+// Remote CLIP text encoder API (avoids downloading ~600MB text encoder in browser)
+export const DEFAULT_CLIP_API_URL = 'https://samo629-clip-api.hf.space'
+
+// Model variant identifiers
+export const MODEL_VARIANTS = {
+  STANDARD: 'standard',
+  ISOMETRIC_FP16: 'isometric-fp16',
+  ISOMETRIC_QUANTIZED: 'isometric-quantized',
+}
+
+/**
+ * Download a file from a direct URL with progress tracking
+ */
+async function downloadFromUrl(url, onProgress) {
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`)
+  }
+
+  const contentLength = response.headers.get('content-length')
+  const total = contentLength ? parseInt(contentLength, 10) : 0
+  const reader = response.body.getReader()
+  const chunks = []
+  let loaded = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    loaded += value.length
+    if (onProgress && total > 0) {
+      onProgress(loaded / total)
+    }
+  }
+
+  const buffer = new Uint8Array(loaded)
+  let offset = 0
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset)
+    offset += chunk.length
+  }
+
+  return buffer.buffer
+}
 
 /**
  * Download a file from HuggingFace Hub with progress tracking
@@ -199,6 +249,24 @@ function float32ArrayToFloat16(f32arr) {
   return u16
 }
 
+function float16ToFloat32(h) {
+  const sign = (h & 0x8000) << 16
+  const exp = (h >> 10) & 0x1f
+  const frac = h & 0x3ff
+  if (exp === 0) { _u32[0] = sign; return _f32[0] } // zero/subnormal
+  if (exp === 31) { _u32[0] = sign | 0x7f800000 | (frac << 13); return _f32[0] } // inf/nan
+  _u32[0] = sign | ((exp - 15 + 127) << 23) | (frac << 13)
+  return _f32[0]
+}
+
+function float16ArrayToFloat32(u16arr) {
+  const f32 = new Float32Array(u16arr.length)
+  for (let i = 0; i < u16arr.length; i++) {
+    f32[i] = float16ToFloat32(u16arr[i])
+  }
+  return f32
+}
+
 // ─── SD Turbo Scheduler (EulerDiscrete, trailing spacing) ───
 
 const NUM_TRAIN_TIMESTEPS = 1000
@@ -309,6 +377,9 @@ export class StableDiffusionPipeline {
   constructor(options = {}) {
     this.modelRepo = options.modelRepo || DEFAULT_MODEL_REPO
     this.tokenizerRepo = options.tokenizerRepo || DEFAULT_TOKENIZER_REPO
+    this.unetUrl = options.unetUrl || null // Direct URL override for UNet
+    this.unetFp16 = options.unetFp16 !== undefined ? options.unetFp16 : false // Whether UNet expects float16 inputs
+    this.clipApiUrl = options.clipApiUrl || DEFAULT_CLIP_API_URL // Remote CLIP API URL (skips local text encoder download)
     this.tokenizer = null
     this.textEncoder = null
     this.unet = null
@@ -318,7 +389,24 @@ export class StableDiffusionPipeline {
   }
 
   async load(onProgress) {
-    const totalModels = 4
+    // When using remote CLIP API, we skip tokenizer + text encoder (2 fewer models to download)
+    let useRemoteClip = !!this.clipApiUrl
+
+    if (useRemoteClip) {
+      // Verify remote CLIP API is reachable
+      try {
+        const res = await fetch(`${this.clipApiUrl}/health`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const info = await res.json()
+        console.log('[SD] Remote CLIP API connected:', info)
+      } catch (e) {
+        console.warn('[SD] Remote CLIP API unreachable, falling back to local text encoder:', e.message)
+        this.clipApiUrl = null
+        useRemoteClip = false
+      }
+    }
+
+    const totalModels = useRemoteClip ? 3 : 4
     let completedModels = 0
 
     const reportProgress = (modelProgress) => {
@@ -326,40 +414,72 @@ export class StableDiffusionPipeline {
       if (onProgress) onProgress(overall, completedModels)
     }
 
-    // Load tokenizer
-    try {
-      this.tokenizer = await AutoTokenizer.from_pretrained(this.tokenizerRepo, {
-        progress_callback: (p) => {
-          if (p.progress !== undefined) reportProgress(p.progress / 100)
-        }
-      })
-    } catch (e) {
-      console.warn('AutoTokenizer failed, will use basic tokenization:', e)
-      this.tokenizer = null
+    if (!useRemoteClip) {
+      // Load tokenizer (local)
+      try {
+        this.tokenizer = await AutoTokenizer.from_pretrained(this.tokenizerRepo, {
+          progress_callback: (p) => {
+            if (p.progress !== undefined) reportProgress(p.progress / 100)
+          }
+        })
+      } catch (e) {
+        console.warn('AutoTokenizer failed, will use basic tokenization:', e)
+        this.tokenizer = null
+      }
+      completedModels = 1
+      reportProgress(0)
+
+      // Load text encoder ONNX (local)
+      this.textEncoder = await loadOnnxModel(
+        this.modelRepo,
+        'text_encoder/model.onnx',
+        (p) => reportProgress(p)
+      )
+      completedModels = 2
+      reportProgress(0)
+
+      // Log text encoder inputs/outputs for debugging
+      console.log('[SD] Text encoder inputs:', this.textEncoder.inputNames)
+      console.log('[SD] Text encoder outputs:', this.textEncoder.outputNames)
+    } else {
+      console.log(`[SD] Using remote CLIP API: ${this.clipApiUrl} (skipping tokenizer + text encoder download)`)
+      completedModels = 0
     }
-    completedModels = 1
-    reportProgress(0)
 
-    // Load text encoder ONNX
-    this.textEncoder = await loadOnnxModel(
-      this.modelRepo,
-      'text_encoder/model.onnx',
-      (p) => reportProgress(p)
-    )
-    completedModels = 2
-    reportProgress(0)
+    // When using remote CLIP, offset completedModels so stage indices align to 0-based UNet/VAE stages
+    const stageOffset = useRemoteClip ? 0 : 2
 
-    // Log text encoder inputs/outputs for debugging
-    console.log('[SD] Text encoder inputs:', this.textEncoder.inputNames)
-    console.log('[SD] Text encoder outputs:', this.textEncoder.outputNames)
-
-    // Load UNet ONNX
-    this.unet = await loadOnnxModel(
-      this.modelRepo,
-      'unet/model.onnx',
-      (p) => reportProgress(p)
-    )
-    completedModels = 2.5
+    // Load UNet ONNX (from custom URL or default repo)
+    if (this.unetUrl) {
+      console.log(`[SD] Loading UNet from custom URL: ${this.unetUrl}`)
+      const cacheKey = this.unetUrl
+      let buffer = await getCachedModel(cacheKey)
+      if (buffer) {
+        console.log('[SD] Cache hit: custom UNet')
+        reportProgress(1)
+      } else {
+        console.log('[SD] Downloading custom UNet...')
+        buffer = await downloadFromUrl(this.unetUrl, (p) => reportProgress(p))
+        await setCachedModel(cacheKey, buffer)
+        console.log('[SD] Downloaded & cached custom UNet')
+      }
+      if (!_selectedProvider) {
+        _selectedProvider = await pickProvider(buffer)
+        console.log(`[SD] Selected provider: ${_selectedProvider}`)
+      }
+      this.unet = await ort.InferenceSession.create(buffer, {
+        executionProviders: [_selectedProvider],
+        graphOptimizationLevel: 'disabled',
+      })
+      // unetFp16 is already set from constructor options
+    } else {
+      this.unet = await loadOnnxModel(
+        this.modelRepo,
+        'unet/model.onnx',
+        (p) => reportProgress(p)
+      )
+    }
+    completedModels = stageOffset + 0.5
     reportProgress(0)
 
     console.log('[SD] UNet inputs:', this.unet.inputNames)
@@ -371,7 +491,7 @@ export class StableDiffusionPipeline {
       'vae_decoder/model.onnx',
       (p) => reportProgress(p)
     )
-    completedModels = 3
+    completedModels = stageOffset + 1
     reportProgress(0)
 
     console.log('[SD] VAE decoder inputs:', this.vaeDecoder.inputNames)
@@ -383,8 +503,8 @@ export class StableDiffusionPipeline {
       'vae_encoder/model.onnx',
       (p) => reportProgress(p)
     )
-    completedModels = 4
-    if (onProgress) onProgress(1, 4)
+    completedModels = totalModels
+    if (onProgress) onProgress(1, completedModels)
 
     console.log('[SD] VAE encoder inputs:', this.vaeEncoder.inputNames)
     console.log('[SD] VAE encoder outputs:', this.vaeEncoder.outputNames)
@@ -392,21 +512,30 @@ export class StableDiffusionPipeline {
     this.loaded = true
   }
 
-  async generate(prompt, options = {}) {
-    if (!this.loaded) throw new Error('Pipeline not loaded. Call load() first.')
+  /**
+   * Get text embeddings for a prompt, either from remote CLIP API or local ONNX text encoder.
+   * Returns an ort.Tensor with shape [1, 77, 768].
+   */
+  async getTextEmbeddings(prompt) {
+    if (this.clipApiUrl) {
+      // Remote CLIP API: send prompt, get back raw Float32 bytes [1, 77, 768]
+      console.log('[SD] Fetching embeddings from remote CLIP API...')
+      const res = await fetch(`${this.clipApiUrl}/encode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      })
+      if (!res.ok) {
+        throw new Error(`CLIP API error: ${res.status} ${res.statusText}`)
+      }
+      const buffer = await res.arrayBuffer()
+      const float32Data = new Float32Array(buffer)
+      const embDim = float32Data.length / 77 // auto-detect: 768 or 1024
+      console.log(`[SD] Remote embeddings received: ${float32Data.length} floats, dim=${embDim}`)
+      return new ort.Tensor('float32', float32Data, [1, 77, embDim])
+    }
 
-    const {
-      numSteps = 1,
-      width = 512,
-      height = 512,
-      onStep = null,
-    } = options
-
-    const latentHeight = height / 8
-    const latentWidth = width / 8
-    const latentChannels = 4
-
-    // 1. Tokenize
+    // Local: tokenize + run text encoder ONNX
     let inputIds
     if (this.tokenizer) {
       const encoded = await this.tokenizer(prompt, {
@@ -429,16 +558,34 @@ export class StableDiffusionPipeline {
       console.warn('[SD] Using fallback tokenizer')
     }
 
-    // 2. Text encoder
     const textInputTensor = new ort.Tensor('int32', inputIds, [1, 77])
     const textOutput = await this.textEncoder.run({ input_ids: textInputTensor })
     const textEmbeddings = Object.values(textOutput)[0]
     console.log('[SD] Text embeddings shape:', textEmbeddings.dims, 'dtype:', textEmbeddings.type)
+    return textEmbeddings
+  }
 
-    // 3. Generate initial noise
+  async generate(prompt, options = {}) {
+    if (!this.loaded) throw new Error('Pipeline not loaded. Call load() first.')
+
+    const {
+      numSteps = 1,
+      width = 512,
+      height = 512,
+      onStep = null,
+    } = options
+
+    const latentHeight = height / 8
+    const latentWidth = width / 8
+    const latentChannels = 4
+
+    // 1. Get text embeddings (remote CLIP API or local)
+    const textEmbeddings = await this.getTextEmbeddings(prompt)
+
+    // 2. Generate initial noise
     let latents = generateLatentNoise(1, latentChannels, latentHeight, latentWidth)
 
-    // 4. Compute timesteps and sigmas
+    // 3. Compute timesteps and sigmas
     const timesteps = getTimesteps(numSteps)
     const sigmas = timesteps.map(t => getSigma(t))
     sigmas.push(0) // final sigma = 0
@@ -467,20 +614,46 @@ export class StableDiffusionPipeline {
         scaledLatents[i] = latents[i] * scaleFactor
       }
 
-      const latentTensor = new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
+      const latentTensor = this.unetFp16
+        ? new ort.Tensor('float16', float32ArrayToFloat16(scaledLatents), [1, latentChannels, latentHeight, latentWidth])
+        : new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
       const timestepTensor = new ort.Tensor('int64', new BigInt64Array([BigInt(timestep)]), [1])
 
       console.log(`[SD] Step ${step + 1}/${numSteps}: timestep=${timestep}, sigma=${sigma.toFixed(4)}, sigmaNext=${sigmaNext.toFixed(4)}`)
 
+      // Convert encoder_hidden_states to float16 if UNet expects it
+      let hiddenStates = textEmbeddings
+      if (this.unetFp16 && textEmbeddings.type !== 'float16') {
+        hiddenStates = new ort.Tensor('float16', float32ArrayToFloat16(textEmbeddings.data), textEmbeddings.dims)
+      }
+
       const unetOutput = await this.unet.run({
         sample: latentTensor,
         timestep: timestepTensor,
-        encoder_hidden_states: textEmbeddings,
+        encoder_hidden_states: hiddenStates,
       })
-      const noisePred = Object.values(unetOutput)[0].data
+      const rawOutput = Object.values(unetOutput)[0]
+      console.log(`[SD] UNet output type: ${rawOutput.type}, dims: ${rawOutput.dims}, data length: ${rawOutput.data.length}`)
+      console.log(`[SD] UNet raw output sample (first 5):`, Array.from(rawOutput.data.slice(0, 5)))
+      // Handle float16 output: if data is Float16Array (browser native), just cast to Float32Array
+      // If data is Uint16Array (raw bits), use manual conversion
+      let noisePred
+      if (rawOutput.type === 'float16') {
+        const firstVal = rawOutput.data[0]
+        if (typeof firstVal === 'number' && (firstVal % 1 !== 0 || firstVal === 0)) {
+          // Float16Array — values are already floats, just copy to Float32Array
+          noisePred = Float32Array.from(rawOutput.data)
+        } else {
+          noisePred = float16ArrayToFloat32(rawOutput.data)
+        }
+      } else {
+        noisePred = rawOutput.data instanceof Float32Array ? rawOutput.data : new Float32Array(rawOutput.data)
+      }
+      console.log(`[SD] noisePred sample (first 5):`, Array.from(noisePred.slice(0, 5)))
 
       // Euler step
       latents = eulerStep(noisePred, latents, sigma, sigmaNext)
+      console.log(`[SD] latents after euler step (first 5):`, Array.from(latents.slice(0, 5)))
     }
 
     // 7. VAE decode — scale latents by 1/0.18215
@@ -488,13 +661,15 @@ export class StableDiffusionPipeline {
     for (let i = 0; i < latents.length; i++) {
       scaledLatents[i] = latents[i] / 0.18215
     }
+    console.log('[SD] VAE input (first 5):', Array.from(scaledLatents.slice(0, 5)))
 
     const latentTensor = new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
     const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
     const decodedData = Object.values(decoded)[0].data
 
     console.log('[SD] Decoded output shape:', Object.values(decoded)[0].dims)
-    console.log('[SD] Decoded values range:', Math.min(...decodedData.slice(0, 100)), 'to', Math.max(...decodedData.slice(0, 100)))
+    console.log('[SD] Decoded values (first 10):', Array.from(decodedData.slice(0, 10)))
+    console.log('[SD] Decoded range:', Math.min(...Array.from(decodedData.slice(0, 1000))), 'to', Math.max(...Array.from(decodedData.slice(0, 1000))))
 
     // 8. Convert to image
     return latentsToImage(decodedData, width, height)
@@ -599,33 +774,10 @@ export class StableDiffusionPipeline {
     console.log('[SD img2img] Encoding input image...')
     const imageLatents = await this.encodeImage(inputImage, width, height)
 
-    // 2. Tokenize
-    let inputIds
-    if (this.tokenizer) {
-      const encoded = await this.tokenizer(prompt, {
-        padding: 'max_length',
-        max_length: 77,
-        truncation: true,
-      })
-      let raw = encoded.input_ids
-      if (raw && raw.data) raw = raw.data
-      if (raw && raw.flat) raw = raw.flat()
-      const arr = new Int32Array(77)
-      for (let i = 0; i < 77 && i < raw.length; i++) {
-        arr[i] = Number(raw[i])
-      }
-      inputIds = arr
-    } else {
-      inputIds = new Int32Array(77).fill(49407)
-      inputIds[0] = 49406
-    }
+    // 2. Get text embeddings (remote CLIP API or local)
+    const textEmbeddings = await this.getTextEmbeddings(prompt)
 
-    // 3. Text encoder
-    const textInputTensor = new ort.Tensor('int32', inputIds, [1, 77])
-    const textOutput = await this.textEncoder.run({ input_ids: textInputTensor })
-    const textEmbeddings = Object.values(textOutput)[0]
-
-    // 4. Compute timesteps based on strength
+    // 3. Compute timesteps based on strength
     // For img2img, strength controls the noise level / starting timestep
     // strength=1.0 → max noise (like txt2img), strength=0.1 → minimal change
     // We pick a starting timestep proportional to strength, then denoise from there
@@ -682,17 +834,35 @@ export class StableDiffusionPipeline {
         scaledLatents[i] = currentLatents[i] * scaleFactor
       }
 
-      const latentTensor = new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
+      const latentTensor = this.unetFp16
+        ? new ort.Tensor('float16', float32ArrayToFloat16(scaledLatents), [1, latentChannels, latentHeight, latentWidth])
+        : new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
       const timestepTensor = new ort.Tensor('int64', new BigInt64Array([BigInt(timestep)]), [1])
 
       console.log(`[SD img2img] Step ${step + 1}/${actualSteps}: timestep=${timestep}, sigma=${sigma.toFixed(4)}, sigmaNext=${sigmaNext.toFixed(4)}`)
 
+      let hiddenStates = textEmbeddings
+      if (this.unetFp16 && textEmbeddings.type !== 'float16') {
+        hiddenStates = new ort.Tensor('float16', float32ArrayToFloat16(textEmbeddings.data), textEmbeddings.dims)
+      }
+
       const unetOutput = await this.unet.run({
         sample: latentTensor,
         timestep: timestepTensor,
-        encoder_hidden_states: textEmbeddings,
+        encoder_hidden_states: hiddenStates,
       })
-      const noisePred = Object.values(unetOutput)[0].data
+      const rawOutput = Object.values(unetOutput)[0]
+      let noisePred
+      if (rawOutput.type === 'float16') {
+        const firstVal = rawOutput.data[0]
+        if (typeof firstVal === 'number' && (firstVal % 1 !== 0 || firstVal === 0)) {
+          noisePred = Float32Array.from(rawOutput.data)
+        } else {
+          noisePred = float16ArrayToFloat32(rawOutput.data)
+        }
+      } else {
+        noisePred = rawOutput.data instanceof Float32Array ? rawOutput.data : new Float32Array(rawOutput.data)
+      }
 
       currentLatents = eulerStep(noisePred, currentLatents, sigma, sigmaNext)
     }

@@ -20,6 +20,8 @@ const generatedImage = ref(null)
 const modelLoaded = ref(false)
 const numSteps = ref(1)
 const generationTime = ref(null)
+const modelVariant = ref('standard') // 'standard', 'isometric-fp16', 'isometric-quantized'
+const useRemoteClip = ref(true) // use remote CLIP API to avoid downloading text encoder (~600MB saved)
 
 // img2img state
 const mode = ref('txt2img') // 'txt2img' or 'img2img'
@@ -73,12 +75,25 @@ const loadModel = async () => {
   loadStage.value = 'Starting...'
 
   try {
-    const { StableDiffusionPipeline } = await import('./utils/webgpuDiffusion.js')
-    pipeline = new StableDiffusionPipeline()
+    const { StableDiffusionPipeline, LOCAL_ISOMETRIC_UNET_URL, LOCAL_ISOMETRIC_QUANTIZED_UNET_URL, DEFAULT_CLIP_API_URL } = await import('./utils/webgpuDiffusion.js')
+    const pipelineOptions = {}
+    if (useRemoteClip.value) {
+      pipelineOptions.clipApiUrl = DEFAULT_CLIP_API_URL
+    }
+    if (modelVariant.value === 'isometric-fp16') {
+      pipelineOptions.unetUrl = LOCAL_ISOMETRIC_UNET_URL
+      pipelineOptions.unetFp16 = true
+    } else if (modelVariant.value === 'isometric-quantized') {
+      pipelineOptions.unetUrl = LOCAL_ISOMETRIC_QUANTIZED_UNET_URL
+      pipelineOptions.unetFp16 = false // quantized model uses FP32
+    }
+    pipeline = new StableDiffusionPipeline(pipelineOptions)
 
     await pipeline.load((progress, stage) => {
       loadProgress.value = progress
-      const stageNames = ['Tokenizer', 'Text Encoder', 'UNet', 'VAE Decoder', 'VAE Encoder']
+      const stageNames = pipeline.clipApiUrl
+        ? ['UNet', 'VAE Decoder', 'VAE Encoder']
+        : ['Tokenizer', 'Text Encoder', 'UNet', 'VAE Decoder', 'VAE Encoder']
       loadStage.value = stageNames[stage] || `Step ${stage + 1}`
       status.value = `Loading ${loadStage.value}... ${Math.round(progress * 100)}%`
     })
@@ -86,7 +101,9 @@ const loadModel = async () => {
     const { getSelectedProvider } = await import('./utils/webgpuDiffusion.js')
     backendProvider.value = getSelectedProvider()
     modelLoaded.value = true
-    status.value = `Model loaded (${backendProvider.value.toUpperCase()} backend)! Enter a prompt and click Generate.`
+    const variantNames = { 'standard': 'Standard', 'isometric-fp16': 'Isometric FP16', 'isometric-quantized': 'Isometric INT8' }
+    const modelName = variantNames[modelVariant.value] || 'Standard'
+    status.value = `${modelName} model loaded (${backendProvider.value.toUpperCase()} backend)! Enter a prompt and click Generate.`
     statusType.value = 'success'
   } catch (e) {
     const msg = e?.message || e?.toString?.() || JSON.stringify(e) || 'Unknown error'
@@ -355,7 +372,33 @@ const clearCache = async () => {
           <div class="model-info">
             <h3>SD Turbo (ONNX WebGPU)</h3>
             <p>Single-step Stable Diffusion model optimized for browser inference.</p>
-            <p class="note">First load downloads ~2 GB of model files. Subsequent loads use cached data.</p>
+            <p class="note">First load downloads {{ useRemoteClip ? '~1.4 GB' : '~2 GB' }} of model files. Subsequent loads use cached data.{{ useRemoteClip ? ' Text encoder runs on remote server.' : '' }}</p>
+            <!-- Model variant selector -->
+            <div class="model-variant-toggle">
+              <label class="variant-radio">
+                <input type="radio" value="standard" v-model="modelVariant" :disabled="isLoading" />
+                <span class="variant-text">Standard</span>
+                <span class="variant-hint">(original SD Turbo)</span>
+              </label>
+              <label class="variant-radio">
+                <input type="radio" value="isometric-fp16" v-model="modelVariant" :disabled="isLoading" />
+                <span class="variant-text">Isometric FP16</span>
+                <span class="variant-hint">(merged LoRA, ~1.65 GB UNet)</span>
+              </label>
+              <label class="variant-radio">
+                <input type="radio" value="isometric-quantized" v-model="modelVariant" :disabled="isLoading" />
+                <span class="variant-text">Isometric INT8</span>
+                <span class="variant-hint">(quantized, ~0.83 GB UNet)</span>
+              </label>
+            </div>
+            <!-- Remote CLIP toggle -->
+            <div class="clip-toggle">
+              <label class="variant-radio">
+                <input type="checkbox" v-model="useRemoteClip" :disabled="isLoading" />
+                <span class="variant-text">Remote Text Encoder</span>
+                <span class="variant-hint">(saves ~600 MB download, uses server API)</span>
+              </label>
+            </div>
             <button class="action-btn secondary clear-cache-btn" @click="clearCache">Clear Model Cache</button>
           </div>
 
@@ -683,6 +726,56 @@ const clearCache = async () => {
 .model-info .note {
   color: rgba(255,193,7,0.8);
   font-size: 0.75rem;
+}
+
+.model-variant-toggle {
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.6rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.variant-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.2rem 0;
+}
+
+.variant-radio input[type="radio"] {
+  accent-color: #76b852;
+  width: 14px;
+  height: 14px;
+}
+
+.variant-text {
+  color: #fff;
+  font-weight: 600;
+}
+
+.variant-hint {
+  color: rgba(255,255,255,0.4);
+  font-size: 0.7rem;
+}
+
+.clip-toggle {
+  margin: 0.3rem 0;
+  padding: 0.3rem 0.6rem;
+  background: rgba(118, 184, 82, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(118, 184, 82, 0.2);
+}
+
+.clip-toggle input[type="checkbox"] {
+  accent-color: #76b852;
+  width: 14px;
+  height: 14px;
 }
 
 /* Action buttons */

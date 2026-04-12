@@ -36,7 +36,9 @@ Thumbs.db
 *.ckpt
 *.pth
 *.bin
+*.onnx
 sd-backend/lora_models/*.safetensors
+sd-backend/lora_extraction/
 
 # Vygenerované obrázky
 sd-app/public/generated/
