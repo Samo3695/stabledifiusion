@@ -237,7 +237,7 @@ const removeBackground = () => {
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
     const data = imageData.data
     for (let i = 0; i < data.length; i += 4) {
-      if (data[i] <= 10 && data[i + 1] <= 10 && data[i + 2] <= 10) {
+      if (data[i] <= 12 && data[i + 1] <= 16 && data[i + 2] <= 19) {
         data[i + 3] = 0
       }
     }
