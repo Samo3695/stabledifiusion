@@ -1,7 +1,13 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import PhaserCanvas from './components/PhaserCanvas.vue'
+import BuildingSelector from './components/BuildingSelector.vue'
+import Modal from './components/Modal.vue'
+import { loadProject } from './utils/projectLoader.js'
+import { buildRoad } from './utils/roadBuilder.js'
+
+const BASE_URL = import.meta.env.BASE_URL
 
 const router = useRouter()
 
@@ -28,7 +34,7 @@ const mode = ref('txt2img') // 'txt2img' or 'img2img'
 const inputImage = ref(null) // data URL for preview
 const inputImageEl = ref(null) // HTMLImageElement for pipeline
 const inputImageSize = ref(null) // { width, height } of original image
-const strength = ref(0.7)
+const strength = ref(0.85)
 
 // Phaser canvas state
 const canvasRef = ref(null)
@@ -37,6 +43,206 @@ const images = ref([]) // generated images gallery
 const selectedImageId = ref(null)
 const panelCollapsed = ref(false)
 const buildingSize = ref(1) // 1=1x1, 2=2x2, 3=3x3, 4=4x4, 5=5x5
+const genWidth = ref(512)
+const genHeight = ref(512)
+
+// Project loading state
+const isProjectLoading = ref(false)
+const projectLoadProgress = ref(0)
+const projectLoadStatus = ref('')
+
+// Left panel - buildings & tools
+const leftPanelCollapsed = ref(false)
+const projectImages = ref([]) // all images from loaded project
+const selectedBuildingId = ref(null)
+const roadBuildingMode = ref(false)
+const roadDeleteMode = ref(false)
+const deleteMode = ref(false)
+const recycleMode = ref(false)
+const roadTiles = ref([])
+
+// === STAVANIE NOVEJ ŠTVRTE (New District Building) ===
+// Flow: 1) User picks generator type+size (e.g. House 2x2)
+//       2) Enters buildingPlacementMode → draws NxN path on canvas (orange)
+//       3) After path drawn → right panel auto-fills (img2img + template + prompt)
+//       4) User clicks Generate in right panel
+//       5) User clicks "Place on N tiles" → building placed on every path tile
+const expandedGenerator = ref(null) // null, 'house', 'shop', 'factory'
+const selectedGeneratorSize = ref(null) // { type, size }
+const buildingPlacementMode = ref(false)
+const buildingPath = ref([]) // path drawn on canvas for building placement
+
+// Building generator config: templates and prompts per type+size
+const buildingConfigs = {
+  house: {
+    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, simple two-story family house' },
+    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, four-story apartment building' },
+    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large residential complex' },
+    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, tall residential tower' },
+    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, massive residential skyscraper' },
+  },
+  shop: {
+    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, small corner shop' },
+    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, shopping center' },
+    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large shopping mall' },
+    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, mega shopping complex' },
+    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, giant commercial plaza' },
+  },
+  factory: {
+    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, small workshop factory' },
+    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, industrial factory building' },
+    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large manufacturing plant' },
+    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, heavy industrial complex' },
+    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, mega industrial zone' },
+  }
+}
+
+// Generator modal state
+const showGeneratorModal = ref(false)
+const generatorModalType = ref(null) // 'house', 'shop', 'factory'
+const generatorModalSize = ref(1)
+const generatorTemplates = ref([]) // [{name, url}]
+const selectedTemplateIndex = ref(0)
+const generatorPrompt = ref('')
+const generatorIsGenerating = ref(false)
+const generatorResult = ref(null) // data URL of generated image
+const generatorStatus = ref('')
+const tempBuildingSpriteUrl = ref(null)
+
+const toggleGenerator = (type) => {
+  expandedGenerator.value = expandedGenerator.value === type ? null : type
+}
+
+const selectGeneratorSize = (type, size) => {
+  selectedGeneratorSize.value = { type, size }
+  // Enter building placement draw mode instead of opening modal immediately
+  buildingPlacementMode.value = true
+  roadBuildingMode.value = false
+  roadDeleteMode.value = false
+  deleteMode.value = false
+  recycleMode.value = false
+  selectedBuildingId.value = null
+  selectedImageId.value = null
+}
+
+const openGeneratorModal = (type, size) => {
+  generatorModalType.value = type
+  generatorModalSize.value = size
+  generatorResult.value = null
+  generatorStatus.value = ''
+  generatorIsGenerating.value = false
+
+  const config = buildingConfigs[type]?.[size]
+  if (config) {
+    generatorPrompt.value = config.prompt
+    generatorTemplates.value = config.templates.map(name => ({
+      name,
+      url: BASE_URL + 'templates/buildings/' + name + '.png'
+    }))
+    selectedTemplateIndex.value = 0
+  }
+  showGeneratorModal.value = true
+}
+
+const closeGeneratorModal = () => {
+  showGeneratorModal.value = false
+  generatorResult.value = null
+}
+
+const generateBuilding = async () => {
+  if (!pipeline) {
+    generatorStatus.value = 'Model not loaded. Load a model first from the right panel.'
+    return
+  }
+  const template = generatorTemplates.value[selectedTemplateIndex.value]
+  if (!template) return
+
+  generatorIsGenerating.value = true
+  generatorResult.value = null
+  generatorStatus.value = 'Generating...'
+
+  try {
+    // Load template image as HTMLImageElement for img2img
+    const templateImg = await new Promise((resolve, reject) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => resolve(img)
+      img.onerror = () => reject(new Error('Failed to load template image'))
+      img.src = template.url
+    })
+
+    // Use template image dimensions for generation
+    const genW = templateImg.naturalWidth || 512
+    const genH = templateImg.naturalHeight || 512
+
+    const imageDataUrl = await pipeline.generateImg2Img(generatorPrompt.value, templateImg, {
+      numSteps: numSteps.value,
+      strength: 0.7,
+      width: genW,
+      height: genH,
+      onStep: (step, total) => {
+        generatorStatus.value = `Denoising step ${step + 1}/${total}...`
+      }
+    })
+
+    // Remove black background
+    const cleanedUrl = await removeBgFromDataUrl(imageDataUrl)
+    generatorResult.value = cleanedUrl
+    generatorStatus.value = 'Done! Click Build to place on canvas.'
+  } catch (e) {
+    generatorStatus.value = `Generation failed: ${e.message}`
+    console.error('Generator error:', e)
+  } finally {
+    generatorIsGenerating.value = false
+  }
+}
+
+// Remove background helper (returns promise with cleaned data URL)
+const removeBgFromDataUrl = (dataUrl) => {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width
+      canvas.height = img.height
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0)
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imageData.data
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] <= 12 && data[i + 1] <= 16 && data[i + 2] <= 19) {
+          data[i + 3] = 0
+        }
+      }
+      ctx.putImageData(imageData, 0, 0)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.src = dataUrl
+  })
+}
+
+const buildGeneratedBuilding = () => {
+  if (!generatorResult.value || !canvasRef.value) return
+  const size = generatorModalSize.value
+  const anchors = buildingPath.value
+  if (anchors.length > 0) {
+    // Place one image per NxN block anchor
+    for (const cell of anchors) {
+      canvasRef.value.placeImageAtCell(cell.row, cell.col, generatorResult.value, size, size, false)
+    }
+    buildingPath.value = []
+  } else if (selectedCell.value.row !== -1) {
+    canvasRef.value.placeImageAtSelectedCell(generatorResult.value, size, size, false)
+  }
+  closeGeneratorModal()
+}
+
+// Computed buildings from project images
+const buildings = computed(() => {
+  return projectImages.value
+    .filter(img => img.buildingData?.isBuilding === true)
+    .sort((a, b) => (a.buildingData?.buildingOrder ?? 9999) - (b.buildingData?.buildingOrder ?? 9999))
+})
 
 // Pipeline instance
 let pipeline = null
@@ -58,6 +264,58 @@ onMounted(async () => {
     status.value = result.reason
     statusType.value = 'error'
   }
+
+  // Auto-load default project (begin.json)
+  setTimeout(async () => {
+    try {
+      isProjectLoading.value = true
+      projectLoadStatus.value = 'Loading map...'
+      const response = await fetch(BASE_URL + 'templates/all/begin.json')
+      if (!response.ok) throw new Error('Failed to load begin.json')
+      const projectData = await response.json()
+      const loadedData = await loadProject(
+        projectData,
+        canvasRef.value,
+        (progress, status) => {
+          projectLoadProgress.value = progress
+          projectLoadStatus.value = status
+        }
+      )
+      // Load images/buildings from project
+      const loadedImages = projectData.images || []
+      images.value = loadedImages.map(img => ({
+        id: img.id || `gen-${Date.now()}-${Math.random()}`,
+        url: img.url,
+        prompt: img.prompt || '',
+        date: img.date || new Date().toISOString(),
+        cellsX: img.cellsX || 1,
+        cellsY: img.cellsY || 1,
+        genWidth: img.genWidth || 512,
+        genHeight: img.genHeight || 512,
+        strength: img.strength || 0.85,
+        mode: img.mode || 'txt2img',
+        generatorType: img.generatorType || null,
+        templateName: img.templateName || null,
+        numSteps: img.numSteps || 1,
+        buildingData: img.buildingData || null
+      }))
+      projectImages.value = loadedImages.filter(img => img.buildingData?.isBuilding).map(img => ({
+        id: img.id || Date.now().toString() + Math.random(),
+        url: img.url,
+        prompt: img.prompt || '',
+        cellsX: img.cellsX || 1,
+        cellsY: img.cellsY || 1,
+        buildingData: img.buildingData || null
+      }))
+      roadTiles.value = loadedData.roadTiles || []
+      tempBuildingSpriteUrl.value = loadedData.tempBuildingSpriteUrl || null
+      console.log('✅ LocalModel: Default project loaded')
+    } catch (error) {
+      console.error('Failed to load default project:', error)
+    } finally {
+      isProjectLoading.value = false
+    }
+  }, 500)
 })
 
 onUnmounted(async () => {
@@ -75,17 +333,20 @@ const loadModel = async () => {
   loadStage.value = 'Starting...'
 
   try {
-    const { StableDiffusionPipeline, LOCAL_ISOMETRIC_UNET_URL, LOCAL_ISOMETRIC_QUANTIZED_UNET_URL, DEFAULT_CLIP_API_URL } = await import('./utils/webgpuDiffusion.js')
+    const { StableDiffusionPipeline, ISOMETRIC_UNET_URL, ISOMETRIC_QUANTIZED_UNET_URL, DEFAULT_CLIP_API_URL, isLocal } = await import('./utils/webgpuDiffusion.js')
     const pipelineOptions = {}
     if (useRemoteClip.value) {
       pipelineOptions.clipApiUrl = DEFAULT_CLIP_API_URL
     }
     if (modelVariant.value === 'isometric-fp16') {
-      pipelineOptions.unetUrl = LOCAL_ISOMETRIC_UNET_URL
+      pipelineOptions.unetUrl = ISOMETRIC_UNET_URL
       pipelineOptions.unetFp16 = true
     } else if (modelVariant.value === 'isometric-quantized') {
-      pipelineOptions.unetUrl = LOCAL_ISOMETRIC_QUANTIZED_UNET_URL
+      pipelineOptions.unetUrl = ISOMETRIC_QUANTIZED_UNET_URL
       pipelineOptions.unetFp16 = false // quantized model uses FP32
+    }
+    if (isLocal) {
+      console.log('[SD] Running locally — using local ONNX model servers')
     }
     pipeline = new StableDiffusionPipeline(pipelineOptions)
 
@@ -135,21 +396,21 @@ const generate = async () => {
       imageDataUrl = await pipeline.generateImg2Img(prompt.value, inputImageEl.value, {
         numSteps: numSteps.value,
         strength: strength.value,
-        width: 512,
-        height: 512,
+        width: genWidth.value,
+        height: genHeight.value,
         onStep: (step, total) => {
           status.value = `Denoising step ${step + 1}/${total}...`
         }
       })
       // Resize output to match input image dimensions
-      if (inputImageSize.value && (inputImageSize.value.width !== 512 || inputImageSize.value.height !== 512)) {
+      if (inputImageSize.value && (inputImageSize.value.width !== genWidth.value || inputImageSize.value.height !== genHeight.value)) {
         imageDataUrl = await resizeDataUrl(imageDataUrl, inputImageSize.value.width, inputImageSize.value.height)
       }
     } else {
       imageDataUrl = await pipeline.generate(prompt.value, {
         numSteps: numSteps.value,
-        width: 512,
-        height: 512,
+        width: genWidth.value,
+        height: genHeight.value,
         onStep: (step, total) => {
           status.value = `Denoising step ${step + 1}/${total}...`
         }
@@ -263,9 +524,62 @@ const handleImagePlaced = ({ row, col }) => {
   console.log(`Image placed at [${row}, ${col}]`)
 }
 
+const handleRoadPlaced = ({ path }) => {
+  buildRoad(canvasRef.value, roadTiles.value, path)
+}
+
+const handleBuildingPathPlaced = ({ path, anchors }) => {
+  buildingPath.value = anchors || path
+  buildingPlacementMode.value = false
+  // Pre-fill right panel with template image + prompt instead of modal
+  if (selectedGeneratorSize.value) {
+    const { type, size } = selectedGeneratorSize.value
+    const config = buildingConfigs[type]?.[size]
+    if (config) {
+      // Set building size
+      buildingSize.value = size
+      // Set prompt
+      prompt.value = config.prompt
+      // Switch to img2img mode
+      mode.value = 'img2img'
+      // Load first template as input image
+      const templateUrl = BASE_URL + 'templates/buildings/' + config.templates[0] + '.png'
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        // Convert to data URL for the preview
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0)
+        inputImage.value = canvas.toDataURL('image/png')
+        inputImageEl.value = img
+        inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
+      }
+      img.src = templateUrl
+      // Open the right panel
+      panelCollapsed.value = false
+    }
+  }
+}
+
 const placeOnGrid = () => {
-  if (!generatedImage.value || !canvasRef.value || selectedCell.value.row === -1) return
-  canvasRef.value.placeImageAtSelectedCell(generatedImage.value, buildingSize.value, buildingSize.value, false)
+  if (!generatedImage.value || !canvasRef.value) return
+  const anchors = buildingPath.value
+  if (anchors.length > 0) {
+    // Place one image per NxN block anchor (top-left corner)
+    for (const cell of anchors) {
+      canvasRef.value.placeImageAtCell(cell.row, cell.col, generatedImage.value, buildingSize.value, buildingSize.value, false)
+    }
+    buildingPath.value = []
+  } else if (selectedCell.value.row !== -1) {
+    canvasRef.value.placeImageAtSelectedCell(generatedImage.value, buildingSize.value, buildingSize.value, false)
+  }
+  // Reset generator state
+  expandedGenerator.value = null
+  selectedGeneratorSize.value = null
+  buildingPlacementMode.value = false
 }
 
 const addToGallery = () => {
@@ -275,9 +589,16 @@ const addToGallery = () => {
     id,
     url: generatedImage.value,
     prompt: prompt.value,
-    date: new Date(),
+    date: new Date().toISOString(),
     cellsX: buildingSize.value,
-    cellsY: buildingSize.value
+    cellsY: buildingSize.value,
+    genWidth: genWidth.value,
+    genHeight: genHeight.value,
+    strength: strength.value,
+    mode: mode.value,
+    generatorType: selectedGeneratorSize.value?.type || null,
+    templateName: inputImage.value ? 'custom' : null,
+    numSteps: numSteps.value
   })
   selectedImageId.value = id
 }
@@ -298,6 +619,67 @@ const deleteGalleryImage = (id) => {
 
 const goHome = () => router.push('/')
 
+// Building selection handler
+const handleBuildingSelected = (data) => {
+  if (data === null) {
+    selectedBuildingId.value = null
+    return
+  }
+  const { building, cellsX, cellsY } = data
+  selectedBuildingId.value = building.id
+  selectedImageId.value = building.id
+  buildingSize.value = cellsX
+  roadBuildingMode.value = false
+  roadDeleteMode.value = false
+  deleteMode.value = false
+  recycleMode.value = false
+  buildingPlacementMode.value = false
+  expandedGenerator.value = null
+  selectedGeneratorSize.value = null
+}
+
+// Road/delete mode toggles
+const handleRoadModeToggled = (isEnabled) => {
+  roadBuildingMode.value = isEnabled
+  if (isEnabled) {
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    roadDeleteMode.value = false
+    recycleMode.value = false
+    deleteMode.value = false
+    buildingPlacementMode.value = false
+    expandedGenerator.value = null
+    selectedGeneratorSize.value = null
+  }
+}
+
+const handleRoadDeleteModeToggled = (isEnabled) => {
+  roadDeleteMode.value = isEnabled
+  if (isEnabled) {
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    roadBuildingMode.value = false
+    recycleMode.value = false
+    buildingPlacementMode.value = false
+    expandedGenerator.value = null
+    selectedGeneratorSize.value = null
+  }
+}
+
+const handleRecycleModeToggled = (isEnabled) => {
+  recycleMode.value = isEnabled
+  if (isEnabled) {
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    roadBuildingMode.value = false
+    roadDeleteMode.value = false
+    deleteMode.value = false
+    buildingPlacementMode.value = false
+    expandedGenerator.value = null
+    selectedGeneratorSize.value = null
+  }
+}
+
 const clearCache = async () => {
   try {
     const dbs = await indexedDB.databases()
@@ -313,6 +695,194 @@ const clearCache = async () => {
     statusType.value = 'error'
   }
 }
+
+// === Save / Load project JSON ===
+const saveProjectJSON = async () => {
+  const placedImages = {}
+  const uniqueImages = new Map()
+  let imageIdCounter = 1
+
+  if (canvasRef.value && typeof canvasRef.value.cellImages === 'function') {
+    const cellImagesData = canvasRef.value.cellImages()
+    Object.entries(cellImagesData).forEach(([key, imageData]) => {
+      if (imageData.isSecondary) return
+      if (imageData.isBackground) return
+      const [row, col] = key.split('-').map(Number)
+
+      if (imageData.isRoadTile && imageData.tileMetadata) {
+        placedImages[key] = {
+          row, col,
+          cellsX: imageData.cellsX || 1, cellsY: imageData.cellsY || 1,
+          isBackground: false, isRoadTile: true,
+          templateName: imageData.templateName || '',
+          tileMetadata: imageData.tileMetadata,
+          buildingData: imageData.buildingData || null
+        }
+        return
+      }
+
+      const url = imageData.url
+      let imageId
+      if (uniqueImages.has(url)) {
+        imageId = uniqueImages.get(url)
+      } else {
+        imageId = `img_${imageIdCounter++}`
+        uniqueImages.set(url, imageId)
+      }
+      placedImages[key] = {
+        row, col, imageId,
+        libraryImageId: imageData.libraryImageId || null,
+        cellsX: imageData.cellsX || 1, cellsY: imageData.cellsY || 1,
+        isBackground: false, isRoadTile: false,
+        templateName: imageData.templateName || '',
+        tileMetadata: imageData.tileMetadata || null,
+        buildingData: imageData.buildingData || null
+      }
+    })
+  }
+
+  const imageLibrary = []
+  uniqueImages.forEach((id, url) => {
+    imageLibrary.push({ id, url })
+  })
+
+  const bgTiles = (canvasRef.value && typeof canvasRef.value.backgroundTiles === 'function')
+    ? canvasRef.value.backgroundTiles()
+    : []
+
+  const saveData = {
+    version: '1.9',
+    source: 'local-model',
+    timestamp: new Date().toISOString(),
+    imageCount: images.value.length,
+    placedImageCount: Object.keys(placedImages).length,
+    uniqueImageCount: imageLibrary.length,
+    images: images.value.map(img => ({
+      id: img.id,
+      url: img.url,
+      prompt: img.prompt || '',
+      cellsX: img.cellsX || 1,
+      cellsY: img.cellsY || 1,
+      date: img.date || new Date().toISOString(),
+      genWidth: img.genWidth || 512,
+      genHeight: img.genHeight || 512,
+      strength: img.strength || 0.85,
+      mode: img.mode || 'txt2img',
+      generatorType: img.generatorType || null,
+      templateName: img.templateName || null,
+      numSteps: img.numSteps || 1,
+      buildingData: img.buildingData || null
+    })),
+    imageLibrary,
+    placedImages,
+    backgroundTiles: bgTiles,
+    roadSpriteUrl: roadTiles.value.length > 0 ? (BASE_URL + 'templates/roads/sprites/presentroad.png') : null,
+    tempBuildingSpriteUrl: tempBuildingSpriteUrl.value
+  }
+
+  const jsonString = JSON.stringify(saveData, null, 2)
+  const blob = new Blob([jsonString], { type: 'application/json' })
+  const filename = `local-model-${Date.now()}.json`
+
+  // Moderný File System Access API - natívny save dialog, Chrome ho neblokuje
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+      })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      console.log('💾 Project saved via File System API')
+      return
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      console.warn('File System API failed, fallback to download link:', err)
+    }
+  }
+
+  // Fallback pre staršie prehliadače
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  console.log('💾 Project saved')
+}
+
+const loadProjectJSON = () => {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.json'
+  input.onchange = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const projectData = JSON.parse(text)
+
+      isProjectLoading.value = true
+      projectLoadStatus.value = 'Loading project...'
+
+      // Clear canvas first
+      if (canvasRef.value && typeof canvasRef.value.clearAllImages === 'function') {
+        canvasRef.value.clearAllImages()
+      }
+
+      const loadedData = await loadProject(
+        projectData,
+        canvasRef.value,
+        (progress, statusText) => {
+          projectLoadProgress.value = progress
+          projectLoadStatus.value = statusText
+        }
+      )
+
+      // Load gallery images with metadata
+      const loadedImages = projectData.images || []
+      images.value = loadedImages.map(img => ({
+        id: img.id || `gen-${Date.now()}-${Math.random()}`,
+        url: img.url,
+        prompt: img.prompt || '',
+        date: img.date || new Date().toISOString(),
+        cellsX: img.cellsX || 1,
+        cellsY: img.cellsY || 1,
+        genWidth: img.genWidth || 512,
+        genHeight: img.genHeight || 512,
+        strength: img.strength || 0.85,
+        mode: img.mode || 'txt2img',
+        generatorType: img.generatorType || null,
+        templateName: img.templateName || null,
+        numSteps: img.numSteps || 1,
+        buildingData: img.buildingData || null
+      }))
+
+      // Load project images for BuildingSelector
+      projectImages.value = loadedImages.filter(img => img.buildingData?.isBuilding).map(img => ({
+        id: img.id,
+        url: img.url,
+        prompt: img.prompt || '',
+        cellsX: img.cellsX || 1,
+        cellsY: img.cellsY || 1,
+        buildingData: img.buildingData || null
+      }))
+
+      roadTiles.value = loadedData.roadTiles || []
+      tempBuildingSpriteUrl.value = loadedData.tempBuildingSpriteUrl || null
+      console.log('📂 Project loaded from file')
+    } catch (err) {
+      console.error('Failed to load project:', err)
+      alert('Failed to load project: ' + (err.message || err))
+    } finally {
+      isProjectLoading.value = false
+    }
+  }
+  input.click()
+}
 </script>
 
 <template>
@@ -320,22 +890,224 @@ const clearCache = async () => {
     <!-- Full Phaser Canvas Background -->
     <PhaserCanvas
       ref="canvasRef"
-      :images="[]"
-      selectedImageId="local-placer"
+      :images="projectImages"
+      :selectedImageId="selectedBuildingId || 'local-placer'"
       :lastImageCellsX="buildingSize"
       :lastImageCellsY="buildingSize"
       :showNumbering="false"
       :showGallery="false"
       :showGrid="true"
-      :deleteMode="false"
-      :roadBuildingMode="false"
-      :roadDeleteMode="false"
-      :recycleMode="false"
+      :deleteMode="deleteMode"
+      :roadBuildingMode="roadBuildingMode"
+      :roadDeleteMode="roadDeleteMode"
+      :recycleMode="recycleMode"
+      :roadTiles="roadTiles"
+      :buildingPlacementMode="buildingPlacementMode"
+      :buildingPlacementSize="selectedGeneratorSize?.size || 1"
       :showPerson="false"
       :isFullscreen="false"
       @cell-selected="handleCellSelected"
       @image-placed="handleImagePlaced"
+      @road-placed="handleRoadPlaced"
+      @building-path-placed="handleBuildingPathPlaced"
     />
+
+    <!-- Left Panel - Buildings & Tools -->
+    <div class="left-panel" :class="{ collapsed: leftPanelCollapsed }">
+      <div class="panel-content" v-show="!leftPanelCollapsed">
+        <BuildingSelector
+          :buildings="buildings"
+          :selectedBuildingId="selectedBuildingId"
+          @building-selected="handleBuildingSelected"
+        />
+
+        <!-- Road & Delete Toolbar -->
+        <div class="tools-toolbar">
+          <button
+            :class="['tool-btn', { active: roadBuildingMode }]"
+            @click="handleRoadModeToggled(!roadBuildingMode)"
+            title="Build Road"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12h18M3 6h18M3 18h18"/>
+              <circle cx="7" cy="12" r="1" fill="currentColor"/>
+              <circle cx="12" cy="12" r="1" fill="currentColor"/>
+              <circle cx="17" cy="12" r="1" fill="currentColor"/>
+            </svg>
+            <span>Road</span>
+          </button>
+
+          <button
+            :class="['tool-btn recycle', { active: recycleMode }]"
+            @click="handleRecycleModeToggled(!recycleMode)"
+            title="Recycle building - returns resources"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/>
+              <path d="M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12"/>
+              <path d="m14 16-3 3 3 3"/>
+              <path d="M8.293 13.596 4.875 7.97l.927-.535 2.862 4.7"/>
+              <path d="M17.5 9.5 14.23 3.804a1.784 1.784 0 0 0-1.573-.886 1.83 1.83 0 0 0-1.557.89L9.875 6.03"/>
+              <path d="m9.5 4.5 1-3.5 3.5 1"/>
+              <path d="m17.5 9.5 3.5-1-1-3.5"/>
+            </svg>
+            <span>Recycle</span>
+          </button>
+
+          <button
+            :class="['tool-btn remove', { active: roadDeleteMode }]"
+            @click="handleRoadDeleteModeToggled(!roadDeleteMode)"
+            title="Delete buildings &amp; roads"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 6h18"/>
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+              <line x1="10" y1="11" x2="10" y2="17"/>
+              <line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
+            <span>Delete</span>
+          </button>
+        </div>
+
+        <!-- Generator Buttons -->
+        <div class="generator-section">
+          <!-- House -->
+          <div class="generator-group">
+            <button
+              :class="['generator-btn', { active: expandedGenerator === 'house' }]"
+              @click="toggleGenerator('house')"
+              title="House"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                <polyline points="9 22 9 12 15 12 15 22"/>
+              </svg>
+              <span>House</span>
+            </button>
+            <div v-if="expandedGenerator === 'house'" class="size-picker">
+              <button
+                v-for="s in [1,2,3,4,5]"
+                :key="s"
+                :class="['size-pick-btn', { active: selectedGeneratorSize?.type === 'house' && selectedGeneratorSize?.size === s }]"
+                @click="selectGeneratorSize('house', s)"
+              >{{ s }}&times;{{ s }}</button>
+            </div>
+          </div>
+
+          <!-- Shop -->
+          <div class="generator-group">
+            <button
+              :class="['generator-btn', { active: expandedGenerator === 'shop' }]"
+              @click="toggleGenerator('shop')"
+              title="Shop"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 3h18v4H3z"/>
+                <path d="M3 7v13a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V7"/>
+                <path d="M9 21V11h6v10"/>
+                <path d="M3 7l2-4h14l2 4"/>
+              </svg>
+              <span>Shop</span>
+            </button>
+            <div v-if="expandedGenerator === 'shop'" class="size-picker">
+              <button
+                v-for="s in [1,2,3,4,5]"
+                :key="s"
+                :class="['size-pick-btn', { active: selectedGeneratorSize?.type === 'shop' && selectedGeneratorSize?.size === s }]"
+                @click="selectGeneratorSize('shop', s)"
+              >{{ s }}&times;{{ s }}</button>
+            </div>
+          </div>
+
+          <!-- Factory -->
+          <div class="generator-group">
+            <button
+              :class="['generator-btn', { active: expandedGenerator === 'factory' }]"
+              @click="toggleGenerator('factory')"
+              title="Factory"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 20h20V8l-6 4V8l-6 4V4H2z"/>
+                <rect x="17" y="2" width="3" height="4" rx="0.5"/>
+                <rect x="12" y="1" width="2" height="5" rx="0.5"/>
+              </svg>
+              <span>Factory</span>
+            </button>
+            <div v-if="expandedGenerator === 'factory'" class="size-picker">
+              <button
+                v-for="s in [1,2,3,4,5]"
+                :key="s"
+                :class="['size-pick-btn', { active: selectedGeneratorSize?.type === 'factory' && selectedGeneratorSize?.size === s }]"
+                @click="selectGeneratorSize('factory', s)"
+              >{{ s }}&times;{{ s }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel-toggle-left" @click="leftPanelCollapsed = !leftPanelCollapsed">
+        <span v-if="leftPanelCollapsed">&#9654;</span>
+        <span v-else>&#9664;</span>
+      </div>
+    </div>
+
+    <!-- Building Generator Modal -->
+    <Modal v-if="showGeneratorModal" :title="`Create ${generatorModalType} (${generatorModalSize}x${generatorModalSize})`" width="500px" @close="closeGeneratorModal">
+      <div class="gen-modal">
+        <!-- Template Picker -->
+        <div class="gen-modal-section">
+          <label class="gen-label">Template</label>
+          <div class="template-picker">
+            <div
+              v-for="(tpl, idx) in generatorTemplates"
+              :key="tpl.name"
+              :class="['template-thumb', { selected: selectedTemplateIndex === idx }]"
+              @click="selectedTemplateIndex = idx"
+            >
+              <img :src="tpl.url" :alt="tpl.name" />
+              <span class="template-name">{{ tpl.name }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Prompt -->
+        <div class="gen-modal-section">
+          <label class="gen-label">Prompt</label>
+          <textarea v-model="generatorPrompt" rows="2" class="gen-textarea" placeholder="Describe the building..."></textarea>
+        </div>
+
+        <!-- Status -->
+        <div v-if="generatorStatus" class="gen-status">{{ generatorStatus }}</div>
+
+        <!-- Generate Button -->
+        <button
+          class="gen-modal-btn create-btn"
+          @click="generateBuilding"
+          :disabled="generatorIsGenerating || !pipeline"
+        >
+          {{ generatorIsGenerating ? 'Generating...' : !pipeline ? 'Load model first' : 'Create Building' }}
+        </button>
+
+        <!-- Generating spinner -->
+        <div v-if="generatorIsGenerating" class="gen-spinner-wrap">
+          <div class="spinner"></div>
+        </div>
+
+        <!-- Result Preview -->
+        <div v-if="generatorResult" class="gen-result">
+          <div class="gen-preview">
+            <img :src="generatorResult" alt="Generated building" />
+          </div>
+          <button
+            class="gen-modal-btn build-btn"
+            @click="buildGeneratedBuilding"
+            :disabled="buildingPath.length === 0 && selectedCell.row === -1"
+          >
+            {{ buildingPath.length > 0 ? `Build on ${buildingPath.length} tiles` : selectedCell.row !== -1 ? 'Build' : 'Select a cell first' }}
+          </button>
+        </div>
+      </div>
+    </Modal>
 
     <!-- Floating Control Panel -->
     <div class="control-panel" :class="{ collapsed: panelCollapsed }">
@@ -349,6 +1121,14 @@ const clearCache = async () => {
         <div class="header">
           <button class="back-btn" @click="goHome" title="Back to Home">&larr;</button>
           <h1>Local Model <span class="badge">WebGPU</span></h1>
+          <div class="header-actions">
+            <button class="header-icon-btn" @click="saveProjectJSON" title="Save Project">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            </button>
+            <button class="header-icon-btn" @click="loadProjectJSON" title="Load Project">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </button>
+          </div>
         </div>
 
         <!-- WebGPU Status -->
@@ -492,12 +1272,16 @@ const clearCache = async () => {
                 class="strength-slider"
               />
             </div>
-            <div class="setting">
+            <div class="setting size-setting">
               <label>Size</label>
-              <span class="fixed-value" v-if="mode === 'img2img' && inputImageSize">
+              <div v-if="mode === 'img2img' && inputImageSize" class="fixed-value">
                 {{ inputImageSize.width }} &times; {{ inputImageSize.height }}
-              </span>
-              <span class="fixed-value" v-else>512 &times; 512</span>
+              </div>
+              <div v-else class="size-inputs">
+                <input type="number" v-model.number="genWidth" min="64" max="2048" step="64" :disabled="isGenerating" class="size-input" />
+                <span class="size-x">&times;</span>
+                <input type="number" v-model.number="genHeight" min="64" max="2048" step="64" :disabled="isGenerating" class="size-input" />
+              </div>
             </div>
           </div>
 
@@ -522,9 +1306,9 @@ const clearCache = async () => {
             <button
               class="action-btn place-btn"
               @click="placeOnGrid"
-              :disabled="selectedCell.row === -1"
-              :title="selectedCell.row !== -1 ? `Place at cell [${selectedCell.row}, ${selectedCell.col}]` : 'Click a cell on the canvas first'"
-            >Place on Canvas</button>
+              :disabled="buildingPath.length === 0 && selectedCell.row === -1"
+              :title="buildingPath.length > 0 ? `Place on ${buildingPath.length} tiles` : selectedCell.row !== -1 ? `Place at cell [${selectedCell.row}, ${selectedCell.col}]` : 'Click a cell on the canvas first'"
+            >{{ buildingPath.length > 0 ? `Place on ${buildingPath.length} tiles` : 'Place on Canvas' }}</button>
             <span v-if="generationTime" class="gen-time">{{ generationTime }}s</span>
           </div>
           <!-- Building size selector -->
@@ -580,6 +1364,364 @@ const clearCache = async () => {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+}
+
+/* Left panel - buildings & tools */
+.left-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  height: 100vh;
+  background: rgba(15, 12, 41, 0.92);
+  backdrop-filter: blur(12px);
+  border-right: 1px solid rgba(255,255,255,0.1);
+  z-index: 100;
+  display: flex;
+  transition: width 0.3s ease;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.left-panel.collapsed {
+  width: 32px;
+}
+
+.left-panel > .panel-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.left-panel > .panel-content::-webkit-scrollbar {
+  width: 5px;
+}
+.left-panel > .panel-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+.left-panel > .panel-content::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.15);
+  border-radius: 3px;
+}
+
+.panel-toggle-left {
+  width: 32px;
+  min-width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: rgba(255,255,255,0.5);
+  font-size: 0.9rem;
+  background: rgba(255,255,255,0.05);
+  border-left: 1px solid rgba(255,255,255,0.08);
+  transition: background 0.2s;
+}
+.panel-toggle-left:hover {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+
+/* Tools toolbar at bottom of left panel */
+.tools-toolbar {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.2);
+}
+
+.tool-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 60px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  border: 2px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.tool-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.tool-btn:hover {
+  border-color: #667eea;
+  color: #667eea;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.tool-btn.active {
+  border-color: #10b981;
+  background: rgba(16,185,129,0.15);
+  color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16,185,129,0.25);
+}
+
+.tool-btn.remove.active {
+  border-color: #ef4444;
+  background: rgba(239,68,68,0.15);
+  color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239,68,68,0.25);
+}
+
+.tool-btn.recycle.active {
+  border-color: #f59e0b;
+  background: rgba(245,158,11,0.15);
+  color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245,158,11,0.25);
+}
+
+/* Generator section */
+.generator-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.generator-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.generator-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.generator-btn svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.generator-btn:hover {
+  border-color: rgba(255,255,255,0.3);
+  color: #fff;
+  background: rgba(255,255,255,0.08);
+}
+
+.generator-btn.active {
+  border-color: #667eea;
+  color: #667eea;
+  background: rgba(102,126,234,0.1);
+}
+
+.size-picker {
+  display: flex;
+  gap: 4px;
+  padding: 6px 4px 6px 28px;
+  animation: slideDown 0.15s ease;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.size-pick-btn {
+  flex: 1;
+  padding: 4px 0;
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.5);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.size-pick-btn:hover {
+  border-color: rgba(255,255,255,0.3);
+  color: #fff;
+  background: rgba(255,255,255,0.1);
+}
+
+.size-pick-btn.active {
+  border-color: #667eea;
+  background: rgba(102,126,234,0.25);
+  color: #fff;
+}
+
+/* Generator Modal */
+.gen-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.gen-modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.gen-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ccc;
+}
+
+.template-picker {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.template-thumb {
+  flex-shrink: 0;
+  width: 90px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid rgba(255,255,255,0.1);
+  cursor: pointer;
+  transition: all 0.2s;
+  background: rgba(0,0,0,0.3);
+  text-align: center;
+}
+
+.template-thumb:hover {
+  border-color: rgba(255,255,255,0.3);
+}
+
+.template-thumb.selected {
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102,126,234,0.3);
+}
+
+.template-thumb img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  display: block;
+  background: #1a1a2e;
+}
+
+.template-name {
+  display: block;
+  font-size: 0.65rem;
+  color: rgba(255,255,255,0.5);
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gen-textarea {
+  width: 100%;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  color: #fff;
+  padding: 0.5rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.gen-textarea:focus {
+  border-color: rgba(102,126,234,0.6);
+}
+
+.gen-status {
+  font-size: 0.8rem;
+  color: rgba(255,255,255,0.6);
+  padding: 0.3rem 0.5rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 5px;
+}
+
+.gen-modal-btn {
+  padding: 0.6rem 1.2rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+}
+
+.gen-modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.create-btn {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+}
+
+.create-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(102,126,234,0.4);
+}
+
+.build-btn {
+  background: linear-gradient(135deg, #ff9800, #f57c00);
+  color: #fff;
+  margin-top: 0.5rem;
+}
+
+.build-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(255,152,0,0.4);
+}
+
+.gen-spinner-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem 0;
+}
+
+.gen-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.gen-preview {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.3);
+  max-width: 300px;
+}
+
+.gen-preview img {
+  width: 100%;
+  display: block;
 }
 
 /* Floating control panel on the right */
@@ -678,6 +1820,38 @@ const clearCache = async () => {
 }
 .back-btn:hover {
   background: rgba(255,255,255,0.2);
+}
+
+.header-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.header-icon-btn {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.6);
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  padding: 0;
+}
+
+.header-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.header-icon-btn:hover {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  border-color: rgba(255,255,255,0.3);
 }
 
 /* Status bar */
@@ -920,6 +2094,39 @@ const clearCache = async () => {
   display: block;
   padding: 0.4rem;
   color: rgba(255,255,255,0.5);
+  font-size: 0.8rem;
+}
+
+.size-inputs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.size-input {
+  width: 60px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 5px;
+  color: #fff;
+  padding: 0.35rem 0.3rem;
+  font-size: 0.8rem;
+  outline: none;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.size-input::-webkit-inner-spin-button,
+.size-input::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
+.size-input:focus {
+  border-color: rgba(102,126,234,0.6);
+}
+
+.size-x {
+  color: rgba(255,255,255,0.4);
   font-size: 0.8rem;
 }
 

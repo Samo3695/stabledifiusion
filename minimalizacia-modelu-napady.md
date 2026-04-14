@@ -91,7 +91,7 @@
 6. Nahrať na HuggingFace
 7. Použiť v browseri rovnako ako teraz
 
-### 6. Text Encoder na backend (CPU server) zatial nerobit
+### 6. Text Encoder na backend (CPU server)
 - Text Encoder (CLIP) presunúť na lacný backend server
 - Browser pošle prompt → server vráti embeddings (77×1024, ~300 KB JSON)
 - Browser sťahuje len UNet + VAE (~1.9 GB namiesto ~2.5 GB)

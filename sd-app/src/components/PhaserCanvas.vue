@@ -44,6 +44,14 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  buildingPlacementMode: {
+    type: Boolean,
+    default: false
+  },
+  buildingPlacementSize: {
+    type: Number,
+    default: 1
+  },
   roadDeleteMode: {
     type: Boolean,
     default: false
@@ -102,7 +110,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'toggle-person', 'road-placed', 'building-clicked', 'destination-tile-clicked', 'building-deleted', 'building-state-changed', 'building-construction-complete', 'building-recycled'])
+const emit = defineEmits(['cell-selected', 'image-placed', 'toggle-numbering', 'toggle-gallery', 'toggle-grid', 'toggle-person', 'road-placed', 'building-path-placed', 'building-clicked', 'destination-tile-clicked', 'building-deleted', 'building-state-changed', 'building-construction-complete', 'building-recycled'])
 
 const gameContainer = ref(null)
 let game = null
@@ -113,6 +121,7 @@ const cursorClass = computed(() => {
   if (props.isSettingDestination) return 'destination-mode'
   if (props.recycleMode) return 'recycle-mode'
   if (props.roadDeleteMode || props.deleteMode) return 'delete-mode'
+  if (props.buildingPlacementMode) return 'road-mode'
   if (props.roadBuildingMode) return 'road-mode'
   if (props.selectedImageId) return 'has-selection'
   return ''
@@ -1779,7 +1788,7 @@ class IsoScene extends Phaser.Scene {
     // Mriežka sa zobrazí len ak:
     // 1. showGrid je true (globálne nastavenie)
     // 2. Je vybraná budova (selectedImageId) alebo aktívny road building mode
-    const shouldShowGrid = props.showGrid && (props.selectedImageId || props.roadBuildingMode)
+    const shouldShowGrid = props.showGrid && (props.selectedImageId || props.roadBuildingMode || props.buildingPlacementMode)
     if (!shouldShowGrid) return
     
     this.gridGraphics = this.add.graphics()
@@ -2055,8 +2064,35 @@ class IsoScene extends Phaser.Scene {
       return
     }
     
+    // === STAVANIE NOVEJ ŠTVRTE — hover NxN block ===
+    if (props.buildingPlacementMode && this.hoveredCell.row !== -1 && !this.roadStartCell) {
+      this.hoverGraphics = this.add.graphics()
+      this.uiContainer.add(this.hoverGraphics)
+      
+      const size = props.buildingPlacementSize || 1
+      for (let dr = 0; dr < size; dr++) {
+        for (let dc = 0; dc < size; dc++) {
+          const { x, y } = this.gridToIso(this.hoveredCell.row + dr, this.hoveredCell.col + dc)
+          
+          this.hoverGraphics.fillStyle(0xff9800, 0.35)
+          this.hoverGraphics.beginPath()
+          this.hoverGraphics.moveTo(x, y)
+          this.hoverGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+          this.hoverGraphics.lineTo(x, y + TILE_HEIGHT)
+          this.hoverGraphics.lineTo(x - TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
+          this.hoverGraphics.closePath()
+          this.hoverGraphics.fillPath()
+          
+          this.hoverGraphics.lineStyle(2, 0xff9800, 0.8)
+          this.hoverGraphics.strokePath()
+        }
+      }
+      
+      return
+    }
+    
     // === IDLE HOVER - keď nie je vybraná žiadna budova/template/delete mode ===
-    const canInteract = props.templateSelected || props.selectedImageId || props.roadBuildingMode || props.roadDeleteMode || props.isSettingDestination
+    const canInteract = props.templateSelected || props.selectedImageId || props.roadBuildingMode || props.buildingPlacementMode || props.roadDeleteMode || props.isSettingDestination
     
     // Vyčistime predchádzajúci building highlight (tint)
     if (this.highlightedBuildingSprites.length > 0) {
@@ -2459,6 +2495,10 @@ class IsoScene extends Phaser.Scene {
         if (props.roadBuildingMode && this.roadStartCell) {
           this.updateRoadPath(cell)
         }
+        // Building placement mode - aktualizuj cestu
+        if (props.buildingPlacementMode && this.roadStartCell) {
+          this.updateBuildingPath(cell)
+        }
         
         this.drawHover()
       }
@@ -2569,6 +2609,69 @@ class IsoScene extends Phaser.Scene {
     this.drawRoadPath()
   }
   
+  // Building placement path - expands each line cell to NxN based on buildingPlacementSize
+  updateBuildingPath(endCell) {
+    if (!this.roadStartCell) return
+    
+    const size = props.buildingPlacementSize || 1
+    const startRow = this.roadStartCell.row
+    const startCol = this.roadStartCell.col
+    const endRow = endCell.row
+    const endCol = endCell.col
+    
+    const rowDiff = Math.abs(endRow - startRow)
+    const colDiff = Math.abs(endCol - startCol)
+    const isVertical = rowDiff >= colDiff
+    
+    // Build a line of "anchor" points (top-left corners of each NxN block)
+    const anchors = []
+    if (isVertical) {
+      const rowDir = endRow > startRow ? 1 : (endRow < startRow ? -1 : 0)
+      if (rowDir !== 0) {
+        for (let row = startRow; row !== endRow + rowDir; row += rowDir * size) {
+          // Don't overshoot
+          if (rowDir > 0 && row > endRow) break
+          if (rowDir < 0 && row < endRow) break
+          anchors.push({ row, col: startCol })
+        }
+      } else {
+        anchors.push({ row: startRow, col: startCol })
+      }
+    } else {
+      const colDir = endCol > startCol ? 1 : (endCol < startCol ? -1 : 0)
+      if (colDir !== 0) {
+        for (let col = startCol; col !== endCol + colDir; col += colDir * size) {
+          if (colDir > 0 && col > endCol) break
+          if (colDir < 0 && col < endCol) break
+          anchors.push({ row: startRow, col })
+        }
+      } else {
+        anchors.push({ row: startRow, col: startCol })
+      }
+    }
+    
+    // Expand each anchor to NxN tiles (for visual preview)
+    const seen = new Set()
+    const path = []
+    for (const anchor of anchors) {
+      for (let dr = 0; dr < size; dr++) {
+        for (let dc = 0; dc < size; dc++) {
+          const r = anchor.row + dr
+          const c = anchor.col + dc
+          const key = `${r}-${c}`
+          if (!seen.has(key)) {
+            seen.add(key)
+            path.push({ row: r, col: c, direction: isVertical ? 'vertical' : 'horizontal' })
+          }
+        }
+      }
+    }
+    
+    this.roadPath = path
+    this.buildingAnchors = anchors
+    this.drawRoadPath(0xff9800)
+  }
+  
   // Určí typ tile podľa smeru odkiaľ a kam
   determineTileType(fromDir, toDir, defaultDirection) {
     // Ak nemáme oba smery, použijeme rovnú cestu
@@ -2602,7 +2705,7 @@ class IsoScene extends Phaser.Scene {
   }
   
   // Nakresli preview cesty
-  drawRoadPath() {
+  drawRoadPath(color = 0x667eea) {
     if (this.roadPathGraphics) {
       this.roadPathGraphics.destroy()
     }
@@ -2615,8 +2718,7 @@ class IsoScene extends Phaser.Scene {
     for (const cell of this.roadPath) {
       const { x, y } = this.gridToIso(cell.row, cell.col)
       
-      // Modrá farba pre preview
-      this.roadPathGraphics.fillStyle(0x667eea, 0.5)
+      this.roadPathGraphics.fillStyle(color, 0.5)
       this.roadPathGraphics.beginPath()
       this.roadPathGraphics.moveTo(x, y)
       this.roadPathGraphics.lineTo(x + TILE_WIDTH / 2, y + TILE_HEIGHT / 2)
@@ -2625,7 +2727,7 @@ class IsoScene extends Phaser.Scene {
       this.roadPathGraphics.closePath()
       this.roadPathGraphics.fillPath()
       
-      this.roadPathGraphics.lineStyle(3, 0x667eea, 1)
+      this.roadPathGraphics.lineStyle(3, color, 1)
       this.roadPathGraphics.strokePath()
     }
   }
@@ -2662,7 +2764,7 @@ class IsoScene extends Phaser.Scene {
         }
         
         // Ak nie je žiadny špeciálny mód, skontroluj či sa kliklo na existujúcu budovu
-        if (!props.roadDeleteMode && !props.roadBuildingMode && !props.deleteMode && !props.selectedImageId && !props.recycleMode) {
+        if (!props.roadDeleteMode && !props.roadBuildingMode && !props.buildingPlacementMode && !props.deleteMode && !props.selectedImageId && !props.recycleMode) {
           const key = `${cell.row}-${cell.col}`
           const buildingData = cellImages[key]
           
@@ -2767,6 +2869,32 @@ class IsoScene extends Phaser.Scene {
           } else {
             console.log(`⚠️ Na pozícii [${cell.row}, ${cell.col}] nie je žiadny objekt (key: ${key})`)
             console.log(`📋 Existujúce kľúče:`, Object.keys(cellImages))
+          }
+          return
+        }
+        
+        // === STAVANIE NOVEJ ŠTVRTE — draw NxN building path on canvas ===
+        if (props.buildingPlacementMode) {
+          if (!this.roadStartCell) {
+            this.roadStartCell = { row: cell.row, col: cell.col }
+            // Show initial NxN block
+            const size = props.buildingPlacementSize || 1
+            const initPath = []
+            for (let dr = 0; dr < size; dr++) {
+              for (let dc = 0; dc < size; dc++) {
+                initPath.push({ row: cell.row + dr, col: cell.col + dc, direction: 'horizontal' })
+              }
+            }
+            this.roadPath = initPath
+            this.drawRoadPath(0xff9800)
+            console.log(`🏠 Building path start: [${cell.row}, ${cell.col}] (${size}x${size})`)
+          } else {
+            if (this.roadPath.length > 0) {
+              console.log(`🏠 Building path with ${this.roadPath.length} tiles, ${(this.buildingAnchors || []).length} anchors`)
+              emit('building-path-placed', { path: [...this.roadPath], anchors: [...(this.buildingAnchors || [])] })
+            }
+            this.buildingAnchors = []
+            this.clearRoadBuilding()
           }
           return
         }
@@ -4550,6 +4678,13 @@ watch(() => props.alwaysShowEffects, (enabled) => {
 
 // Watch pre road building mode - vyčisti stav keď sa vypne
 watch(() => props.roadBuildingMode, (newVal) => {
+  if (!newVal && mainScene) {
+    mainScene.clearRoadBuilding()
+  }
+})
+
+// Watch pre building placement mode
+watch(() => props.buildingPlacementMode, (newVal) => {
   if (!newVal && mainScene) {
     mainScene.clearRoadBuilding()
   }

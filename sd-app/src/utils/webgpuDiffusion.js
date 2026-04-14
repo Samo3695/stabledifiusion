@@ -17,8 +17,18 @@ export const DEFAULT_MODEL_REPO = 'schmuell/sd-turbo-ort-web'
 const DEFAULT_TOKENIZER_REPO = 'openai/clip-vit-base-patch32'
 
 // Isometric merged UNet models on HuggingFace (LoRA-merged, no local server needed)
-export const LOCAL_ISOMETRIC_UNET_URL = 'https://huggingface.co/Samo629/sd-turbo-isometric-onnx/resolve/main/fp16/unet/model.onnx'
-export const LOCAL_ISOMETRIC_QUANTIZED_UNET_URL = 'https://huggingface.co/Samo629/sd-turbo-isometric-onnx/resolve/main/quantized/unet/model.onnx'
+export const REMOTE_ISOMETRIC_UNET_URL = 'https://huggingface.co/Samo629/sd-turbo-isometric-onnx/resolve/main/fp16/unet/model.onnx'
+export const REMOTE_ISOMETRIC_QUANTIZED_UNET_URL = 'https://huggingface.co/Samo629/sd-turbo-isometric-onnx/resolve/main/quantized/unet/model.onnx'
+
+// Local ONNX model servers (served by serve_onnx.py)
+export const LOCAL_ISOMETRIC_UNET_URL = 'http://localhost:8766/unet/model.onnx'
+export const LOCAL_ISOMETRIC_QUANTIZED_UNET_URL = 'http://localhost:8767/unet/model.onnx'
+
+// Auto-detect: use local model URLs when running on localhost
+export const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+
+export const ISOMETRIC_UNET_URL = isLocal ? LOCAL_ISOMETRIC_UNET_URL : REMOTE_ISOMETRIC_UNET_URL
+export const ISOMETRIC_QUANTIZED_UNET_URL = isLocal ? LOCAL_ISOMETRIC_QUANTIZED_UNET_URL : REMOTE_ISOMETRIC_QUANTIZED_UNET_URL
 
 // Remote CLIP text encoder API (avoids downloading ~600MB text encoder in browser)
 export const DEFAULT_CLIP_API_URL = 'https://samo629-clip-api.hf.space'
