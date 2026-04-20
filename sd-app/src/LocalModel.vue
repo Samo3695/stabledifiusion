@@ -72,28 +72,130 @@ const selectedGeneratorSize = ref(null) // { type, size }
 const buildingPlacementMode = ref(false)
 const buildingPath = ref([]) // path drawn on canvas for building placement
 
-// Building generator config: templates and prompts per type+size
-const buildingConfigs = {
-  house: {
-    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, simple two-story family house' },
-    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, four-story apartment building' },
-    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large residential complex' },
-    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, tall residential tower' },
-    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, massive residential skyscraper' },
+// House categories with price levels
+const houseCategories = {
+  'family-house': {
+    label: 'Family House',
+    size: 1,
+    strength: 0.85,
+    prompt: 'isometric, two-story family house, complete building with roof, closed top, exterior view',
+    prices: [
+      { price: 100000, label: '$100k', template: '0x1', extra: 'simple' },
+      { price: 150000, label: '$150k', template: '0x2', extra: 'simple' },
+      { price: 200000, label: '$200k', template: '0x3', extra: 'simple' },
+      { price: 250000, label: '$250k', template: '0x2', extra: 'middle class' },
+      { price: 300000, label: '$300k', template: '0x3', extra: 'middle class' },
+      { price: 500000, label: '$500k', template: '0x3', extra: 'deluxe' },
+    ]
   },
+  'apartment': {
+    label: 'Apartment',
+    size: 1,
+    strength: 0.85,
+    prompt: 'isometric, apartment building, visible rooftop, closed building, exterior view from above',
+    prices: [
+      { price: 400000, label: '$400k', template: '4x1', extra: 'two-story simple' },
+      { price: 500000, label: '$500k', template: '4x2-2', extra: 'four-story simple' },
+      { price: 600000, label: '$600k', template: '4x2-1', extra: 'four-story simple' },
+      { price: 700000, label: '$700k', template: '1', extra: 'four-story simple' },
+      { price: 800000, label: '$800k', template: '4x2-1', extra: 'four-story middle class' },
+      { price: 1000000, label: '$1M', template: '1', extra: 'four-story middle class' },
+      { price: 1500000, label: '$1.5M', template: '1', extra: 'four-story deluxe' },
+    ]
+  },
+  'residential': {
+    label: 'Residential',
+    size: 2,
+    strength: 0.80,
+    prompt: 'isometric, residential building, complete rooftop, sealed top, bird eye isometric view',
+    prices: [
+      { price: 5000000, label: '$5M', template: '4x1', extra: '4-story building simple' },
+      { price: 7000000, label: '$7M', template: '4x2-2', extra: '10-story building simple' },
+      { price: 8000000, label: '$8M', template: '4x2-1', extra: '10-story building simple' },
+      { price: 10000000, label: '$10M', template: '4x2-2', extra: '10-story building simple glass building' },
+      { price: 12000000, label: '$12M', template: '4x2-1', extra: '10-story building middle class glass building garden' },
+
+    ]
+  }
+}
+
+// Shop categories with price levels
+const shopCategories = {
+  'small-shop': {
+    label: 'Small Shop',
+    size: 1,
+    strength: 0.85,
+    prompt: 'isometric, residential building',
+    prices: [
+      { price: 500000, label: '$500k', template: '0x2', extra: '2-story building simple small cheap restaurant' },
+      { price: 700000, label: '$700k', template: '4x1', extra: '2-story building simple small cheap market' },
+      { price: 1000000, label: '$1M', template: '4x2-2', extra: '3-story building offices' },
+      { price: 1500000, label: '$1.5M', template: '4x2-1', extra: '3-story building department store' },
+      { price: 2500000, label: '$2.5M', template: '1', extra: '3-story building offices and markets' },
+      { price: 4000000, label: '$4M', template: '4x3-2', extra: '4-story building price expensive deluxe bank' },
+    ]
+  },
+  'medium-shop': {
+    label: 'Medium Shop',
+    size: 2,
+    strength: 0.85,
+    prompt: 'isometric, residential building',
+    prices: [
+      { price: 3000000, label: '$3M', template: '0x1', extra: '4-story building hypermarket parking' },
+      { price: 3000000, label: '$3M', template: '0x2', extra: '4-story building hypermarket parking' },
+      { price: 5000000, label: '$5M', template: '4x1', extra: '4-story building hypermarket parking' },
+      { price: 7500000, label: '$7.5M', template: '4x3-2', extra: '10-story building offices bank' },
+      { price: 10000000, label: '$10M', template: '4x3-1', extra: '10-story building office bank' },
+    ]
+  },
+}
+
+// Factory categories with price levels
+const factoryCategories = {
+  'small-factory': {
+    label: 'Small Factory',
+    size: 1,
+    strength: 0.85,
+    prompt: 'isometric, industrial factory building',
+    prices: [
+      { price: 500000, label: '$500k', template: '0x2', extra: '2-story building simple small cheap workshop' },
+      { price: 700000, label: '$700k', template: '4x1', extra: '2-story building simple small cheap warehouse' },
+      { price: 1000000, label: '$1M', template: '4x2-2', extra: '3-story building factory workshop' },
+      { price: 1500000, label: '$1.5M', template: '4x2-1', extra: '3-story building manufacturing plant' },
+      { price: 2500000, label: '$2.5M', template: '1', extra: '3-story building factory and warehouse' },
+      { price: 4000000, label: '$4M', template: '4x3-2', extra: '4-story building expensive industrial complex' },
+    ]
+  },
+  'medium-factory': {
+    label: 'Medium Factory',
+    size: 2,
+    strength: 0.85,
+    prompt: 'isometric, industrial factory building',
+    prices: [
+      { price: 3000000, label: '$3M', template: '0x1', extra: '4-story building factory warehouse parking' },
+      { price: 3000000, label: '$3M', template: '0x2', extra: '4-story building factory warehouse parking' },
+      { price: 5000000, label: '$5M', template: '4x1', extra: '4-story building manufacturing plant parking' },
+      { price: 7500000, label: '$7.5M', template: '4x3-2', extra: '10-story building heavy industrial complex' },
+      { price: 10000000, label: '$10M', template: '4x3-1', extra: '10-story building industrial complex' },
+    ]
+  },
+}
+
+// Legacy building configs for shop & factory
+const buildingConfigs = {
   shop: {
-    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, small corner shop' },
-    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, shopping center' },
-    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large shopping mall' },
-    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, mega shopping complex' },
-    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, giant commercial plaza' },
+    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, small corner shop, complete building with roof, closed top, exterior view' },
+    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, shopping center, complete building with roof, closed top, exterior view' },
+    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large shopping mall, complete rooftop, sealed top, exterior view from above' },
+    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, mega shopping complex, complete rooftop, sealed top, exterior view from above' },
+    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, giant commercial plaza, complete rooftop, sealed top, bird eye isometric view' },
   },
   factory: {
-    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, small workshop factory' },
-    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, industrial factory building' },
-    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large manufacturing plant' },
-    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, heavy industrial complex' },
-    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, mega industrial zone' },
+    1: { templates: ['0x1', '0x2', '0x3'], prompt: 'isometric, small workshop factory, complete building with roof, closed top, exterior view' },
+    2: { templates: ['1', '4x2-1', '4x2-2'], prompt: 'isometric, industrial factory building, complete building with roof, closed top, exterior view' },
+    3: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, large manufacturing plant, complete rooftop, sealed top, exterior view from above' },
+    4: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, heavy industrial complex, complete rooftop, sealed top, exterior view from above' },
+    5: { templates: ['4x3-1', '4x3-2', '4x3-3'], prompt: 'isometric, mega industrial zone, complete rooftop, sealed top, bird eye isometric view' },
   }
 }
 
@@ -109,13 +211,69 @@ const generatorResult = ref(null) // data URL of generated image
 const generatorStatus = ref('')
 const tempBuildingSpriteUrl = ref(null)
 
+// Right-panel template picker (shown after building path drawn)
+const activeTemplates = ref([]) // [{name, url}]
+const activeTemplateIndex = ref(0)
+
+// Price-based generator state
+const selectedCategory = ref(null) // 'family-house', 'apartment', 'residential'
+const activePriceLevels = ref([]) // price levels array for current category
+const selectedPriceIndex = ref(0) // index into activePriceLevels
+const activeCategoryConfig = ref(null) // current houseCategories entry
+
 const toggleGenerator = (type) => {
   expandedGenerator.value = expandedGenerator.value === type ? null : type
 }
 
 const selectGeneratorSize = (type, size) => {
   selectedGeneratorSize.value = { type, size }
+  selectedCategory.value = null
   // Enter building placement draw mode instead of opening modal immediately
+  buildingPlacementMode.value = true
+  roadBuildingMode.value = false
+  roadDeleteMode.value = false
+  deleteMode.value = false
+  recycleMode.value = false
+  selectedBuildingId.value = null
+  selectedImageId.value = null
+}
+
+const selectHouseCategory = (catKey) => {
+  const cat = houseCategories[catKey]
+  if (!cat) return
+  selectedCategory.value = catKey
+  selectedGeneratorSize.value = { type: 'house', size: cat.size, category: catKey }
+  // Enter building placement draw mode
+  buildingPlacementMode.value = true
+  roadBuildingMode.value = false
+  roadDeleteMode.value = false
+  deleteMode.value = false
+  recycleMode.value = false
+  selectedBuildingId.value = null
+  selectedImageId.value = null
+}
+
+const selectShopCategory = (catKey) => {
+  const cat = shopCategories[catKey]
+  if (!cat) return
+  selectedCategory.value = catKey
+  selectedGeneratorSize.value = { type: 'shop', size: cat.size, category: catKey }
+  // Enter building placement draw mode
+  buildingPlacementMode.value = true
+  roadBuildingMode.value = false
+  roadDeleteMode.value = false
+  deleteMode.value = false
+  recycleMode.value = false
+  selectedBuildingId.value = null
+  selectedImageId.value = null
+}
+
+const selectFactoryCategory = (catKey) => {
+  const cat = factoryCategories[catKey]
+  if (!cat) return
+  selectedCategory.value = catKey
+  selectedGeneratorSize.value = { type: 'factory', size: cat.size, category: catKey }
+  // Enter building placement draw mode
   buildingPlacementMode.value = true
   roadBuildingMode.value = false
   roadDeleteMode.value = false
@@ -210,7 +368,7 @@ const removeBgFromDataUrl = (dataUrl) => {
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
       const data = imageData.data
       for (let i = 0; i < data.length; i += 4) {
-        if (data[i] <= 12 && data[i + 1] <= 16 && data[i + 2] <= 19) {
+        if (data[i] <= 40 && data[i + 1] <= 40 && data[i + 2] <= 40) {
           data[i + 3] = 0
         }
       }
@@ -491,17 +649,78 @@ const removeBackground = () => {
   const img = new Image()
   img.onload = () => {
     const canvas = document.createElement('canvas')
-    canvas.width = img.width
-    canvas.height = img.height
+    const w = img.width
+    const h = img.height
+    canvas.width = w
+    canvas.height = h
     const ctx = canvas.getContext('2d')
     ctx.drawImage(img, 0, 0)
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const imageData = ctx.getImageData(0, 0, w, h)
     const data = imageData.data
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i] <= 12 && data[i + 1] <= 16 && data[i + 2] <= 19) {
-        data[i + 3] = 0
+    const size = w * h
+
+    // Step 1: mark all near-black pixels as "candidate background"
+    // isDark[i] = 1 if pixel is dark (would be removed)
+    const isDark = new Uint8Array(size)
+    for (let i = 0; i < size; i++) {
+      const r = data[i * 4]
+      const g = data[i * 4 + 1]
+      const b = data[i * 4 + 2]
+      if (r <= 40 && g <= 40 && b <= 40) {
+        isDark[i] = 1
       }
     }
+
+    // Step 2: flood-fill from all edges to mark only EXTERIOR dark pixels
+    // Only these become transparent; interior dark pixels (holes inside silhouette)
+    // stay opaque black - so grass underneath never shows through holes
+    const isExterior = new Uint8Array(size)
+    const stack = []
+    // Seed with all edge pixels that are dark
+    for (let x = 0; x < w; x++) {
+      const topIdx = x
+      const botIdx = (h - 1) * w + x
+      if (isDark[topIdx] && !isExterior[topIdx]) { isExterior[topIdx] = 1; stack.push(topIdx) }
+      if (isDark[botIdx] && !isExterior[botIdx]) { isExterior[botIdx] = 1; stack.push(botIdx) }
+    }
+    for (let y = 0; y < h; y++) {
+      const leftIdx = y * w
+      const rightIdx = y * w + w - 1
+      if (isDark[leftIdx] && !isExterior[leftIdx]) { isExterior[leftIdx] = 1; stack.push(leftIdx) }
+      if (isDark[rightIdx] && !isExterior[rightIdx]) { isExterior[rightIdx] = 1; stack.push(rightIdx) }
+    }
+    // 4-neighbor flood-fill
+    while (stack.length > 0) {
+      const idx = stack.pop()
+      const x = idx % w
+      const y = (idx / w) | 0
+      if (x > 0) {
+        const n = idx - 1
+        if (isDark[n] && !isExterior[n]) { isExterior[n] = 1; stack.push(n) }
+      }
+      if (x < w - 1) {
+        const n = idx + 1
+        if (isDark[n] && !isExterior[n]) { isExterior[n] = 1; stack.push(n) }
+      }
+      if (y > 0) {
+        const n = idx - w
+        if (isDark[n] && !isExterior[n]) { isExterior[n] = 1; stack.push(n) }
+      }
+      if (y < h - 1) {
+        const n = idx + w
+        if (isDark[n] && !isExterior[n]) { isExterior[n] = 1; stack.push(n) }
+      }
+    }
+
+    // Step 3: apply result
+    // - exterior dark pixels → transparent
+    // - interior dark pixels → opaque black (preserved)
+    for (let i = 0; i < size; i++) {
+      if (isExterior[i]) {
+        data[i * 4 + 3] = 0
+      }
+    }
+
     ctx.putImageData(imageData, 0, 0)
     generatedImage.value = canvas.toDataURL('image/png')
   }
@@ -528,37 +747,138 @@ const handleRoadPlaced = ({ path }) => {
   buildRoad(canvasRef.value, roadTiles.value, path)
 }
 
+const loadTemplateAsInput = (templateUrl) => {
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  img.onload = () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0)
+    inputImage.value = canvas.toDataURL('image/png')
+    inputImageEl.value = img
+    inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
+  }
+  img.src = templateUrl
+}
+
+const selectActiveTemplate = (idx) => {
+  activeTemplateIndex.value = idx
+  const tpl = activeTemplates.value[idx]
+  if (tpl) loadTemplateAsInput(tpl.url)
+}
+
+const applyPriceLevel = (index) => {
+  selectedPriceIndex.value = index
+  const level = activePriceLevels.value[index]
+  const cat = activeCategoryConfig.value
+  if (!level || !cat) return
+  // Update template
+  const tplIdx = activeTemplates.value.findIndex(t => t.name === level.template)
+  if (tplIdx !== -1) {
+    activeTemplateIndex.value = tplIdx
+    loadTemplateAsInput(activeTemplates.value[tplIdx].url)
+  }
+  // Update prompt with extra
+  prompt.value = cat.prompt + ', ' + level.extra
+  // Update strength
+  strength.value = cat.strength
+}
+
 const handleBuildingPathPlaced = ({ path, anchors }) => {
   buildingPath.value = anchors || path
   buildingPlacementMode.value = false
-  // Pre-fill right panel with template image + prompt instead of modal
+
   if (selectedGeneratorSize.value) {
-    const { type, size } = selectedGeneratorSize.value
+    const { type, size, category } = selectedGeneratorSize.value
+
+    // House category-based flow
+    if (type === 'house' && category && houseCategories[category]) {
+      const cat = houseCategories[category]
+      activeCategoryConfig.value = cat
+      buildingSize.value = cat.size
+      mode.value = 'img2img'
+      strength.value = cat.strength
+      // Build unique templates from price levels
+      const uniqueTemplates = [...new Set(cat.prices.map(p => p.template))]
+      activeTemplates.value = uniqueTemplates.map(name => ({
+        name,
+        url: BASE_URL + 'templates/buildings/' + name + '.png'
+      }))
+      activePriceLevels.value = cat.prices
+      selectedPriceIndex.value = 0
+      // Apply first price level
+      const firstLevel = cat.prices[0]
+      prompt.value = cat.prompt + ', ' + firstLevel.extra
+      activeTemplateIndex.value = 0
+      loadTemplateAsInput(activeTemplates.value[0].url)
+      panelCollapsed.value = false
+      return
+    }
+
+    // Shop category-based flow
+    if (type === 'shop' && category && shopCategories[category]) {
+      const cat = shopCategories[category]
+      activeCategoryConfig.value = cat
+      buildingSize.value = cat.size
+      mode.value = 'img2img'
+      strength.value = cat.strength
+      // Build unique templates from price levels
+      const uniqueTemplates = [...new Set(cat.prices.map(p => p.template))]
+      activeTemplates.value = uniqueTemplates.map(name => ({
+        name,
+        url: BASE_URL + 'templates/buildings/' + name + '.png'
+      }))
+      activePriceLevels.value = cat.prices
+      selectedPriceIndex.value = 0
+      // Apply first price level
+      const firstLevel = cat.prices[0]
+      prompt.value = cat.prompt + ', ' + firstLevel.extra
+      activeTemplateIndex.value = 0
+      loadTemplateAsInput(activeTemplates.value[0].url)
+      panelCollapsed.value = false
+      return
+    }
+
+    // Factory category-based flow
+    if (type === 'factory' && category && factoryCategories[category]) {
+      const cat = factoryCategories[category]
+      activeCategoryConfig.value = cat
+      buildingSize.value = cat.size
+      mode.value = 'img2img'
+      strength.value = cat.strength
+      // Build unique templates from price levels
+      const uniqueTemplates = [...new Set(cat.prices.map(p => p.template))]
+      activeTemplates.value = uniqueTemplates.map(name => ({
+        name,
+        url: BASE_URL + 'templates/buildings/' + name + '.png'
+      }))
+      activePriceLevels.value = cat.prices
+      selectedPriceIndex.value = 0
+      // Apply first price level
+      const firstLevel = cat.prices[0]
+      prompt.value = cat.prompt + ', ' + firstLevel.extra
+      activeTemplateIndex.value = 0
+      loadTemplateAsInput(activeTemplates.value[0].url)
+      panelCollapsed.value = false
+      return
+    }
+
+    // Legacy flow for shop/factory
     const config = buildingConfigs[type]?.[size]
     if (config) {
-      // Set building size
       buildingSize.value = size
-      // Set prompt
       prompt.value = config.prompt
-      // Switch to img2img mode
       mode.value = 'img2img'
-      // Load first template as input image
-      const templateUrl = BASE_URL + 'templates/buildings/' + config.templates[0] + '.png'
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload = () => {
-        // Convert to data URL for the preview
-        const canvas = document.createElement('canvas')
-        canvas.width = img.naturalWidth
-        canvas.height = img.naturalHeight
-        const ctx = canvas.getContext('2d')
-        ctx.drawImage(img, 0, 0)
-        inputImage.value = canvas.toDataURL('image/png')
-        inputImageEl.value = img
-        inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
-      }
-      img.src = templateUrl
-      // Open the right panel
+      activeTemplates.value = config.templates.map(name => ({
+        name,
+        url: BASE_URL + 'templates/buildings/' + name + '.png'
+      }))
+      activeTemplateIndex.value = 0
+      activePriceLevels.value = []
+      activeCategoryConfig.value = null
+      loadTemplateAsInput(activeTemplates.value[0].url)
       panelCollapsed.value = false
     }
   }
@@ -987,11 +1307,15 @@ const loadProjectJSON = () => {
             </button>
             <div v-if="expandedGenerator === 'house'" class="size-picker">
               <button
-                v-for="s in [1,2,3,4,5]"
-                :key="s"
-                :class="['size-pick-btn', { active: selectedGeneratorSize?.type === 'house' && selectedGeneratorSize?.size === s }]"
-                @click="selectGeneratorSize('house', s)"
-              >{{ s }}&times;{{ s }}</button>
+                v-for="cat in [
+                  { key: 'family-house', label: 'Family House' },
+                  { key: 'apartment', label: 'Apartment' },
+                  { key: 'residential', label: 'Residential' }
+                ]"
+                :key="cat.key"
+                :class="['size-pick-btn category-pick-btn', { active: selectedCategory === cat.key }]"
+                @click="selectHouseCategory(cat.key)"
+              >{{ cat.label }}</button>
             </div>
           </div>
 
@@ -1012,11 +1336,14 @@ const loadProjectJSON = () => {
             </button>
             <div v-if="expandedGenerator === 'shop'" class="size-picker">
               <button
-                v-for="s in [1,2,3,4,5]"
-                :key="s"
-                :class="['size-pick-btn', { active: selectedGeneratorSize?.type === 'shop' && selectedGeneratorSize?.size === s }]"
-                @click="selectGeneratorSize('shop', s)"
-              >{{ s }}&times;{{ s }}</button>
+                v-for="cat in [
+                  { key: 'small-shop', label: 'Small Shop' },
+                  { key: 'medium-shop', label: 'Medium Shop' }
+                ]"
+                :key="cat.key"
+                :class="['size-pick-btn category-pick-btn', { active: selectedCategory === cat.key }]"
+                @click="selectShopCategory(cat.key)"
+              >{{ cat.label }}</button>
             </div>
           </div>
 
@@ -1036,11 +1363,14 @@ const loadProjectJSON = () => {
             </button>
             <div v-if="expandedGenerator === 'factory'" class="size-picker">
               <button
-                v-for="s in [1,2,3,4,5]"
-                :key="s"
-                :class="['size-pick-btn', { active: selectedGeneratorSize?.type === 'factory' && selectedGeneratorSize?.size === s }]"
-                @click="selectGeneratorSize('factory', s)"
-              >{{ s }}&times;{{ s }}</button>
+                v-for="cat in [
+                  { key: 'small-factory', label: 'Small Factory' },
+                  { key: 'medium-factory', label: 'Medium Factory' }
+                ]"
+                :key="cat.key"
+                :class="['size-pick-btn category-pick-btn', { active: selectedCategory === cat.key }]"
+                @click="selectFactoryCategory(cat.key)"
+              >{{ cat.label }}</button>
             </div>
           </div>
         </div>
@@ -1214,6 +1544,21 @@ const loadProjectJSON = () => {
             >Image to Image</button>
           </div>
 
+          <!-- Template picker (when generator templates available) -->
+          <div v-if="mode === 'img2img' && activeTemplates.length > 1" class="input-group">
+            <label>Template</label>
+            <div class="right-template-picker">
+              <div
+                v-for="(tpl, idx) in activeTemplates"
+                :key="tpl.name"
+                :class="['right-template-thumb', { selected: activeTemplateIndex === idx }]"
+                @click="selectActiveTemplate(idx)"
+              >
+                <img :src="tpl.url" :alt="tpl.name" />
+              </div>
+            </div>
+          </div>
+
           <!-- Image Upload (img2img only) -->
           <div v-if="mode === 'img2img'" class="input-group">
             <label>Input Image</label>
@@ -1249,6 +1594,28 @@ const loadProjectJSON = () => {
               placeholder="Describe the image you want to generate..."
               :disabled="isGenerating"
             ></textarea>
+          </div>
+
+          <!-- Price slider (house categories) -->
+          <div v-if="activePriceLevels.length > 0" class="input-group price-group">
+            <label>Price: <strong>{{ activePriceLevels[selectedPriceIndex]?.label }}</strong></label>
+            <input
+              type="range"
+              v-model.number="selectedPriceIndex"
+              :min="0"
+              :max="activePriceLevels.length - 1"
+              step="1"
+              :disabled="isGenerating"
+              class="price-slider"
+              @input="applyPriceLevel(selectedPriceIndex)"
+            />
+            <div class="price-labels">
+              <span>{{ activePriceLevels[0]?.label }}</span>
+              <span>{{ activePriceLevels[activePriceLevels.length - 1]?.label }}</span>
+            </div>
+            <div class="price-detail">
+              {{ activePriceLevels[selectedPriceIndex]?.extra }} &mdash; template: {{ activePriceLevels[selectedPriceIndex]?.template }}
+            </div>
           </div>
 
           <div class="settings-row">
@@ -1633,6 +2000,99 @@ const loadProjectJSON = () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Right-panel template picker */
+.right-template-picker {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.right-template-thumb {
+  flex-shrink: 0;
+  width: 72px;
+  height: 72px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid rgba(255,255,255,0.1);
+  cursor: pointer;
+  transition: all 0.2s;
+  background: rgba(0,0,0,0.3);
+}
+
+.right-template-thumb:hover {
+  border-color: rgba(255,255,255,0.3);
+}
+
+.right-template-thumb.selected {
+  border-color: #4fc3f7;
+  box-shadow: 0 0 6px rgba(79,195,247,0.4);
+}
+
+.right-template-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Category pick buttons (wider than size buttons) */
+.category-pick-btn {
+  font-size: 0.7rem !important;
+  padding: 4px 8px !important;
+  white-space: nowrap;
+}
+
+/* Price slider */
+.price-group {
+  margin-bottom: 0.25rem;
+}
+
+.price-slider {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255,255,255,0.15);
+  border-radius: 3px;
+  outline: none;
+  margin: 6px 0 4px;
+}
+
+.price-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #66bb6a;
+  cursor: pointer;
+  border: 2px solid #fff;
+}
+
+.price-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #66bb6a;
+  cursor: pointer;
+  border: 2px solid #fff;
+}
+
+.price-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.5);
+}
+
+.price-detail {
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.7);
+  margin-top: 4px;
+  text-align: center;
+  font-style: italic;
 }
 
 .gen-textarea {

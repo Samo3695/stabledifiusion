@@ -350,8 +350,12 @@ function eulerStep(modelOutput, sample, sigma, sigmaNext) {
 
 /**
  * Convert latent tensor to RGB image (post-VAE decode)
+ * @param {Float32Array|number[]} decodedData - decoded VAE output
+ * @param {number} width
+ * @param {number} height
+ * @param {Uint8Array|null} alphaMask - optional alpha mask to apply (width*height)
  */
-function latentsToImage(decodedData, width, height) {
+function latentsToImage(decodedData, width, height, alphaMask = null) {
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
@@ -372,12 +376,95 @@ function latentsToImage(decodedData, width, height) {
       imageData.data[dstIdx] = r
       imageData.data[dstIdx + 1] = g
       imageData.data[dstIdx + 2] = b
-      imageData.data[dstIdx + 3] = 255
+      // Apply alpha mask if provided, otherwise fully opaque
+      imageData.data[dstIdx + 3] = alphaMask ? alphaMask[srcIdx] : 255
     }
   }
 
   ctx.putImageData(imageData, 0, 0)
   return canvas.toDataURL('image/png')
+}
+
+/**
+ * Extract alpha mask from source image (transparent pixels).
+ * Returns Uint8Array of size width*height with alpha values [0-255].
+ * The mask is eroded (shrunk) slightly so any bleeding fill at the edge is cut off,
+ * then feathered for smooth blending.
+ */
+function extractAlphaMask(imageSource, width, height, erode = 1, feather = 1) {
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  ctx.clearRect(0, 0, width, height)
+  ctx.drawImage(imageSource, 0, 0, width, height)
+  const imageData = ctx.getImageData(0, 0, width, height)
+  const pixels = imageData.data
+
+  const size = width * height
+  const binary = new Uint8Array(size) // 1 = opaque (foreground), 0 = transparent (background)
+  let hasTransparency = false
+  for (let i = 0; i < size; i++) {
+    const a = pixels[i * 4 + 3]
+    if (a < 128) {
+      binary[i] = 0
+      hasTransparency = true
+    } else {
+      binary[i] = 1
+    }
+  }
+
+  // If the input has no transparency at all, return null (no mask to apply)
+  if (!hasTransparency) return null
+
+  // Erode the foreground mask by `erode` pixels to eliminate any bleed at edges
+  let eroded = binary
+  for (let d = 0; d < erode; d++) {
+    const next = new Uint8Array(size)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = y * width + x
+        if (!eroded[idx]) { next[idx] = 0; continue }
+        // Keep only if all 4-neighbors are also foreground
+        if ((x > 0 && !eroded[idx - 1]) ||
+            (x < width - 1 && !eroded[idx + 1]) ||
+            (y > 0 && !eroded[idx - width]) ||
+            (y < height - 1 && !eroded[idx + width])) {
+          next[idx] = 0
+        } else {
+          next[idx] = 1
+        }
+      }
+    }
+    eroded = next
+  }
+
+  const alpha = new Uint8Array(size)
+  for (let i = 0; i < size; i++) alpha[i] = eroded[i] ? 255 : 0
+
+  // Feathering: blur alpha with a simple box blur `feather` times for smooth edges
+  if (feather > 0) {
+    let src = alpha
+    for (let pass = 0; pass < feather; pass++) {
+      const next = new Uint8Array(size)
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = y * width + x
+          let sum = src[idx]
+          let count = 1
+          if (x > 0) { sum += src[idx - 1]; count++ }
+          if (x < width - 1) { sum += src[idx + 1]; count++ }
+          if (y > 0) { sum += src[idx - width]; count++ }
+          if (y < height - 1) { sum += src[idx + width]; count++ }
+          next[idx] = Math.round(sum / count)
+        }
+      }
+      src = next
+    }
+    return src
+  }
+
+  return alpha
 }
 
 /**
@@ -694,6 +781,7 @@ export class StableDiffusionPipeline {
     canvas.width = width
     canvas.height = height
     const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, width, height)
     ctx.drawImage(imageSource, 0, 0, width, height)
     const imageData = ctx.getImageData(0, 0, width, height)
     const pixels = imageData.data
