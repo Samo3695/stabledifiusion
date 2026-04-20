@@ -42,8 +42,8 @@ class RoadTileManager {
 
           // Tile definície (rovnaké ako v ImageGallery)
           const tileDefinitions = [
-            { name: 'Rovná ↘', x: 570, y: 266, width: 205, height: 105, rotation: 10 },
-            { name: 'Rovná ↙', x: 20, y: 152, width: 205, height: 105, rotation: 0 },
+            { name: 'Rovná ↘', x: 570, y: 266, width: 205, height: 105, rotation: 1 },
+            { name: 'Rovná ↙', x: 20, y: 152, width: 205, height: 105, rotation: 20 },
             { name: 'Roh ↙', x: 580, y: 413, width: 205, height: 105, rotation: 0},
             { name: 'Roh ↘', x: 727, y: 342, width: 205, height: 105, rotation: 0 },
             { name: 'Roh ↖', x: 309, y: 275, width: 205, height: 105, rotation: 0 },
