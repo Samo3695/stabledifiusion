@@ -634,9 +634,9 @@ const clearInputImage = () => {
 // "A valid external Instance reference no longer exists" errors on
 // repeated generations of large images).
 const computeGenSizeForAspect = (w, h) => {
-  const SHORT = 512
-  const MAX_LONG = 768          // hard cap on long side (was 1024)
-  const MAX_PIXELS = 512 * 768  // total pixel budget for one generation
+  const SHORT = 448
+  const MAX_LONG = 768          // hard cap on long side
+  const MAX_PIXELS = 512 * 640  // total pixel budget for one generation
   const SNAP = 64
   const snap = (v) => Math.max(SNAP, Math.round(v / SNAP) * SNAP)
 

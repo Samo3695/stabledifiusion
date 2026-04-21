@@ -259,6 +259,50 @@ function float32ArrayToFloat16(f32arr) {
   return u16
 }
 
+// Release an ort.Tensor's underlying GPU buffer (WebGPU EP).
+// Safe: only disposes if the tensor still has a live GPU buffer.
+// IMPORTANT: always read tensor.data FIRST (triggers GPU→CPU download),
+// then call this — otherwise the download will fail.
+function disposeTensor(t) {
+  if (!t) return
+  try {
+    // Skip CPU-only tensors (no GPU buffer to free)
+    const loc = t.location
+    if (loc && loc !== 'gpu-buffer' && loc !== 'ml-tensor') {
+      // CPU tensor — dispose is cheap no-op but still wrap in try
+    }
+    if (typeof t.dispose === 'function') t.dispose()
+  } catch (e) {
+    // best-effort; ignore (some ORT versions throw on re-dispose)
+  }
+}
+
+// Read all data out of an output tensor into a plain typed array,
+// then release the tensor's GPU buffer. Prevents VRAM leaks between runs.
+async function drainAndDispose(t) {
+  if (!t) return null
+  let data
+  try {
+    // .data on WebGPU tensors is async-backed via getData() in newer ORT,
+    // but usually a sync getter that returns the already-downloaded buffer.
+    // Using getData() explicitly if present forces the download.
+    if (typeof t.getData === 'function') {
+      data = await t.getData(true) // true = release buffer after download
+    } else {
+      data = t.data
+      // Copy into a plain typed array so we don't hold reference to tensor storage
+      if (data instanceof Float32Array) data = new Float32Array(data)
+      else if (data instanceof Uint16Array) data = new Uint16Array(data)
+      else if (data && data.BYTES_PER_ELEMENT) data = data.slice()
+    }
+  } catch (e) {
+    // fall back to sync .data
+    try { data = t.data } catch {}
+  }
+  disposeTensor(t)
+  return data
+}
+
 function float16ToFloat32(h) {
   const sign = (h & 0x8000) << 16
   const exp = (h >> 10) & 0x1f
@@ -659,7 +703,20 @@ export class StableDiffusionPipeline {
     const textOutput = await this.textEncoder.run({ input_ids: textInputTensor })
     const textEmbeddings = Object.values(textOutput)[0]
     console.log('[SD] Text embeddings shape:', textEmbeddings.dims, 'dtype:', textEmbeddings.type)
+    // Release only the input tensor we created (CPU-backed int32).
+    disposeTensor(textInputTensor)
     return textEmbeddings
+  }
+
+  async _flushGpuQueue() {
+    try {
+      const dev = ort?.env?.webgpu?.device
+      if (dev && dev.queue && dev.queue.onSubmittedWorkDone) {
+        await dev.queue.onSubmittedWorkDone()
+      }
+    } catch (e) {
+      // best-effort flush; ignore errors
+    }
   }
 
   async generate(prompt, options = {}) {
@@ -696,6 +753,14 @@ export class StableDiffusionPipeline {
       latents[i] *= initSigma
     }
 
+    // Precompute hiddenStates ONCE outside the loop (was recreated every step → GPU buffer leak)
+    let hiddenStates = textEmbeddings
+    let hiddenStatesOwned = false
+    if (this.unetFp16 && textEmbeddings.type !== 'float16') {
+      hiddenStates = new ort.Tensor('float16', float32ArrayToFloat16(textEmbeddings.data), textEmbeddings.dims)
+      hiddenStatesOwned = true
+    }
+
     // 6. Denoising loop
     for (let step = 0; step < numSteps; step++) {
       if (onStep) onStep(step, numSteps)
@@ -717,12 +782,6 @@ export class StableDiffusionPipeline {
       const timestepTensor = new ort.Tensor('int64', new BigInt64Array([BigInt(timestep)]), [1])
 
       console.log(`[SD] Step ${step + 1}/${numSteps}: timestep=${timestep}, sigma=${sigma.toFixed(4)}, sigmaNext=${sigmaNext.toFixed(4)}`)
-
-      // Convert encoder_hidden_states to float16 if UNet expects it
-      let hiddenStates = textEmbeddings
-      if (this.unetFp16 && textEmbeddings.type !== 'float16') {
-        hiddenStates = new ort.Tensor('float16', float32ArrayToFloat16(textEmbeddings.data), textEmbeddings.dims)
-      }
 
       const unetOutput = await this.unet.run({
         sample: latentTensor,
@@ -751,7 +810,17 @@ export class StableDiffusionPipeline {
       // Euler step
       latents = eulerStep(noisePred, latents, sigma, sigmaNext)
       console.log(`[SD] latents after euler step (first 5):`, Array.from(latents.slice(0, 5)))
+
+      // Free GPU buffers of this step's transient INPUT tensors only.
+      // Do NOT dispose rawOutput — it's owned by ORT session and disposing it
+      // corrupts internal state → next run throws "destroy of undefined".
+      disposeTensor(latentTensor)
+      disposeTensor(timestepTensor)
     }
+
+    // Free hiddenStates if we created it (fp16 conversion copy).
+    // Do NOT dispose textEmbeddings — it came from textEncoder.run() and is ORT-owned.
+    if (hiddenStatesOwned) disposeTensor(hiddenStates)
 
     // 7. VAE decode — scale latents by 1/0.18215
     const scaledLatents = new Float32Array(latents.length)
@@ -762,11 +831,19 @@ export class StableDiffusionPipeline {
 
     const latentTensor = new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
     const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
-    const decodedData = Object.values(decoded)[0].data
+    const decodedTensor = Object.values(decoded)[0]
+    // Copy data out of the output tensor (triggers GPU→CPU download).
+    const decodedData = decodedTensor.data instanceof Float32Array
+      ? new Float32Array(decodedTensor.data)
+      : Float32Array.from(decodedTensor.data)
 
-    console.log('[SD] Decoded output shape:', Object.values(decoded)[0].dims)
+    console.log('[SD] Decoded output shape:', decodedTensor.dims)
     console.log('[SD] Decoded values (first 10):', Array.from(decodedData.slice(0, 10)))
     console.log('[SD] Decoded range:', Math.min(...Array.from(decodedData.slice(0, 1000))), 'to', Math.max(...Array.from(decodedData.slice(0, 1000))))
+
+    // Only dispose the input we created. decodedTensor is ORT-owned.
+    disposeTensor(latentTensor)
+    await this._flushGpuQueue()
 
     // 8. Convert to image
     return latentsToImage(decodedData, width, height)
@@ -803,6 +880,8 @@ export class StableDiffusionPipeline {
     const inputTensor = new ort.Tensor('float16', inputF16, [1, 3, height, width])
     const result = await this.vaeEncoder.run({ sample: inputTensor })
     const latentDist = Object.values(result)[0]
+    // Only dispose our own input tensor. latentDist is ORT-owned.
+    disposeTensor(inputTensor)
 
     console.log('[SD] VAE encoder output shape:', latentDist.dims, 'dtype:', latentDist.type)
 
@@ -843,6 +922,8 @@ export class StableDiffusionPipeline {
     for (let i = 0; i < mean.length; i++) {
       mean[i] *= 0.18215
     }
+
+    // latentDist is ORT-owned, do not dispose explicitly.
 
     return mean
   }
@@ -899,7 +980,13 @@ export class StableDiffusionPipeline {
       }
       const latentTensor = new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
       const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
-      return latentsToImage(Object.values(decoded)[0].data, width, height)
+      const decodedTensor = Object.values(decoded)[0]
+      const decodedData = decodedTensor.data instanceof Float32Array
+        ? new Float32Array(decodedTensor.data)
+        : Float32Array.from(decodedTensor.data)
+      disposeTensor(latentTensor)
+      await this._flushGpuQueue()
+      return latentsToImage(decodedData, width, height)
     }
 
     // 5. Compute sigmas for the schedule
@@ -915,6 +1002,14 @@ export class StableDiffusionPipeline {
     for (let i = 0; i < latents.length; i++) {
       // latent = image_latent + sigma * noise
       latents[i] = imageLatents[i] + initSigma * noise[i]
+    }
+
+    // Precompute hiddenStates ONCE outside the loop (was recreated every step → GPU buffer leak)
+    let hiddenStates = textEmbeddings
+    let hiddenStatesOwned = false
+    if (this.unetFp16 && textEmbeddings.type !== 'float16') {
+      hiddenStates = new ort.Tensor('float16', float32ArrayToFloat16(textEmbeddings.data), textEmbeddings.dims)
+      hiddenStatesOwned = true
     }
 
     // 7. Denoising loop (same as txt2img)
@@ -939,11 +1034,6 @@ export class StableDiffusionPipeline {
 
       console.log(`[SD img2img] Step ${step + 1}/${actualSteps}: timestep=${timestep}, sigma=${sigma.toFixed(4)}, sigmaNext=${sigmaNext.toFixed(4)}`)
 
-      let hiddenStates = textEmbeddings
-      if (this.unetFp16 && textEmbeddings.type !== 'float16') {
-        hiddenStates = new ort.Tensor('float16', float32ArrayToFloat16(textEmbeddings.data), textEmbeddings.dims)
-      }
-
       const unetOutput = await this.unet.run({
         sample: latentTensor,
         timestep: timestepTensor,
@@ -963,7 +1053,14 @@ export class StableDiffusionPipeline {
       }
 
       currentLatents = eulerStep(noisePred, currentLatents, sigma, sigmaNext)
+
+      // Free only inputs we created. Don't dispose rawOutput (ORT-owned).
+      disposeTensor(latentTensor)
+      disposeTensor(timestepTensor)
     }
+
+    if (hiddenStatesOwned) disposeTensor(hiddenStates)
+    // textEmbeddings is ORT-owned (from textEncoder.run); do not dispose.
 
     // 8. VAE decode
     const finalScaled = new Float32Array(currentLatents.length)
@@ -973,7 +1070,14 @@ export class StableDiffusionPipeline {
 
     const latentTensor = new ort.Tensor('float32', finalScaled, [1, latentChannels, latentHeight, latentWidth])
     const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
-    const decodedData = Object.values(decoded)[0].data
+    const decodedTensor = Object.values(decoded)[0]
+    const decodedData = decodedTensor.data instanceof Float32Array
+      ? new Float32Array(decodedTensor.data)
+      : Float32Array.from(decodedTensor.data)
+
+    // Only dispose the input we created.
+    disposeTensor(latentTensor)
+    await this._flushGpuQueue()
 
     console.log('[SD img2img] Done!')
     return latentsToImage(decodedData, width, height)
