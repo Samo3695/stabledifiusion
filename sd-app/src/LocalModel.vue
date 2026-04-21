@@ -615,6 +615,7 @@ const loadInputImage = (file) => {
     img.onload = () => {
       inputImageEl.value = img
       inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
+      updateGenSizeFromInput()
     }
     img.src = e.target.result
   }
@@ -625,6 +626,61 @@ const clearInputImage = () => {
   inputImage.value = null
   inputImageEl.value = null
   inputImageSize.value = null
+}
+
+// Compute generation size from input image aspect ratio.
+// SD-Turbo is trained on 512x512. Keep short side ~512, but also cap
+// the total pixel count so WebGPU buffers don't blow up (which causes
+// "A valid external Instance reference no longer exists" errors on
+// repeated generations of large images).
+const computeGenSizeForAspect = (w, h) => {
+  const SHORT = 512
+  const MAX_LONG = 768          // hard cap on long side (was 1024)
+  const MAX_PIXELS = 512 * 768  // total pixel budget for one generation
+  const SNAP = 64
+  const snap = (v) => Math.max(SNAP, Math.round(v / SNAP) * SNAP)
+
+  const aspect = w / h
+  let outW, outH
+  if (aspect >= 1) {
+    outH = SHORT
+    outW = SHORT * aspect
+  } else {
+    outW = SHORT
+    outH = SHORT / aspect
+  }
+
+  // Clamp long side
+  if (outW > MAX_LONG) {
+    const s = MAX_LONG / outW
+    outW = MAX_LONG
+    outH = outH * s
+  }
+  if (outH > MAX_LONG) {
+    const s = MAX_LONG / outH
+    outH = MAX_LONG
+    outW = outW * s
+  }
+
+  // Clamp total pixel count (preserves aspect ratio)
+  const pixels = outW * outH
+  if (pixels > MAX_PIXELS) {
+    const s = Math.sqrt(MAX_PIXELS / pixels)
+    outW *= s
+    outH *= s
+  }
+
+  return { width: snap(outW), height: snap(outH) }
+}
+
+const updateGenSizeFromInput = () => {
+  if (mode.value !== 'img2img' || !inputImageSize.value) return
+  const { width, height } = computeGenSizeForAspect(
+    inputImageSize.value.width,
+    inputImageSize.value.height
+  )
+  genWidth.value = width
+  genHeight.value = height
 }
 
 const resizeDataUrl = (dataUrl, targetWidth, targetHeight) => {
@@ -759,6 +815,7 @@ const loadTemplateAsInput = (templateUrl) => {
     inputImage.value = canvas.toDataURL('image/png')
     inputImageEl.value = img
     inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
+    updateGenSizeFromInput()
   }
   img.src = templateUrl
 }
