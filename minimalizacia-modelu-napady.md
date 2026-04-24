@@ -108,3 +108,81 @@
 - Pix2Pix: pre variabilitu pridať noise na vstup alebo conditional GAN s noise vektorom
 - Modely sa cachujú v IndexedDB - sťahovanie len pri prvom použití
 - Existujúci LoRA súbor: sd-backend/lora_models/my_lora/Iso-Pixel-05.safetensors (18.1MB, rank 32)
+
+---
+
+## 🧠 VRAM / WebGPU memory management (apríl 2026)
+
+### Aktuálny stav po optimalizáciách
+- `computeGenSizeForAspect` v `LocalModel.vue`: `SHORT=448`, `MAX_LONG=960`, `MAX_PIXELS=512*960`
+- Tiled VAE decode implementovaný v `webgpuDiffusion.js` (`vaeDecodeTiled`) — dekóduje po 64×64 latent tile-och s overlapom 8, cosine feather blending
+- Dispose vstupných tensorov + `_flushGpuQueue()` medzi generáciami
+- `hiddenStates` sa počíta raz pred loopom (nie každý step)
+
+### Známe limity
+- **UNet nie je tiled** → attention matrix je O(N²), pri ~512×960 už je na hrane
+- Vyššie než ~960 na dlhšej strane UNet padne s chybou:
+  `Failed to create a WebGPU compute pipeline: A valid external Instance reference no longer exists`
+  (v conv_out — znamená že predchádzajúce vrstvy vyčerpali buffer pool a device-lost)
+- Tiled VAE odstránil VAE OOM, ale UNet zostáva bottleneck
+
+### Pre produkciu (TODO keď pôjde do ostrého deploya)
+
+1. **Runtime detekcia GPU limitov**
+   ```js
+   const adapter = await navigator.gpu.requestAdapter()
+   const maxBuf = adapter.limits.maxBufferSize
+   const maxBinding = adapter.limits.maxStorageBufferBindingSize
+   ```
+   - iGPU / mobile: často 128–256 MB → MAX_PIXELS ~384×512
+   - Discrete NVIDIA/AMD: 2 GB → MAX_PIXELS ~768×1024
+   - Dynamicky nastaviť `MAX_PIXELS` pri inite
+
+2. **Auto-fallback na quantized model pri OOM**
+   - Prvý pokus: fp16
+   - Ak spadne: prepnúť na `isometric-quantized` (int8 weights, ~425 MB namiesto ~850 MB)
+   - Int8 nezvýši rozlíšenie zásadne (~+10–15 %) ale zachráni slabé GPU
+   - POZOR: int8 zhoršuje kvalitu pri SD-Turbo (1–2 steps) — viditeľne menej detailov
+
+3. **Try-catch + graceful retry so zmenšeným rozlíšením**
+   ```js
+   try { await pipeline.generateImg2Img(...) }
+   catch (e) {
+     if (isOOM(e)) { zníž rozlíšenie o 20 %, skús znova }
+   }
+   ```
+
+4. **MultiDiffusion (tiled UNet)** — veľký refactor
+   - Rozdeliť denoising loop na prekrývajúce sa dlaždice v latent space
+   - Permits generácia 1024×1024+ aj na slabšej GPU
+   - POZOR: pri SD-Turbo (1 step) švíky medzi tile-mi sú viditeľné → treba viac overlapu alebo 2+ kroky
+   - Odhad: ~200 riadkov nového kódu v `generate*` funkciách
+
+5. **IoBinding + preallocated output buffers (ORT Web)**
+   - `session.run` s `preferredOutputLocation: 'gpu-buffer'` a znovupoužívanými GPUBuffer
+   - Eliminuje allocácie medzi stepmi
+   - Komplexnejšie API, ale najlepšie pre sustained throughput
+
+### Prečo druhá generácia niekedy padne (history)
+- **Root cause**: ORT Web allocator pool neuvoľní intermediate buffery medzi `run()` volaniami
+- Ak druhý run má **iné rozmery** (iný template aspect ratio → iné H×W), pool sa nedá reusnúť → alokuje ďalšie navrch → pretečenie `maxBufferSize`
+- Zmena **promptu** problém nespôsobuje (dimenzie zostávajú rovnaké)
+- Fix (už hotový): dispose vstupných tensorov + flush queue medzi generáciami
+- **POZOR**: nedisposovať výstupy z `session.run()` — ORT ich interne trackuje, explicit dispose rozbije session state (`Cannot read properties of undefined (reading 'destroy')`)
+
+### Hardware realita pre public deploy
+| GPU trieda | Aktuálne 448×960 |
+|---|---|
+| Discrete NVIDIA RTX / moderné AMD | ✅ |
+| Apple Silicon M1+ | ✅ |
+| Intel Iris Xe (novšie) | ⚠️ |
+| Intel UHD (staršie iGPU) | ❌ |
+| Mobile (Android/iOS WebGPU) | ❌ |
+
+→ Pre public deploy znížiť default na ~384×768, alebo runtime-detect (bod 1).
+
+### Aspect ratio deformácia (už opravené)
+- Predtým: vstupný 1×3 template (512×1536) sa squashol na 512×512 → deformácia
+- Teraz: `computeGenSizeForAspect` zachová pomer strán, snap na 64, clamp na MAX_PIXELS
+- Output sa resizuje späť na pôvodné rozmery template-u cez `resizeDataUrl`
+

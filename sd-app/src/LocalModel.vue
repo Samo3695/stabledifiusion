@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import BuildingSelector from './components/BuildingSelector.vue'
 import Modal from './components/Modal.vue'
+import Editor3D from './components/Editor3D.vue'
 import { loadProject } from './utils/projectLoader.js'
 import { buildRoad } from './utils/roadBuilder.js'
 
@@ -33,6 +34,29 @@ const useRemoteClip = ref(true) // use remote CLIP API to avoid downloading text
 const mode = ref('txt2img') // 'txt2img' or 'img2img'
 const inputImage = ref(null) // data URL for preview
 const inputImageEl = ref(null) // HTMLImageElement for pipeline
+const inputSource = ref('image') // 'image' | '3d'
+const editor3dRef = ref(null)
+const editor3dCustomTextures = ref([])
+const preview3dUrl = ref(null)
+
+const refresh3dPreview = async () => {
+  if (!editor3dRef.value) return
+  try {
+    const dataUrl = editor3dRef.value.captureScreenshot(512)
+    preview3dUrl.value = dataUrl
+    const img = await loadImageElFromDataUrl(dataUrl)
+    inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
+  } catch (e) {
+    console.warn('3D preview failed:', e)
+  }
+}
+
+const loadImageElFromDataUrl = (dataUrl) => new Promise((resolve, reject) => {
+  const img = new Image()
+  img.onload = () => resolve(img)
+  img.onerror = reject
+  img.src = dataUrl
+})
 const inputImageSize = ref(null) // { width, height } of original image
 const strength = ref(0.85)
 
@@ -467,6 +491,9 @@ onMounted(async () => {
       }))
       roadTiles.value = loadedData.roadTiles || []
       tempBuildingSpriteUrl.value = loadedData.tempBuildingSpriteUrl || null
+      // Feed Editor3D with custom textures from begin.json (already loaded above — don't refetch).
+      const ct = projectData.textureSettings?.customTexture
+      editor3dCustomTextures.value = ct ? (Array.isArray(ct) ? ct : [ct]) : []
       console.log('✅ LocalModel: Default project loaded')
     } catch (error) {
       console.error('Failed to load default project:', error)
@@ -537,7 +564,25 @@ const loadModel = async () => {
 
 const generate = async () => {
   if (!pipeline || !prompt.value.trim()) return
-  if (mode.value === 'img2img' && !inputImageEl.value) return
+  if (mode.value === 'img2img' && inputSource.value === 'image' && !inputImageEl.value) return
+  if (mode.value === 'img2img' && inputSource.value === '3d' && !editor3dRef.value) return
+
+  // In 3D mode, snapshot the 3D canvas and use it as the input image
+  if (mode.value === 'img2img' && inputSource.value === '3d') {
+    try {
+      const dataUrl = editor3dRef.value.captureScreenshot(512)
+      preview3dUrl.value = dataUrl
+      const img = await loadImageElFromDataUrl(dataUrl)
+      inputImage.value = dataUrl
+      inputImageEl.value = img
+      inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
+      updateGenSizeFromInput()
+    } catch (e) {
+      status.value = `Failed to capture 3D scene: ${e.message}`
+      statusType.value = 'error'
+      return
+    }
+  }
 
   isGenerating.value = true
   generatedImage.value = null
@@ -635,8 +680,8 @@ const clearInputImage = () => {
 // repeated generations of large images).
 const computeGenSizeForAspect = (w, h) => {
   const SHORT = 448
-  const MAX_LONG = 768          // hard cap on long side
-  const MAX_PIXELS = 512 * 640  // total pixel budget for one generation
+  const MAX_LONG = 960          // limited by UNet self-attention memory
+  const MAX_PIXELS = 512 * 960  // total pixel budget for one generation
   const SNAP = 64
   const snap = (v) => Math.max(SNAP, Math.round(v / SNAP) * SNAP)
 
@@ -1616,8 +1661,39 @@ const loadProjectJSON = () => {
             </div>
           </div>
 
-          <!-- Image Upload (img2img only) -->
-          <div v-if="mode === 'img2img'" class="input-group">
+          <!-- Input source switcher (img2img only) -->
+          <div v-if="mode === 'img2img'" class="input-source-toggle">
+            <button
+              :class="['source-btn', { active: inputSource === 'image' }]"
+              @click="inputSource = 'image'"
+              :disabled="isGenerating"
+              type="button"
+            >Image</button>
+            <button
+              :class="['source-btn', { active: inputSource === '3d' }]"
+              @click="inputSource = '3d'"
+              :disabled="isGenerating"
+              type="button"
+            >3D</button>
+          </div>
+
+          <!-- 3D editor (img2img + 3d source) -->
+          <div v-if="mode === 'img2img' && inputSource === '3d'" class="input-group input-3d-group">
+            <div class="scene-header">
+              <label>3D Scene</label>
+              <button class="preview-btn" type="button" @click="refresh3dPreview" :disabled="isGenerating">Preview</button>
+            </div>
+            <div v-if="preview3dUrl" class="preview3d-thumb" title="This is the image sent to Stable Diffusion">
+              <img :src="preview3dUrl" alt="img2img input preview" />
+              <span class="preview3d-caption">{{ inputImageSize ? `${inputImageSize.width} × ${inputImageSize.height}` : 'preview' }} &rarr; img2img input</span>
+            </div>
+            <div class="editor3d-frame">
+              <Editor3D ref="editor3dRef" :custom-textures="editor3dCustomTextures" />
+            </div>
+          </div>
+
+          <!-- Image Upload (img2img + image source) -->
+          <div v-if="mode === 'img2img' && inputSource === 'image'" class="input-group">
             <label>Input Image</label>
             <div
               v-if="!inputImage"
@@ -1712,7 +1788,7 @@ const loadProjectJSON = () => {
           <button
             class="action-btn generate-btn"
             @click="generate"
-            :disabled="isGenerating || !prompt.trim() || (mode === 'img2img' && !inputImage)"
+            :disabled="isGenerating || !prompt.trim() || (mode === 'img2img' && inputSource === 'image' && !inputImage)"
           >
             {{ isGenerating ? 'Generating...' : 'Generate' }}
           </button>
@@ -2731,6 +2807,96 @@ const loadProjectJSON = () => {
 
 .mode-btn:disabled {
   cursor: not-allowed;
+}
+
+/* Input source switcher (Image / 3D) */
+.input-source-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.6rem;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.source-btn {
+  flex: 1;
+  padding: 0.35rem 0.6rem;
+  background: rgba(255,255,255,0.04);
+  border: none;
+  color: rgba(255,255,255,0.55);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.source-btn.active {
+  background: rgba(102,126,234,0.3);
+  color: #fff;
+}
+.source-btn:hover:not(.active):not(:disabled) {
+  background: rgba(255,255,255,0.1);
+}
+.source-btn:disabled { cursor: not-allowed; }
+
+/* Expanded 3D frame — extends left of the 380px control-panel */
+.input-3d-group {
+  position: relative;
+}
+.scene-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+}
+.preview-btn {
+  background: rgba(102,126,234,0.25);
+  color: #fff;
+  border: 1px solid rgba(102,126,234,0.5);
+  border-radius: 5px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.preview-btn:hover:not(:disabled) { background: rgba(102,126,234,0.45); }
+.preview-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.preview3d-thumb {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(102,126,234,0.4);
+  margin-bottom: 0.5rem;
+  background: #0a081c;
+}
+.preview3d-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.preview3d-caption {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 2px 6px;
+  font-size: 0.62rem;
+  background: rgba(0,0,0,0.55);
+  color: rgba(255,255,255,0.8);
+  text-align: center;
+}
+.editor3d-frame {
+  position: fixed;
+  top: 4vh;
+  right: 392px;
+  width: min(40vw, 480px);
+  height: min(92vh, 900px);
+  background: rgba(10, 8, 28, 0.96);
+  border: 1px solid rgba(102,126,234,0.4);
+  border-radius: 10px;
+  padding: 0.6rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  z-index: 101;
+  display: flex;
 }
 
 /* Drop zone */

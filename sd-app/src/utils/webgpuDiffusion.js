@@ -829,20 +829,26 @@ export class StableDiffusionPipeline {
     }
     console.log('[SD] VAE input (first 5):', Array.from(scaledLatents.slice(0, 5)))
 
-    const latentTensor = new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
-    const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
-    const decodedTensor = Object.values(decoded)[0]
-    // Copy data out of the output tensor (triggers GPU→CPU download).
-    const decodedData = decodedTensor.data instanceof Float32Array
-      ? new Float32Array(decodedTensor.data)
-      : Float32Array.from(decodedTensor.data)
+    // Use tiled VAE decode for large outputs to avoid peak VRAM spikes.
+    // Threshold ~ 512*512 pixels equivalent.
+    const VAE_TILE_THRESHOLD = 512 * 512
+    let decodedData
+    if (width * height > VAE_TILE_THRESHOLD) {
+      console.log(`[SD] Using tiled VAE decode for ${width}x${height}`)
+      decodedData = await this.vaeDecodeTiled(scaledLatents, width, height)
+    } else {
+      const latentTensor = new ort.Tensor('float32', scaledLatents, [1, latentChannels, latentHeight, latentWidth])
+      const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
+      const decodedTensor = Object.values(decoded)[0]
+      decodedData = decodedTensor.data instanceof Float32Array
+        ? new Float32Array(decodedTensor.data)
+        : Float32Array.from(decodedTensor.data)
+      disposeTensor(latentTensor)
+    }
 
-    console.log('[SD] Decoded output shape:', decodedTensor.dims)
     console.log('[SD] Decoded values (first 10):', Array.from(decodedData.slice(0, 10)))
     console.log('[SD] Decoded range:', Math.min(...Array.from(decodedData.slice(0, 1000))), 'to', Math.max(...Array.from(decodedData.slice(0, 1000))))
 
-    // Only dispose the input we created. decodedTensor is ORT-owned.
-    disposeTensor(latentTensor)
     await this._flushGpuQueue()
 
     // 8. Convert to image
@@ -1068,19 +1074,172 @@ export class StableDiffusionPipeline {
       finalScaled[i] = currentLatents[i] / 0.18215
     }
 
-    const latentTensor = new ort.Tensor('float32', finalScaled, [1, latentChannels, latentHeight, latentWidth])
-    const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
-    const decodedTensor = Object.values(decoded)[0]
-    const decodedData = decodedTensor.data instanceof Float32Array
-      ? new Float32Array(decodedTensor.data)
-      : Float32Array.from(decodedTensor.data)
+    const VAE_TILE_THRESHOLD = 512 * 512
+    let decodedData
+    if (width * height > VAE_TILE_THRESHOLD) {
+      console.log(`[SD img2img] Using tiled VAE decode for ${width}x${height}`)
+      decodedData = await this.vaeDecodeTiled(finalScaled, width, height)
+    } else {
+      const latentTensor = new ort.Tensor('float32', finalScaled, [1, latentChannels, latentHeight, latentWidth])
+      const decoded = await this.vaeDecoder.run({ latent_sample: latentTensor })
+      const decodedTensor = Object.values(decoded)[0]
+      decodedData = decodedTensor.data instanceof Float32Array
+        ? new Float32Array(decodedTensor.data)
+        : Float32Array.from(decodedTensor.data)
+      disposeTensor(latentTensor)
+    }
 
-    // Only dispose the input we created.
-    disposeTensor(latentTensor)
     await this._flushGpuQueue()
 
     console.log('[SD img2img] Done!')
     return latentsToImage(decodedData, width, height)
+  }
+
+  /**
+   * VAE decode with tiling to reduce peak GPU memory.
+   *
+   * Decodes overlapping latent tiles separately, then blends results
+   * in pixel space with a cosine feather on tile borders. This lets us
+   * produce large final images without VAE activations blowing VRAM.
+   *
+   * @param {Float32Array} latents - full latent [4, latentH, latentW] (unscaled)
+   * @param {number} width - output width in pixels
+   * @param {number} height - output height in pixels
+   * @param {number} tileLatent - latent-space tile size (default 64 -> 512px)
+   * @param {number} overlapLatent - latent-space overlap (default 8 -> 64px)
+   * @returns {Float32Array} decoded image data [3, height, width] in [-1,1]
+   */
+  async vaeDecodeTiled(latents, width, height, tileLatent = 64, overlapLatent = 8) {
+    const latentW = width / 8
+    const latentH = height / 8
+    const latentC = 4
+    const outC = 3
+    const SCALE = 8
+
+    // Step in latent units (non-overlapping part)
+    const step = tileLatent - overlapLatent
+    if (step <= 0) throw new Error('overlapLatent must be < tileLatent')
+
+    // Accumulators in pixel space
+    const outPlane = height * width
+    const output = new Float32Array(outC * outPlane)
+    const weightSum = new Float32Array(outPlane)
+
+    // Build a 1D cosine feather weight for one tile of pixel length L.
+    // Edges that touch the image border have weight 1 (no feather on that side).
+    const makeFeather = (pixelLen, edgeFeatherPx, isFirst, isLast) => {
+      const w = new Float32Array(pixelLen)
+      for (let i = 0; i < pixelLen; i++) {
+        let wi = 1
+        // Left/top feather
+        if (!isFirst && i < edgeFeatherPx) {
+          const t = i / edgeFeatherPx
+          wi *= 0.5 - 0.5 * Math.cos(Math.PI * t)
+        }
+        // Right/bottom feather
+        if (!isLast && i >= pixelLen - edgeFeatherPx) {
+          const t = (pixelLen - 1 - i) / edgeFeatherPx
+          wi *= 0.5 - 0.5 * Math.cos(Math.PI * t)
+        }
+        w[i] = Math.max(1e-4, wi)
+      }
+      return w
+    }
+
+    const featherPx = overlapLatent * SCALE
+
+    // Iterate tile start positions in latent grid
+    for (let ly = 0; ly < latentH; ly += step) {
+      // Clamp last tile so it doesn't overshoot; keep tile aligned to image bottom
+      let tileLH = Math.min(tileLatent, latentH - ly)
+      if (ly + tileLH > latentH) tileLH = latentH - ly
+      if (tileLH <= 0) continue
+      // If remaining is less than tile, shift start upward so tile is full size
+      let startY = ly
+      if (startY + tileLH < latentH && tileLH < tileLatent) {
+        // shouldn't happen with our clamp, but guard
+      }
+      if (startY + tileLatent > latentH) {
+        startY = Math.max(0, latentH - tileLatent)
+        tileLH = latentH - startY
+      }
+
+      for (let lx = 0; lx < latentW; lx += step) {
+        let tileLW = Math.min(tileLatent, latentW - lx)
+        if (tileLW <= 0) continue
+        let startX = lx
+        if (startX + tileLatent > latentW) {
+          startX = Math.max(0, latentW - tileLatent)
+          tileLW = latentW - startX
+        }
+
+        // Extract latent tile [4, tileLH, tileLW] from full latents [4, latentH, latentW]
+        const tileSize = tileLH * tileLW
+        const tileData = new Float32Array(latentC * tileSize)
+        for (let c = 0; c < latentC; c++) {
+          for (let y = 0; y < tileLH; y++) {
+            const srcRow = c * (latentH * latentW) + (startY + y) * latentW + startX
+            const dstRow = c * tileSize + y * tileLW
+            for (let x = 0; x < tileLW; x++) {
+              tileData[dstRow + x] = latents[srcRow + x]
+            }
+          }
+        }
+
+        const tileTensor = new ort.Tensor('float32', tileData, [1, latentC, tileLH, tileLW])
+        const decoded = await this.vaeDecoder.run({ latent_sample: tileTensor })
+        const decodedOut = Object.values(decoded)[0]
+        // Copy data out immediately so we don't hold tensor reference
+        const decodedData = decodedOut.data instanceof Float32Array
+          ? decodedOut.data
+          : Float32Array.from(decodedOut.data)
+        disposeTensor(tileTensor)
+
+        // Blend decoded tile into pixel-space accumulators
+        const pH = tileLH * SCALE
+        const pW = tileLW * SCALE
+        const pyStart = startY * SCALE
+        const pxStart = startX * SCALE
+
+        const isFirstX = startX === 0
+        const isLastX = startX + tileLW >= latentW
+        const isFirstY = startY === 0
+        const isLastY = startY + tileLH >= latentH
+
+        const fx = makeFeather(pW, featherPx, isFirstX, isLastX)
+        const fy = makeFeather(pH, featherPx, isFirstY, isLastY)
+
+        for (let y = 0; y < pH; y++) {
+          const outY = pyStart + y
+          if (outY >= height) break
+          const fyv = fy[y]
+          for (let x = 0; x < pW; x++) {
+            const outX = pxStart + x
+            if (outX >= width) break
+            const w = fx[x] * fyv
+            const outIdx = outY * width + outX
+            const srcIdx = y * pW + x
+            weightSum[outIdx] += w
+            for (let c = 0; c < outC; c++) {
+              output[c * outPlane + outIdx] += decodedData[c * (pH * pW) + srcIdx] * w
+            }
+          }
+        }
+
+        // Yield to the GPU between tiles so driver can reclaim buffers
+        await this._flushGpuQueue()
+      }
+    }
+
+    // Normalize accumulated values
+    for (let i = 0; i < outPlane; i++) {
+      const w = weightSum[i] || 1
+      for (let c = 0; c < outC; c++) {
+        output[c * outPlane + i] /= w
+      }
+    }
+
+    return output
   }
 
   async dispose() {

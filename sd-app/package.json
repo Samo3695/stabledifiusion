@@ -17,6 +17,7 @@
     "ort-web-sd": "npm:onnxruntime-web@^1.17.3",
     "phaser": "^3.90.0",
     "rollup": "^4.59.0",
+    "three": "^0.184.0",
     "vue": "^3.5.24",
     "vue-router": "^4.6.4"
   },
@@ -25,6 +26,6 @@
     "vite": "^7.2.2"
   },
   "optionalDependencies": {
-    "@rollup/rollup-win32-x64-msvc": "^4.60.1"
+    "@rollup/rollup-win32-x64-msvc": "^4.60.2"
   }
 }
