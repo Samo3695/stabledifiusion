@@ -9,6 +9,8 @@ import { loadProject } from './utils/projectLoader.js'
 import { buildRoad } from './utils/roadBuilder.js'
 
 const BASE_URL = import.meta.env.BASE_URL
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const PYTHON_SD_TURBO_MODEL = 'sd-turbo-pytorch-fp16'
 
 const router = useRouter()
 
@@ -28,7 +30,16 @@ const modelLoaded = ref(false)
 const numSteps = ref(1)
 const generationTime = ref(null)
 const modelVariant = ref('standard') // 'standard', 'isometric-fp16', 'isometric-quantized'
+const usePythonSdTurbo = ref(false) // use Python/PyTorch backend instead of browser ONNX/WebGPU
+const pythonControlNetEnabled = ref(false)
+const pythonControlNetKind = ref('depth_sd15')
+const pythonControlNetScale = ref(0.4)
+// Optional toggles for the 3D → SD pipeline. When unchecked the request shape
+// stays exactly as before so existing behaviour is preserved.
+const improveCanny = ref(false)         // Pre-process the 3D screenshot to give Canny clearer edges.
+const noiseMaskEnabled = ref(false)     // Reveal the noise-mask paint tool inside the 3D editor.
 const useRemoteClip = ref(true) // use remote CLIP API to avoid downloading text encoder (~600MB saved)
+const useT2IAdapter = ref(false) // download & apply T2I-Adapter conditioning during img2img inference
 
 // img2img state
 const mode = ref('txt2img') // 'txt2img' or 'img2img'
@@ -57,6 +68,52 @@ const loadImageElFromDataUrl = (dataUrl) => new Promise((resolve, reject) => {
   img.onerror = reject
   img.src = dataUrl
 })
+
+// Build a Canny-style edge map (white edges on black) from a 3D screenshot.
+// Sent to the backend as `control_image` so ControlNet receives crisp lines
+// while the original screenshot stays unchanged for img2img colour/shading.
+const buildCannyEdgeMap = async (dataUrl) => {
+  const img = await loadImageElFromDataUrl(dataUrl)
+  const w = img.naturalWidth
+  const h = img.naturalHeight
+  const c = document.createElement('canvas')
+  c.width = w; c.height = h
+  const ctx = c.getContext('2d')
+  // Pre-boost contrast so smooth grey models still produce strong gradients.
+  ctx.filter = 'contrast(1.6) saturate(1.2) brightness(1.0)'
+  ctx.drawImage(img, 0, 0)
+  ctx.filter = 'none'
+  const src = ctx.getImageData(0, 0, w, h).data
+  const luma = new Float32Array(w * h)
+  for (let i = 0, p = 0; i < src.length; i += 4, p++) {
+    luma[p] = 0.299 * src[i] + 0.587 * src[i + 1] + 0.114 * src[i + 2]
+  }
+  const out = ctx.createImageData(w, h)
+  const od = out.data
+  // Sobel magnitude with two thresholds (loose Canny approximation).
+  const T_HI = 90
+  const T_LO = 35
+  const mag = new Float32Array(w * h)
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      const gx = -luma[i - w - 1] - 2 * luma[i - 1] - luma[i + w - 1]
+               +  luma[i - w + 1] + 2 * luma[i + 1] + luma[i + w + 1]
+      const gy = -luma[i - w - 1] - 2 * luma[i - w] - luma[i - w + 1]
+               +  luma[i + w - 1] + 2 * luma[i + w] + luma[i + w + 1]
+      mag[i] = Math.abs(gx) + Math.abs(gy)
+    }
+  }
+  for (let i = 0, p = 0; i < od.length; i += 4, p++) {
+    let v = 0
+    const m = mag[p]
+    if (m >= T_HI) v = 255
+    else if (m >= T_LO) v = 180
+    od[i] = v; od[i + 1] = v; od[i + 2] = v; od[i + 3] = 255
+  }
+  ctx.putImageData(out, 0, 0)
+  return c.toDataURL('image/png')
+}
 const inputImageSize = ref(null) // { width, height } of original image
 const strength = ref(0.85)
 
@@ -513,15 +570,35 @@ onUnmounted(async () => {
 const loadModel = async () => {
   isLoading.value = true
   loadProgress.value = 0
-  status.value = 'Downloading model files... This may take a few minutes on first load.'
+  status.value = usePythonSdTurbo.value
+    ? 'Checking Python backend...'
+    : 'Downloading model files... This may take a few minutes on first load.'
   statusType.value = 'info'
   loadStage.value = 'Starting...'
 
   try {
+    if (usePythonSdTurbo.value) {
+      const response = await fetch(`${API_BASE_URL}/health`)
+      if (!response.ok) throw new Error(`Backend returned ${response.status}`)
+      const data = await response.json()
+      backendProvider.value = `python/${data.device || 'backend'}`
+      modelLoaded.value = true
+      mode.value = 'img2img'
+      inputSource.value = '3d'
+      status.value = `Python SD Turbo FP16 ready (${data.device || 'backend'}). Use 3D input and Generate.`
+      statusType.value = 'success'
+      loadProgress.value = 1
+      loadStage.value = 'Ready'
+      return
+    }
+
     const { StableDiffusionPipeline, ISOMETRIC_UNET_URL, ISOMETRIC_QUANTIZED_UNET_URL, DEFAULT_CLIP_API_URL, isLocal } = await import('./utils/webgpuDiffusion.js')
     const pipelineOptions = {}
     if (useRemoteClip.value) {
       pipelineOptions.clipApiUrl = DEFAULT_CLIP_API_URL
+    }
+    if (useT2IAdapter.value) {
+      pipelineOptions.useT2IAdapter = true
     }
     if (modelVariant.value === 'isometric-fp16') {
       pipelineOptions.unetUrl = ISOMETRIC_UNET_URL
@@ -562,8 +639,111 @@ const loadModel = async () => {
   }
 }
 
+const generateWithPythonBackend = async () => {
+  let sourceImage = inputImage.value
+
+  if (mode.value === 'img2img' && inputSource.value === '3d') {
+    if (!editor3dRef.value) throw new Error('3D scene is not ready')
+    sourceImage = editor3dRef.value.captureScreenshot(512)
+    preview3dUrl.value = sourceImage
+    const img = await loadImageElFromDataUrl(sourceImage)
+    inputImage.value = sourceImage
+    inputImageEl.value = img
+    inputImageSize.value = { width: img.naturalWidth, height: img.naturalHeight }
+    updateGenSizeFromInput()
+  }
+
+  // Optional pre-processing: when "Improve Canny from 3D model" is enabled and
+  // the ControlNet kind is Canny, build a real white-on-black edge map
+  // client-side and send it as a separate `control_image` field. The original
+  // screenshot is still sent unchanged as `image` so img2img colours/shading
+  // are preserved.
+  let cannyEdgeMap = null
+  if (
+    mode.value === 'img2img'
+    && inputSource.value === '3d'
+    && improveCanny.value
+    && pythonControlNetEnabled.value
+    && pythonControlNetKind.value === 'canny_sd15'
+    && sourceImage
+  ) {
+    try {
+      cannyEdgeMap = await buildCannyEdgeMap(sourceImage)
+    } catch (e) {
+      console.warn('Improve Canny preprocessing failed, using built-in detector:', e)
+    }
+  }
+
+  // Optional noise mask painted by the user inside the 3D editor. The mask is
+  // sent only when the toggle is on and the user actually painted something.
+  let noiseMaskDataUrl = null
+  if (
+    mode.value === 'img2img'
+    && inputSource.value === '3d'
+    && noiseMaskEnabled.value
+    && editor3dRef.value
+    && typeof editor3dRef.value.getNoiseMask === 'function'
+  ) {
+    noiseMaskDataUrl = editor3dRef.value.getNoiseMask()
+  }
+
+  const dimensions = mode.value === 'img2img' && inputImageSize.value
+    ? computeGenSizeForAspect(inputImageSize.value.width, inputImageSize.value.height)
+    : { width: genWidth.value, height: genHeight.value }
+
+  const useControlNetRequest = mode.value === 'img2img' && pythonControlNetEnabled.value && sourceImage
+  const endpoint = useControlNetRequest
+    ? `${API_BASE_URL}/generate-with-controlnet`
+    : `${API_BASE_URL}/generate`
+
+  const requestBody = {
+    prompt: prompt.value,
+    negative_prompt: negativePrompt.value,
+    model: PYTHON_SD_TURBO_MODEL,
+    width: dimensions.width,
+    height: dimensions.height,
+    guidance_scale: 0.0,
+  }
+
+  if (useControlNetRequest) {
+    requestBody.image = sourceImage
+    requestBody.controlnet = pythonControlNetKind.value
+    requestBody.controlnet_conditioning_scale = pythonControlNetScale.value
+    requestBody.transparent_background = true
+    requestBody.steps = numSteps.value
+    // img2img + ControlNet: ControlNet enforces shape, img2img keeps colour/shadow
+    // from the 3D scene so the model only adds details on top.
+    requestBody.use_img2img = true
+    requestBody.strength = strength.value
+    // Pass-through hints for backend (ignored if endpoint doesn't recognise them).
+    if (cannyEdgeMap) requestBody.control_image = cannyEdgeMap
+    if (improveCanny.value) requestBody.enhance_canny = true
+    if (noiseMaskDataUrl) requestBody.noise_mask = noiseMaskDataUrl
+  } else {
+    requestBody.num_inference_steps = numSteps.value
+    if (mode.value === 'img2img' && sourceImage) {
+      requestBody.input_image = sourceImage
+      requestBody.strength = strength.value
+    }
+    if (noiseMaskDataUrl) requestBody.noise_mask = noiseMaskDataUrl
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  })
+
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.error || `Backend returned ${response.status}`)
+  }
+
+  return data.image
+}
+
 const generate = async () => {
-  if (!pipeline || !prompt.value.trim()) return
+  if ((!pipeline && !usePythonSdTurbo.value) || !prompt.value.trim()) return
   if (mode.value === 'img2img' && inputSource.value === 'image' && !inputImageEl.value) return
   if (mode.value === 'img2img' && inputSource.value === '3d' && !editor3dRef.value) return
 
@@ -595,12 +775,18 @@ const generate = async () => {
   try {
     let imageDataUrl
 
-    if (mode.value === 'img2img') {
+    if (usePythonSdTurbo.value) {
+      status.value = pythonControlNetEnabled.value && mode.value === 'img2img'
+        ? 'Generating with Python SD Turbo + ControlNet...'
+        : 'Generating with Python SD Turbo...'
+      imageDataUrl = await generateWithPythonBackend()
+    } else if (mode.value === 'img2img') {
       imageDataUrl = await pipeline.generateImg2Img(prompt.value, inputImageEl.value, {
         numSteps: numSteps.value,
         strength: strength.value,
         width: genWidth.value,
         height: genHeight.value,
+        useT2IAdapter: useT2IAdapter.value,
         onStep: (step, total) => {
           status.value = `Denoising step ${step + 1}/${total}...`
         }
@@ -1579,26 +1765,52 @@ const loadProjectJSON = () => {
           <span><strong>GPU:</strong> {{ webgpuStatus.adapter.vendor }} {{ webgpuStatus.adapter.description }}</span>
         </div>
 
+        <!-- 3D editor + preview (always available — works without loaded model) -->
+        <div
+          v-show="!modelLoaded || (mode === 'img2img' && inputSource === '3d')"
+          class="input-group input-3d-group"
+        >
+          <div class="scene-header">
+            <label>3D Scene</label>
+            <button class="preview-btn" type="button" @click="refresh3dPreview" :disabled="isGenerating">Preview</button>
+          </div>
+          <div v-if="preview3dUrl" class="preview3d-thumb" title="This is the image sent to Stable Diffusion">
+            <img :src="preview3dUrl" alt="img2img input preview" />
+            <span class="preview3d-caption">{{ inputImageSize ? `${inputImageSize.width} × ${inputImageSize.height}` : 'preview' }}{{ modelLoaded ? ' → img2img input' : '' }}</span>
+          </div>
+          <div class="editor3d-frame">
+            <Editor3D ref="editor3dRef" :custom-textures="editor3dCustomTextures" :enable-noise-paint="noiseMaskEnabled" />
+          </div>
+        </div>
+
         <!-- Load Model -->
         <div v-if="!modelLoaded" class="load-section">
           <div class="model-info">
-            <h3>SD Turbo (ONNX WebGPU)</h3>
-            <p>Single-step Stable Diffusion model optimized for browser inference.</p>
+            <h3>{{ usePythonSdTurbo ? 'SD Turbo (PyTorch Backend)' : 'SD Turbo (ONNX WebGPU)' }}</h3>
+            <p>{{ usePythonSdTurbo ? 'Single-step Stable Diffusion model running through the local Python backend.' : 'Single-step Stable Diffusion model optimized for browser inference.' }}</p>
             <p class="note">First load downloads {{ useRemoteClip ? '~1.4 GB' : '~2 GB' }} of model files. Subsequent loads use cached data.{{ useRemoteClip ? ' Text encoder runs on remote server.' : '' }}</p>
+            <!-- Python/PyTorch backend toggle -->
+            <div class="backend-toggle">
+              <label class="variant-radio">
+                <input type="checkbox" v-model="usePythonSdTurbo" :disabled="isLoading" />
+                <span class="variant-text">Python SD Turbo FP16 + ControlNet</span>
+                <span class="variant-hint">(PyTorch backend, merged HF model via SD_TURBO_MERGED_MODEL_ID)</span>
+              </label>
+            </div>
             <!-- Model variant selector -->
             <div class="model-variant-toggle">
               <label class="variant-radio">
-                <input type="radio" value="standard" v-model="modelVariant" :disabled="isLoading" />
+                <input type="radio" value="standard" v-model="modelVariant" :disabled="isLoading || usePythonSdTurbo" />
                 <span class="variant-text">Standard</span>
                 <span class="variant-hint">(original SD Turbo)</span>
               </label>
               <label class="variant-radio">
-                <input type="radio" value="isometric-fp16" v-model="modelVariant" :disabled="isLoading" />
+                <input type="radio" value="isometric-fp16" v-model="modelVariant" :disabled="isLoading || usePythonSdTurbo" />
                 <span class="variant-text">Isometric FP16</span>
                 <span class="variant-hint">(merged LoRA, ~1.65 GB UNet)</span>
               </label>
               <label class="variant-radio">
-                <input type="radio" value="isometric-quantized" v-model="modelVariant" :disabled="isLoading" />
+                <input type="radio" value="isometric-quantized" v-model="modelVariant" :disabled="isLoading || usePythonSdTurbo" />
                 <span class="variant-text">Isometric INT8</span>
                 <span class="variant-hint">(quantized, ~0.83 GB UNet)</span>
               </label>
@@ -1606,9 +1818,17 @@ const loadProjectJSON = () => {
             <!-- Remote CLIP toggle -->
             <div class="clip-toggle">
               <label class="variant-radio">
-                <input type="checkbox" v-model="useRemoteClip" :disabled="isLoading" />
+                <input type="checkbox" v-model="useRemoteClip" :disabled="isLoading || usePythonSdTurbo" />
                 <span class="variant-text">Remote Text Encoder</span>
                 <span class="variant-hint">(saves ~600 MB download, uses server API)</span>
+              </label>
+            </div>
+            <!-- T2I-Adapter toggle -->
+            <div class="clip-toggle">
+              <label class="variant-radio">
+                <input type="checkbox" v-model="useT2IAdapter" :disabled="isLoading || usePythonSdTurbo" />
+                <span class="variant-text">T2I-Adapter</span>
+                <span class="variant-hint">(downloads adapter, applies during inference)</span>
               </label>
             </div>
             <button class="action-btn secondary clear-cache-btn" @click="clearCache">Clear Model Cache</button>
@@ -1677,18 +1897,29 @@ const loadProjectJSON = () => {
             >3D</button>
           </div>
 
-          <!-- 3D editor (img2img + 3d source) -->
-          <div v-if="mode === 'img2img' && inputSource === '3d'" class="input-group input-3d-group">
-            <div class="scene-header">
-              <label>3D Scene</label>
-              <button class="preview-btn" type="button" @click="refresh3dPreview" :disabled="isGenerating">Preview</button>
-            </div>
-            <div v-if="preview3dUrl" class="preview3d-thumb" title="This is the image sent to Stable Diffusion">
-              <img :src="preview3dUrl" alt="img2img input preview" />
-              <span class="preview3d-caption">{{ inputImageSize ? `${inputImageSize.width} × ${inputImageSize.height}` : 'preview' }} &rarr; img2img input</span>
-            </div>
-            <div class="editor3d-frame">
-              <Editor3D ref="editor3dRef" :custom-textures="editor3dCustomTextures" />
+          <!-- Python ControlNet settings -->
+          <div v-if="usePythonSdTurbo && mode === 'img2img'" class="input-group python-controlnet-group">
+            <label class="variant-radio controlnet-toggle-label">
+              <input type="checkbox" v-model="pythonControlNetEnabled" :disabled="isGenerating" />
+              <span class="variant-text">Use ControlNet</span>
+              <span class="variant-hint">(preserve the 3D scene structure)</span>
+            </label>
+            <div v-if="pythonControlNetEnabled" class="python-controlnet-row">
+              <select v-model="pythonControlNetKind" :disabled="isGenerating">
+                <option value="depth_sd15">Depth</option>
+                <option value="canny_sd15">Canny</option>
+              </select>
+              <label>
+                Scale
+                <input
+                  type="number"
+                  v-model.number="pythonControlNetScale"
+                  step="0.1"
+                  min="0"
+                  max="2"
+                  :disabled="isGenerating"
+                />
+              </label>
             </div>
           </div>
 
@@ -1721,6 +1952,19 @@ const loadProjectJSON = () => {
 
           <div class="input-group">
             <label>Prompt</label>
+            <div
+              v-if="usePythonSdTurbo && mode === 'img2img' && inputSource === '3d'"
+              class="prompt-extras"
+            >
+              <label class="prompt-extra-checkbox">
+                <input type="checkbox" v-model="improveCanny" :disabled="isGenerating" />
+                <span>Improve Canny from 3D model</span>
+              </label>
+              <label class="prompt-extra-checkbox">
+                <input type="checkbox" v-model="noiseMaskEnabled" :disabled="isGenerating" />
+                <span>Paint noise mask on 3D scene</span>
+              </label>
+            </div>
             <textarea
               v-model="prompt"
               rows="3"
@@ -1790,7 +2034,7 @@ const loadProjectJSON = () => {
             @click="generate"
             :disabled="isGenerating || !prompt.trim() || (mode === 'img2img' && inputSource === 'image' && !inputImage)"
           >
-            {{ isGenerating ? 'Generating...' : 'Generate' }}
+            {{ isGenerating ? 'Generating...' : usePythonSdTurbo ? 'Generate with Python' : 'Generate' }}
           </button>
         </div>
 
@@ -2506,6 +2750,14 @@ const loadProjectJSON = () => {
   gap: 0.3rem;
 }
 
+.backend-toggle {
+  margin: 0.5rem 0;
+  padding: 0.45rem 0.6rem;
+  background: rgba(79, 195, 247, 0.1);
+  border-radius: 6px;
+  border: 1px solid rgba(79, 195, 247, 0.25);
+}
+
 .variant-radio {
   display: flex;
   align-items: center;
@@ -2543,6 +2795,79 @@ const loadProjectJSON = () => {
   accent-color: #76b852;
   width: 14px;
   height: 14px;
+}
+
+.python-controlnet-group {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(79,195,247,0.25);
+  border-radius: 6px;
+  background: rgba(79,195,247,0.08);
+}
+
+.prompt-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(255, 80, 200, 0.25);
+  border-radius: 6px;
+  background: rgba(255, 80, 200, 0.06);
+}
+.prompt-extra-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.88rem;
+  color: #e6e6e6;
+  cursor: pointer;
+}
+.prompt-extra-checkbox input[type="checkbox"] {
+  accent-color: #ff50c8;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.controlnet-toggle-label {
+  margin-bottom: 0.45rem;
+}
+
+.python-controlnet-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.python-controlnet-row select {
+  flex: 1;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 5px;
+  color: #fff;
+  padding: 0.4rem;
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.python-controlnet-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  color: rgba(255,255,255,0.65);
+  font-size: 0.75rem;
+}
+
+.python-controlnet-row input {
+  width: 58px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 5px;
+  color: #fff;
+  padding: 0.35rem 0.3rem;
+  font-size: 0.8rem;
+  outline: none;
 }
 
 /* Action buttons */

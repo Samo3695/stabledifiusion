@@ -24,6 +24,29 @@ const templateCellsY = ref(1) // Počet políčok do výšky pre šablónu
 const currentTemplateName = ref('') // Názov aktuálnej šablóny
 const isRoadSprite = ref(false) // Či je aktuálna šablóna road sprite
 const seed = ref('') // Seed pre reprodukovateľnosť generovania (prázdne = náhodný)
+const useT2IAdapter = ref(false) // Použiť T2I-Adapter (depth) cez /generate-with-adapter
+const useControlNet = ref(false) // Použiť ControlNet cez /generate-with-controlnet
+const adapterKind = ref('depth_sd15') // Variant adaptera
+const adapterScale = ref(0.9) // Sila kondícioningu (0–2)
+
+watch(useControlNet, (enabled) => {
+  if (enabled) useT2IAdapter.value = false
+  if (enabled && model.value === 'sdxl' && !['depth_sd15', 'canny_sd15'].includes(adapterKind.value)) {
+    adapterKind.value = 'depth_sd15'
+  }
+})
+
+watch(useT2IAdapter, (enabled) => {
+  if (enabled) useControlNet.value = false
+  if (enabled && adapterKind.value === 'lineart_sd15') adapterKind.value = 'sketch_sd15'
+})
+
+watch(model, (selectedModel) => {
+  if (selectedModel === 'sdxl') {
+    useT2IAdapter.value = false
+    if (!['depth_sd15', 'canny_sd15'].includes(adapterKind.value)) adapterKind.value = 'depth_sd15'
+  }
+})
 
 // Sleduj zmeny showNumbering a oznám App.vue
 watch(showNumbering, (newValue) => {
@@ -87,10 +110,21 @@ const sizeMultiplier = ref(1) // 1 = zo šablóny, 2 = zo šablóny x2
 
 // Funkcia na získanie šírky a výšky podľa šablóny a multiplikátora
 const getImageDimensions = () => {
-  return {
+  const dimensions = {
     width: templateWidth.value * sizeMultiplier.value,
     height: templateHeight.value * sizeMultiplier.value
   }
+
+  if (model.value === 'sdxl') {
+    const maxSide = Math.max(dimensions.width, dimensions.height)
+    if (maxSide > 512) {
+      const scale = 512 / maxSide
+      dimensions.width = Math.max(64, Math.floor((dimensions.width * scale) / 8) * 8)
+      dimensions.height = Math.max(64, Math.floor((dimensions.height * scale) / 8) * 8)
+    }
+  }
+
+  return dimensions
 }
 
 // RGB farebné kanály (1.0 = normálne, 0.0 = bez farby, 2.0 = zdvojnásobenie)
@@ -219,8 +253,28 @@ const generateImage = async () => {
       requestBody.input_image = inputImage.value
       requestBody.strength = strength.value
     }
-    
-    const response = await fetch(API_URL, {
+
+    // Ak je zapnutý ControlNet alebo T2I-Adapter, prepneme na conditioning endpoint a preklopíme polia.
+    let endpoint = API_URL
+    if ((useControlNet.value || useT2IAdapter.value) && inputImage.value) {
+      endpoint = useControlNet.value
+        ? `${API_BASE_URL}/generate-with-controlnet`
+        : `${API_BASE_URL}/generate-with-adapter`
+      // Re-shape body pre conditioning endpoint.
+      requestBody.image = inputImage.value
+      requestBody.adapter = adapterKind.value
+      requestBody.controlnet = adapterKind.value
+      requestBody.adapter_conditioning_scale = adapterScale.value
+      requestBody.controlnet_conditioning_scale = adapterScale.value
+      // Pre conditioning endpoint nepoužívame input_image/strength (funguje cez explicit map).
+      delete requestBody.input_image
+      delete requestBody.strength
+      // Conditioning endpoint očakáva 'steps' a 'guidance_scale' (rovnaké názvy už použité).
+      requestBody.steps = requestBody.num_inference_steps
+      delete requestBody.num_inference_steps
+    }
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -628,6 +682,7 @@ defineExpose({
               <option value="majicmix">✨ MajicMix Realistic</option>
               <option value="realistic">📷 Realistic Vision V5.1</option>
               <option value="full">Full SD v1.5</option>
+              <option value="sdxl">SDXL 1.0</option>
             </select>
           </div>
 
@@ -638,6 +693,9 @@ defineExpose({
               <option :value="1">from template ({{ templateWidth }}×{{ templateHeight }} px)</option>
               <option :value="2">from template x2 ({{ templateWidth * 2 }}×{{ templateHeight * 2 }} px)</option>
             </select>
+            <small v-if="model === 'sdxl'" style="color: #666; font-size: 0.85rem; margin-top: 0.25rem; display: block;">
+              SDXL output is capped to 512 px on the longest side to reduce VRAM usage.
+            </small>
           </div>
 
           <!-- LoRA výber -->
@@ -722,11 +780,62 @@ defineExpose({
             </small>
           </div>
 
+          <!-- T2I-Adapter toggle (depth/canny conditioning) -->
+          <div class="input-group checkbox-group">
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                v-model="useT2IAdapter"
+                :disabled="isGenerating || model === 'sdxl'"
+              />
+              <span>🧭 Use T2I-Adapter (preserve 3D structure)</span>
+            </label>
+            <div v-if="useT2IAdapter || useControlNet" class="sub-checkbox" style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.4rem;">
+              <select v-model="adapterKind" :disabled="isGenerating" style="flex: 1;">
+                <option value="depth_sd15">Depth</option>
+                <option value="canny_sd15">Canny</option>
+                <option v-if="model !== 'sdxl'" value="sketch_sd15">Sketch</option>
+                <option v-if="useControlNet && model !== 'sdxl'" value="lineart_sd15">Lineart</option>
+              </select>
+              <label style="white-space: nowrap; font-size: 0.85rem;">
+                Scale:
+                <input
+                  type="number"
+                  v-model.number="adapterScale"
+                  step="0.1" min="0" max="2"
+                  style="width: 60px; margin-left: 4px;"
+                  :disabled="isGenerating"
+                />
+              </label>
+            </div>
+            <small v-if="useT2IAdapter" style="color: #666; font-size: 0.8rem; display: block; margin-top: 0.25rem;">
+              Routes the request through <code>/generate-with-adapter</code>. Requires an input image (3D screenshot).
+            </small>
+          </div>
+
+          <!-- ControlNet toggle (depth/canny conditioning) -->
+          <div class="input-group checkbox-group">
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                v-model="useControlNet"
+                :disabled="isGenerating"
+              />
+              <span>Use ControlNet (strong structure lock)</span>
+            </label>
+            <small v-if="useControlNet" style="color: #666; font-size: 0.8rem; display: block; margin-top: 0.25rem;">
+              Routes the request through <code>/generate-with-controlnet</code> using the selected Depth/Canny mode and scale above.
+            </small>
+            <small v-if="useControlNet && model === 'sdxl'" style="color: #666; font-size: 0.8rem; display: block; margin-top: 0.25rem;">
+              SDXL ControlNet currently supports Depth and Canny only.
+            </small>
+          </div>
+
           <!-- Checkbox automatické odstránenie pozadia -->
           <div class="input-group checkbox-group">
             <label class="checkbox-label">
-              <input 
-                type="checkbox" 
+              <input
+                type="checkbox"
                 v-model="autoRemoveBackground"
                 :disabled="isGenerating"
               />
