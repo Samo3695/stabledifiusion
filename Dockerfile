@@ -50,15 +50,15 @@ RUN mkdir -p /workspace/.cache/huggingface && \
 RUN chmod -R 777 /workspace && \
     chmod -R 777 /app/sd-backend/lora_models
 
-# Expose port
-EXPOSE 5000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
-
 # Set working directory to backend
 WORKDIR /app/sd-backend
 
-# Start backend server (full app with SDXL Lightning + ControlNet + IP-Adapter)
-CMD ["python3", "app.py"]
+# Default entrypoint: RunPod Serverless worker. The handler dispatches jobs
+# to the Flask routes in `app.py` via Flask's test client — same code paths
+# run in both deployment modes (local Flask, serverless), no drift.
+#
+# Local Flask dev still works:  docker run ... <image> python3 app.py
+# RunPod Serverless ignores EXPOSE / HEALTHCHECK; safe to leave as docs.
+EXPOSE 5000
+
+CMD ["python3", "-u", "rp_handler.py"]

@@ -1,123 +1,188 @@
-# RunPod deploy guide
+# RunPod Serverless deploy guide
 
-This deploys the Flask backend (`app.py`) to a RunPod GPU pod for fast remote
-iteration. Local dev is unaffected — same `app.py` runs in both places, only
-the URL the frontend talks to changes.
+Deploys the Stable Diffusion backend (`app.py`) as a **RunPod Serverless**
+endpoint — pay per second of GPU execution, no idle cost. Ideal for
+sporadic iteration sessions where a 24/7 GPU pod would be wasteful.
 
-## How the image gets built
+The handler ([rp_handler.py](rp_handler.py)) dispatches every serverless
+job to the existing Flask routes via Flask's test client, so the same
+`app.py` code runs locally and on RunPod — no logic duplication.
 
-The Docker image is built **automatically by GitHub Actions** on every push
-to `main` ([.github/workflows/docker-build.yml](../.github/workflows/docker-build.yml)).
-It builds the root [Dockerfile](../Dockerfile), which:
+## 1. Repo & build
+
+GitHub repo is wired into RunPod (Serverless → New Endpoint → Deploy from
+GitHub). RunPod auto-builds the image from the root [Dockerfile](../Dockerfile)
+on every push to the configured branch.
+
+The Dockerfile:
 
 - starts from `nvidia/cuda:12.1.0-runtime-ubuntu22.04`
-- installs `sd-backend/requirements.txt`
+- installs `sd-backend/requirements.txt` (includes `runpod==1.7.0`)
 - copies `sd-backend/` into the image
-- exposes port `5000`
-- runs `python3 app.py`
+- `CMD ["python3", "-u", "rp_handler.py"]` — runs the serverless worker
 
-Pushed image:
-```
-ghcr.io/samo3695/stabledifiusion:latest
-```
+Models are NOT baked into the image — they download lazily on first request.
+**That's why a network volume is mandatory** (next section).
 
-(image name is lowercase of GitHub `<owner>/<repo>`).
+## 2. Endpoint configuration
 
-Models are NOT baked in — they download lazily on first request into
-`HF_HOME=/workspace/.cache/huggingface`, which lives on the pod's persistent
-volume so they survive restarts.
+Serverless → New Endpoint → after the GitHub deploy succeeds:
 
-## 1. Trigger a build
+- **GPU**: 24 GB GPU class (RTX 4090, A5000, L4) — required for SDXL Lightning
+- **Active workers**: `0` (start) / `1` (if you want zero cold-start)
+- **Max workers**: `1` for personal use; raise if multiple devs hit it
+- **Idle timeout**: `30` s — how long a warm worker waits before shutting down
+- **Execution timeout**: `300` s — caps a single generation (5 min ceiling)
+- **Network volume**: **MANDATORY** — create a `30 GB` network volume in the
+  same region as the endpoint, mount at `/workspace`. Without it every cold
+  start re-downloads SDXL base + Lightning LoRA + ControlNet (~9 GB).
+- **Container disk**: `20 GB` (for the OS + diffusers code, no model weights)
+- **Environment variables**:
+  - `HF_HOME=/workspace/.cache/huggingface`
+  - `TRANSFORMERS_CACHE=/workspace/.cache/huggingface`
+  - `TORCH_HOME=/workspace/.cache/torch`
 
-Push any commit to `main`, or manually run the workflow:
+Click **Deploy**.
 
-GitHub repo → **Actions** → **Build and Push Docker Image** → **Run workflow**.
+## 3. First test
 
-After ~5–10 minutes the image is at
-`ghcr.io/samo3695/stabledifiusion:latest`.
+Endpoint detail page → **Requests** tab → fire a test job:
 
-## 2. Make the package public (one-time)
-
-GHCR images are private by default — RunPod can't pull them without a token.
-
-GitHub profile → **Packages** → `stabledifiusion` → **Package settings** →
-**Change visibility** → **Public**.
-
-Alternatively keep it private and add a registry credential in RunPod
-(Settings → Container Registry Auth) using a Personal Access Token with
-`read:packages` scope.
-
-## 3. Deploy a pod on RunPod
-
-Pods → **Deploy** → GPU Pod:
-
-- **GPU**: RTX 4090 (24 GB) — best $/perf for SDXL Lightning + ControlNet
-- **Pod template** → **Edit** to override:
-  - Container image: `ghcr.io/samo3695/stabledifiusion:latest`
-  - Container disk: **20 GB**
-  - Volume disk: **30 GB**
-  - Volume mount path: `/workspace`
-  - Expose HTTP ports: `5000`
-  - Expose TCP ports: `22`
-  - Environment variables:
-    - `HF_HOME=/workspace/.cache/huggingface`
-    - `TRANSFORMERS_CACHE=/workspace/.cache/huggingface`
-- Pricing: On-Demand
-- ✓ SSH terminal access
-- Idle timeout: 10 min (auto-stop when GPU goes idle)
-
-Click **Set overrides** → **Deploy On-Demand**.
-
-## 4. Get the public URL
-
-Pod's detail page → **Connect** → there's an HTTPS proxy URL of the form:
-
-```
-https://<pod-id>-5000.proxy.runpod.net
+```json
+{
+  "input": {
+    "endpoint": "/health"
+  }
+}
 ```
 
-Verify it works:
+Should return:
+
+```json
+{
+  "status": "ok",
+  "models_loaded": [],
+  "device": "cuda",
+  "vram_total_mb": 24576,
+  ...
+}
+```
+
+If the request fails with "container build failed", check the build logs
+on the GitHub deploy in RunPod — most common cause is a torch wheel
+version mismatch with the CUDA image. Bump `requirements.txt` and push.
+
+## 4. Generate request format
+
+Every backend route is reachable by passing its path in `input.endpoint`
+and the original Flask body in `input.data`:
+
+```json
+{
+  "input": {
+    "endpoint": "/generate-with-controlnet",
+    "data": {
+      "prompt": "isometric house, stone walls, tile roof",
+      "model": "sdxl-lightning-4",
+      "image": "data:image/png;base64,iVBORw...",
+      "controlnet": "tile_sd15",
+      "controlnet_conditioning_scale": 0.7,
+      "controlnet_guidance_end": 0.85,
+      "strength": 0.55,
+      "transparent_background": true,
+      "use_img2img": true
+    }
+  }
+}
+```
+
+The handler unwraps Flask's JSON response and returns it directly as the
+job output. On HTTP errors (400/500 from a route) the response is shaped:
+
+```json
+{ "error": "<message from app.py>", "status": 400 }
+```
+
+## 5. Endpoints exposed
+
+All Flask routes work — most useful ones:
+
+| Endpoint | Purpose |
+|---|---|
+| `/health` | sanity check, returns VRAM stats |
+| `/generate-with-controlnet` | main path: 3D render + ControlNet (depth/canny/tile) + optional IP-Adapter |
+| `/generate-with-adapter` | T2I-Adapter variant |
+| `/generate` | plain txt2img / img2img |
+| `/clear-gpu` | drop cached pipelines, free VRAM |
+| `/list-controlnets` | introspection |
+
+## 6. First-request cold start
+
+When the network volume is empty:
+- SDXL base 1.0: ~6.5 GB, ~90 s to download on RunPod's network
+- SDXL Lightning LoRA: ~400 MB, ~5 s
+- xinsir/controlnet-tile-sdxl-1.0: ~2.5 GB, ~30 s
+- IP-Adapter SDXL weights: ~150 MB, ~2 s
+
+**Expect 2–3 minutes for the very first generation.** Subsequent requests
+on a warm worker take ~3–8 s on RTX 4090.
+
+If the worker idle-timeouts and a new cold start picks up, model load
+from the volume takes ~10–15 s (re-mmap from local disk, no re-download).
+
+## 7. Frontend wiring
+
+In `sd-app/.env.development` (gitignored):
+
+```
+VITE_RUNPOD_ENDPOINT_ID=<your-endpoint-id>
+VITE_RUNPOD_API_KEY=<your-runpod-api-key>
+```
+
+The frontend wraps the existing fetch calls so each Flask path becomes:
+
+```js
+fetch(`https://api.runpod.ai/v2/${ENDPOINT_ID}/runsync`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    input: { endpoint: '/generate-with-controlnet', data: { ...originalBody } }
+  })
+})
+```
+
+The response unwrap: `response.json().then(r => r.output)` (RunPod wraps
+handler return in an `output` field for sync jobs).
+
+## 8. Cost reality check
+
+- RTX 4090 serverless: ~$0.00044 / second = **$0.026 per generation** at 60 s
+- 100 generations / day ≈ $2.60 / day
+- Idle: $0 (no active workers)
+- Network volume: ~$0.07 / GB / month → 30 GB ≈ **$2.10 / month flat**
+
+vs. on-demand pod ($0.69/h × 8 h work day = $5.52/day **even when idle**).
+
+For 50–200 generations a day, serverless is ~3–5× cheaper than a pod.
+
+## 9. Rebuilds
+
+Push to `main` → RunPod sees the GitHub webhook → rebuilds the image →
+draining warm workers swap to the new image on next request. No manual
+step beyond `git push`.
+
+## 10. Local dev still works
+
+The Dockerfile only changes the default CMD. To run the Flask server
+locally for debugging:
 
 ```bash
-curl https://<pod-id>-5000.proxy.runpod.net/health
-# {"status": "ok", ...}
+cd sd-backend
+python app.py
 ```
 
-If `/health` returns 502 / connection refused, the container is still
-booting — give it ~30 s and retry.
-
-## 5. Point the frontend at it
-
-In `sd-app/.env.development`:
-
-```
-VITE_REMOTE_API_URL=https://<pod-id>-5000.proxy.runpod.net
-```
-
-Restart `npm run dev`. In the LocalModel page, tick **Use SDXL Lightning**
-then **Run on RunPod (remote)**. All generate requests now go to the pod.
-
-## 6. First request notes
-
-The first request after a fresh volume blocks while SDXL base, the Lightning
-LoRA and ControlNet weights download — expect **60–180 s** for that one
-request. Subsequent requests reuse the cache and take ~1.5 s on RTX 4090.
-
-Switching to a ControlNet kind that hasn't been used (e.g. depth after
-canny) also stalls once while its weights stream in.
-
-## 7. Cost reality check
-
-- RTX 4090 pod: $0.69 / hour while running.
-- Idle timeout 10 min protects you against forgotten pods. Forgetting
-  = ~$16.50 / day if pod runs 24/7.
-
-For sporadic iteration sessions, **stop the pod manually** (Pods → Stop)
-the moment you're done. The volume keeps the models, next start is back to
-~30 s.
-
-## 8. Rebuilds
-
-Every push to `main` triggers a new image build. To pull the latest on
-RunPod: stop the pod, then start it again — it pulls `:latest` on cold
-start.
+…and ignore the serverless wrapper entirely. The frontend has a toggle
+that picks remote (RunPod) or local (`http://localhost:5000`).
