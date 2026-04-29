@@ -60,5 +60,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
 # Set working directory to backend
 WORKDIR /app/sd-backend
 
-# Start backend server
-CMD ["python3", "app-lite.py"]
+# Start backend server (full app with SDXL Lightning + ControlNet + IP-Adapter)
+CMD ["python3", "app.py"]

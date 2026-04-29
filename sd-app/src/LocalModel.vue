@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import BuildingSelector from './components/BuildingSelector.vue'
@@ -10,6 +10,7 @@ import { buildRoad } from './utils/roadBuilder.js'
 
 const BASE_URL = import.meta.env.BASE_URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const REMOTE_API_URL = import.meta.env.VITE_REMOTE_API_URL || ''
 const PYTHON_SD_TURBO_MODEL = 'sd-turbo-pytorch-fp16'
 
 const router = useRouter()
@@ -31,13 +32,61 @@ const numSteps = ref(1)
 const generationTime = ref(null)
 const modelVariant = ref('standard') // 'standard', 'isometric-fp16', 'isometric-quantized'
 const usePythonSdTurbo = ref(false) // use Python/PyTorch backend instead of browser ONNX/WebGPU
+// SDXL Lightning routing. When toggled, the request goes to a different
+// MODEL_REGISTRY key on the backend (sdxl-lightning-4 or sdxl-lightning-8).
+// Lightning has its LoRA baked for a fixed number of steps — backend honours
+// `lightning_steps` regardless of what the client sends.
+const useSdxlLightning = ref(false)
+const sdxlLightningSteps = ref(4) // 4 or 8
+// When true, SDXL Lightning generate requests go to VITE_REMOTE_API_URL
+// (a RunPod pod) instead of the local backend. Used to iterate on
+// ControlNet / strength settings on a fast remote GPU before re-running
+// the same parameters locally for the final result.
+const useRemoteBackend = ref(false)
+const activeApiBase = computed(() =>
+  useRemoteBackend.value && REMOTE_API_URL ? REMOTE_API_URL : API_BASE_URL
+)
+// Lightning runs through the Python backend only. If the user toggles it on
+// while the WebGPU/ONNX path is still selected, flip them to the Python path
+// automatically — otherwise the Lightning model_key never reaches the server.
+watch(useSdxlLightning, (on) => {
+  if (on) usePythonSdTurbo.value = true
+})
 const pythonControlNetEnabled = ref(false)
 const pythonControlNetKind = ref('depth_sd15')
 const pythonControlNetScale = ref(0.4)
+// Fraction of the denoising schedule during which ControlNet is active.
+// Default 0.45 → first 45 % of steps lock structure, last 55 % run CN-free
+// so the model can add windows / doors / texture without being pulled back
+// to the depth/canny hint. Tile typically wants higher (0.7–0.9) because
+// Tile IS the refinement signal.
+const pythonControlNetEnd = ref(0.45)
+// Tile ControlNet is itself the refinement signal — pulling it out early
+// defeats the purpose. Depth/Canny are structural locks, so a short window
+// is better. Auto-tune the default when the user switches kinds; the user
+// can still override with the slider afterwards.
+watch(pythonControlNetKind, (kind) => {
+  if (kind === 'tile_sd15') {
+    pythonControlNetEnd.value = 0.85
+    pythonControlNetScale.value = 0.7
+  } else {
+    pythonControlNetEnd.value = 0.45
+    pythonControlNetScale.value = 0.4
+  }
+})
 // Optional toggles for the 3D → SD pipeline. When unchecked the request shape
 // stays exactly as before so existing behaviour is preserved.
 const improveCanny = ref(false)         // Pre-process the 3D screenshot to give Canny clearer edges.
 const noiseMaskEnabled = ref(false)     // Reveal the noise-mask paint tool inside the 3D editor.
+// Optional IP-Adapter style reference. When the user uploads a reference image
+// the backend pulls visual style / detail density from it (windows, textures,
+// vegetation) while ControlNet still locks the silhouette of the 3D scene.
+// IP-Adapter weights only exist for SD1.5 / SDXL — when active we override the
+// turbo model to 'dreamshaper' (SD1.5) and bump steps to 20.
+const styleRefImage = ref(null)         // data URL of uploaded reference (or null)
+const styleRefScale = ref(0.6)          // 0..1.5 — how much the style reference influences output
+const STYLE_REF_FALLBACK_MODEL = 'dreamshaper'
+const STYLE_REF_FALLBACK_STEPS = 20
 const useRemoteClip = ref(true) // use remote CLIP API to avoid downloading text encoder (~600MB saved)
 const useT2IAdapter = ref(false) // download & apply T2I-Adapter conditioning during img2img inference
 
@@ -578,7 +627,7 @@ const loadModel = async () => {
 
   try {
     if (usePythonSdTurbo.value) {
-      const response = await fetch(`${API_BASE_URL}/health`)
+      const response = await fetch(`${activeApiBase.value}/health`)
       if (!response.ok) throw new Error(`Backend returned ${response.status}`)
       const data = await response.json()
       backendProvider.value = `python/${data.device || 'backend'}`
@@ -693,24 +742,60 @@ const generateWithPythonBackend = async () => {
 
   const useControlNetRequest = mode.value === 'img2img' && pythonControlNetEnabled.value && sourceImage
   const endpoint = useControlNetRequest
-    ? `${API_BASE_URL}/generate-with-controlnet`
-    : `${API_BASE_URL}/generate`
+    ? `${activeApiBase.value}/generate-with-controlnet`
+    : `${activeApiBase.value}/generate`
+
+  // When a style reference is provided (IP-Adapter), force a SD1.5 model
+  // because turbo (sd21) has no IP-Adapter weights. Also bump guidance > 0 so
+  // the prompt + style ref actually influence output during the longer schedule.
+  const styleRefActive = useControlNetRequest && !!styleRefImage.value
+  const lightningModelKey = sdxlLightningSteps.value === 8
+    ? 'sdxl-lightning-8'
+    : 'sdxl-lightning-4'
+  let effectiveModel
+  let effectiveGuidance
+  if (styleRefActive) {
+    // SD1.5 + IP-Adapter path (regardless of Lightning toggle — IP-Adapter
+    // SDXL weights download separately and we route there if Lightning is on).
+    if (useSdxlLightning.value) {
+      effectiveModel = lightningModelKey
+      effectiveGuidance = 0.0 // Lightning ignores CFG, backend will force 0 anyway
+    } else {
+      effectiveModel = STYLE_REF_FALLBACK_MODEL
+      effectiveGuidance = 6.5
+    }
+  } else if (useSdxlLightning.value) {
+    effectiveModel = lightningModelKey
+    effectiveGuidance = 0.0
+  } else {
+    effectiveModel = PYTHON_SD_TURBO_MODEL
+    effectiveGuidance = 0.0
+  }
 
   const requestBody = {
     prompt: prompt.value,
     negative_prompt: negativePrompt.value,
-    model: PYTHON_SD_TURBO_MODEL,
+    model: effectiveModel,
     width: dimensions.width,
     height: dimensions.height,
-    guidance_scale: 0.0,
+    guidance_scale: effectiveGuidance,
   }
 
   if (useControlNetRequest) {
     requestBody.image = sourceImage
     requestBody.controlnet = pythonControlNetKind.value
     requestBody.controlnet_conditioning_scale = pythonControlNetScale.value
+    requestBody.controlnet_guidance_end = pythonControlNetEnd.value
     requestBody.transparent_background = true
-    requestBody.steps = numSteps.value
+    // IP-Adapter requires more denoising steps than 1-step turbo — bump to ~20.
+    // Lightning ignores this and uses its baked-in step count (4 or 8) on backend.
+    if (useSdxlLightning.value) {
+      requestBody.steps = sdxlLightningSteps.value
+    } else if (styleRefActive) {
+      requestBody.steps = STYLE_REF_FALLBACK_STEPS
+    } else {
+      requestBody.steps = numSteps.value
+    }
     // img2img + ControlNet: ControlNet enforces shape, img2img keeps colour/shadow
     // from the 3D scene so the model only adds details on top.
     requestBody.use_img2img = true
@@ -719,6 +804,10 @@ const generateWithPythonBackend = async () => {
     if (cannyEdgeMap) requestBody.control_image = cannyEdgeMap
     if (improveCanny.value) requestBody.enhance_canny = true
     if (noiseMaskDataUrl) requestBody.noise_mask = noiseMaskDataUrl
+    if (styleRefActive) {
+      requestBody.style_image = styleRefImage.value
+      requestBody.style_scale = styleRefScale.value
+    }
   } else {
     requestBody.num_inference_steps = numSteps.value
     if (mode.value === 'img2img' && sourceImage) {
@@ -776,9 +865,12 @@ const generate = async () => {
     let imageDataUrl
 
     if (usePythonSdTurbo.value) {
+      const modelLabel = useSdxlLightning.value
+        ? `SDXL Lightning (${sdxlLightningSteps.value} steps)`
+        : 'SD Turbo'
       status.value = pythonControlNetEnabled.value && mode.value === 'img2img'
-        ? 'Generating with Python SD Turbo + ControlNet...'
-        : 'Generating with Python SD Turbo...'
+        ? `Generating with Python ${modelLabel} + ControlNet...`
+        : `Generating with Python ${modelLabel}...`
       imageDataUrl = await generateWithPythonBackend()
     } else if (mode.value === 'img2img') {
       imageDataUrl = await pipeline.generateImg2Img(prompt.value, inputImageEl.value, {
@@ -825,6 +917,15 @@ const handleImageUpload = (event) => {
   const file = event.target.files?.[0]
   if (!file) return
   loadInputImage(file)
+}
+
+const handleStyleRefUpload = (event) => {
+  const file = event.target.files?.[0]
+  if (!file || !file.type.startsWith('image/')) return
+  const reader = new FileReader()
+  reader.onload = (e) => { styleRefImage.value = e.target.result }
+  reader.readAsDataURL(file)
+  event.target.value = ''
 }
 
 const handleDrop = (event) => {
@@ -1300,6 +1401,34 @@ const clearCache = async () => {
     statusType.value = 'info'
   } catch (e) {
     status.value = 'Failed to clear cache: ' + (e.message || e)
+    statusType.value = 'error'
+  }
+}
+
+// Drop all cached PyTorch pipelines on the Python backend and free VRAM.
+// Use after experimenting with several models when the next generation hits
+// CUDA OOM. Re-loads the model on the next request.
+const clearGpuMemory = async () => {
+  try {
+    status.value = 'Clearing GPU memory…'
+    statusType.value = 'info'
+    const r = await fetch(`${activeApiBase.value}/clear-gpu`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok || !data.ok) {
+      throw new Error(data.error || `Backend returned ${r.status}`)
+    }
+    const before = data.vram_used_mb_before
+    const after = data.vram_used_mb_after
+    const delta = (before != null && after != null)
+      ? ` (VRAM ${before} → ${after} MB)` : ''
+    status.value = `GPU cleared: dropped ${data.dropped_models.length} models${delta}`
+    statusType.value = 'success'
+  } catch (e) {
+    status.value = 'Failed to clear GPU: ' + (e.message || e)
     statusType.value = 'error'
   }
 }
@@ -1797,6 +1926,42 @@ const loadProjectJSON = () => {
                 <span class="variant-hint">(PyTorch backend, merged HF model via SD_TURBO_MERGED_MODEL_ID)</span>
               </label>
             </div>
+            <!-- SDXL Lightning toggle. Always visible — checking it auto-enables
+                 the Python backend (Lightning runs through PyTorch only). -->
+            <div class="backend-toggle">
+              <label class="variant-radio">
+                <input type="checkbox" v-model="useSdxlLightning" :disabled="isLoading" />
+                <span class="variant-text">Use SDXL Lightning</span>
+                <span class="variant-hint">
+                  (ByteDance LoRA na SDXL base — vyšší detail, prvý load ~7 GB.
+                   Auto-zapne Python backend.)
+                </span>
+              </label>
+              <div v-if="useSdxlLightning" class="lightning-steps-row">
+                <span class="lightning-steps-label">Lightning steps:</span>
+                <label class="lightning-steps-pill">
+                  <input type="radio" :value="4" v-model.number="sdxlLightningSteps" :disabled="isLoading" />
+                  <span>4 (rýchlejšie)</span>
+                </label>
+                <label class="lightning-steps-pill">
+                  <input type="radio" :value="8" v-model.number="sdxlLightningSteps" :disabled="isLoading" />
+                  <span>8 (vyšší detail)</span>
+                </label>
+              </div>
+              <label v-if="useSdxlLightning" class="variant-radio remote-backend-row" :class="{ 'remote-disabled': !REMOTE_API_URL }">
+                <input
+                  type="checkbox"
+                  v-model="useRemoteBackend"
+                  :disabled="isLoading || !REMOTE_API_URL"
+                />
+                <span class="variant-text">Run on RunPod (remote)</span>
+                <span class="variant-hint">
+                  {{ REMOTE_API_URL
+                    ? `Sends generate requests to ${REMOTE_API_URL}. Same params as local — for fast iteration on a remote GPU.`
+                    : 'Set VITE_REMOTE_API_URL in .env to enable.' }}
+                </span>
+              </label>
+            </div>
             <!-- Model variant selector -->
             <div class="model-variant-toggle">
               <label class="variant-radio">
@@ -1832,6 +1997,11 @@ const loadProjectJSON = () => {
               </label>
             </div>
             <button class="action-btn secondary clear-cache-btn" @click="clearCache">Clear Model Cache</button>
+            <button
+              class="action-btn secondary clear-gpu-btn"
+              @click="clearGpuMemory"
+              title="Drop all loaded PyTorch pipelines and free VRAM on the backend. Use when the next generation throws CUDA OOM."
+            >Free GPU Memory</button>
           </div>
 
           <button
@@ -1908,6 +2078,7 @@ const loadProjectJSON = () => {
               <select v-model="pythonControlNetKind" :disabled="isGenerating">
                 <option value="depth_sd15">Depth</option>
                 <option value="canny_sd15">Canny</option>
+                <option value="tile_sd15">Tile (refine detail)</option>
               </select>
               <label>
                 Scale
@@ -1920,6 +2091,73 @@ const loadProjectJSON = () => {
                   :disabled="isGenerating"
                 />
               </label>
+            </div>
+            <!-- ControlNet active window: where during the schedule the CN is on.
+                 End < 1.0 means the last fraction of denoising runs CN-free, which
+                 lets the model add detail without being yanked back to the hint. -->
+            <div v-if="pythonControlNetEnabled" class="python-controlnet-row">
+              <label class="cn-window-label">
+                CN end
+                <input
+                  type="range"
+                  v-model.number="pythonControlNetEnd"
+                  step="0.05"
+                  min="0.1"
+                  max="1.0"
+                  :disabled="isGenerating"
+                />
+                <span class="cn-window-value">{{ pythonControlNetEnd.toFixed(2) }}</span>
+              </label>
+              <span class="cn-window-hint">
+                {{ pythonControlNetEnd >= 0.99
+                    ? 'CN drží štruktúru po celý čas (málo detailu)'
+                    : `posledných ${Math.round((1 - pythonControlNetEnd) * 100)} % krokov bez CN` }}
+              </span>
+            </div>
+            <!-- Style reference (IP-Adapter). Pulls texture/detail density from
+                 a reference image while ControlNet keeps the 3D silhouette. -->
+            <div v-if="pythonControlNetEnabled" class="style-ref-block">
+              <div class="style-ref-row">
+                <label class="style-ref-label">Style reference</label>
+                <span v-if="styleRefImage" class="style-ref-hint">
+                  Auto-switching to SD1.5 ({{ STYLE_REF_FALLBACK_MODEL }}) + {{ STYLE_REF_FALLBACK_STEPS }} steps
+                </span>
+                <span v-else class="style-ref-hint muted">
+                  Optional — upload a detailed building image to inject style
+                </span>
+              </div>
+              <div class="style-ref-controls">
+                <div
+                  v-if="!styleRefImage"
+                  class="style-ref-drop"
+                  @click="$refs.styleRefInput.click()"
+                >
+                  <span>Click to upload style reference</span>
+                </div>
+                <div v-else class="style-ref-preview">
+                  <img :src="styleRefImage" alt="Style reference" />
+                  <button class="style-ref-clear" @click="styleRefImage = null" type="button" title="Remove">&times;</button>
+                </div>
+                <input
+                  ref="styleRefInput"
+                  type="file"
+                  accept="image/*"
+                  style="display: none;"
+                  @change="handleStyleRefUpload"
+                />
+                <label v-if="styleRefImage" class="style-ref-scale">
+                  Strength
+                  <input
+                    type="range"
+                    v-model.number="styleRefScale"
+                    step="0.05"
+                    min="0"
+                    max="1.2"
+                    :disabled="isGenerating"
+                  />
+                  <span class="style-ref-scale-value">{{ styleRefScale.toFixed(2) }}</span>
+                </label>
+              </div>
             </div>
           </div>
 
@@ -2868,6 +3106,176 @@ const loadProjectJSON = () => {
   padding: 0.35rem 0.3rem;
   font-size: 0.8rem;
   outline: none;
+}
+
+.clear-gpu-btn {
+  margin-top: 0.4rem;
+  background: rgba(244, 96, 54, 0.12);
+  border: 1px solid rgba(244, 96, 54, 0.4);
+  color: #ffb89c;
+}
+.clear-gpu-btn:hover:not(:disabled) {
+  background: rgba(244, 96, 54, 0.22);
+  color: #fff;
+}
+
+/* ControlNet guidance window */
+.cn-window-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.75);
+  flex: 1;
+}
+.cn-window-label input[type="range"] {
+  flex: 1;
+  width: auto;
+}
+.cn-window-value {
+  min-width: 2.6ch;
+  text-align: right;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.cn-window-hint {
+  font-size: 0.68rem;
+  color: rgba(255,255,255,0.5);
+  flex-basis: 100%;
+  margin-top: 0.15rem;
+  margin-left: 0.1rem;
+}
+
+/* SDXL Lightning step selector */
+.lightning-steps-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.4rem 0 0 1.6rem;
+  flex-wrap: wrap;
+}
+.remote-backend-row {
+  margin: 0.5rem 0 0 1.6rem;
+}
+.remote-backend-row.remote-disabled {
+  opacity: 0.55;
+}
+.lightning-steps-label {
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.7);
+}
+.lightning-steps-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 14px;
+  font-size: 0.74rem;
+  color: rgba(255,255,255,0.85);
+  cursor: pointer;
+}
+.lightning-steps-pill input { margin: 0; }
+.lightning-steps-pill:has(input:checked) {
+  background: rgba(102,126,234,0.25);
+  border-color: rgba(102,126,234,0.7);
+  color: #fff;
+}
+
+/* IP-Adapter style reference */
+.style-ref-block {
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed rgba(255,255,255,0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.style-ref-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.style-ref-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+}
+.style-ref-hint {
+  font-size: 0.7rem;
+  color: #f6c177;
+}
+.style-ref-hint.muted {
+  color: rgba(255,255,255,0.45);
+}
+.style-ref-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.style-ref-drop {
+  flex: 1;
+  padding: 0.55rem 0.6rem;
+  border: 1px dashed rgba(255,255,255,0.25);
+  border-radius: 6px;
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  background: rgba(255,255,255,0.03);
+}
+.style-ref-drop:hover {
+  border-color: rgba(255,255,255,0.45);
+  color: #fff;
+}
+.style-ref-preview {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.18);
+  flex: 0 0 auto;
+}
+.style-ref-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.style-ref-clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0;
+}
+.style-ref-scale {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.75);
+  flex: 1;
+}
+.style-ref-scale input[type="range"] {
+  flex: 1;
+  width: auto;
+}
+.style-ref-scale-value {
+  min-width: 2.4ch;
+  text-align: right;
+  color: #fff;
 }
 
 /* Action buttons */

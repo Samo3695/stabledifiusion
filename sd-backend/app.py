@@ -149,6 +149,24 @@ MODEL_REGISTRY = {
         'description': 'SDXL - najvyššia kvalita, vyžaduje viac VRAM',
         'type': 'xl'  # Mark as XL for special handling
     },
+    'sdxl-lightning-4': {
+        'id': 'stabilityai/stable-diffusion-xl-base-1.0',
+        'description': 'SDXL Lightning 4-step (ByteDance LoRA na SDXL base) - rýchle, dobrý detail',
+        'type': 'xl',
+        'lightning': True,
+        'lightning_repo': 'ByteDance/SDXL-Lightning',
+        'lightning_weight': 'sdxl_lightning_4step_lora.safetensors',
+        'lightning_steps': 4,
+    },
+    'sdxl-lightning-8': {
+        'id': 'stabilityai/stable-diffusion-xl-base-1.0',
+        'description': 'SDXL Lightning 8-step (ByteDance LoRA na SDXL base) - pomalšie, ešte vyšší detail',
+        'type': 'xl',
+        'lightning': True,
+        'lightning_repo': 'ByteDance/SDXL-Lightning',
+        'lightning_weight': 'sdxl_lightning_8step_lora.safetensors',
+        'lightning_steps': 8,
+    },
     'sd-turbo-pytorch-fp16': {
         'id': os.environ.get('SD_TURBO_MERGED_MODEL_ID', 'stabilityai/sd-turbo'),
         'description': 'SD Turbo PyTorch FP16 - nastavte SD_TURBO_MERGED_MODEL_ID na merged HF repo ak ho chcete použiť',
@@ -213,7 +231,25 @@ def load_pipeline(key: str):
             pipe.scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
         else:
             pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-        
+
+        # SDXL Lightning: fuse the few-step LoRA into the UNet and switch to
+        # Euler with `timestep_spacing="trailing"` (required by ByteDance's LoRA).
+        # The LoRA is fused permanently — we cache 4-step and 8-step variants
+        # under separate model_keys so they don't clash.
+        if MODEL_REGISTRY[key].get('lightning'):
+            cfg = MODEL_REGISTRY[key]
+            print(f"⚡ Loading SDXL Lightning LoRA: {cfg['lightning_repo']}/{cfg['lightning_weight']}")
+            pipe.load_lora_weights(cfg['lightning_repo'], weight_name=cfg['lightning_weight'])
+            pipe.fuse_lora()
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
+            pipe.scheduler = EulerDiscreteScheduler.from_config(
+                pipe.scheduler.config, timestep_spacing="trailing"
+            )
+            print(f"✅ SDXL Lightning ready ({cfg['lightning_steps']} steps, trailing schedule)")
+
         pipe = pipe.to(device)
         if device == 'cuda':
             pipe.enable_attention_slicing()
@@ -275,6 +311,50 @@ adapter_pipelines = {}     # f"{model_key}__{adapter_kind}" -> StableDiffusionAd
 controlnets = {}           # key -> ControlNetModel
 controlnet_pipelines = {}  # f"{model_key}__{controlnet_kind}" -> StableDiffusionControlNetPipeline
 preprocessors = {}         # 'depth' | 'canny' | 'lineart' | 'sketch' -> detector
+# Pipelines that already have IP-Adapter weights loaded. The diffusers pipeline
+# objects themselves carry the weights; this set is just a fast guard so we
+# don't re-download / re-attach on every request.
+ip_adapter_loaded_pipelines = set()  # set of id(pipe)
+
+
+# IP-Adapter weights per base-model family. Only SD1.5 and SDXL have official
+# h94 releases — SD2.1 / SD-Turbo (sd21) is not supported here, callers must
+# switch to an SD1.5 model when style reference is used.
+IP_ADAPTER_REGISTRY = {
+    'sd15': {
+        'repo': 'h94/IP-Adapter',
+        'subfolder': 'models',
+        'weight_name': 'ip-adapter_sd15.safetensors',
+    },
+    'xl': {
+        'repo': 'h94/IP-Adapter',
+        'subfolder': 'sdxl_models',
+        'weight_name': 'ip-adapter_sdxl.safetensors',
+    },
+}
+
+
+def ensure_ip_adapter(pipe, family: str) -> bool:
+    """Load IP-Adapter weights into `pipe` (once). Returns True if available.
+
+    Returns False (and logs a warning) for unsupported families like sd21/turbo
+    so the caller can fall back gracefully.
+    """
+    cfg = IP_ADAPTER_REGISTRY.get(family)
+    if cfg is None:
+        print(f"⚠️  IP-Adapter not available for family '{family}' — falling back to no style reference.")
+        return False
+    if id(pipe) in ip_adapter_loaded_pipelines:
+        return True
+    try:
+        print(f"⬇️  Loading IP-Adapter weights ({cfg['repo']}/{cfg['weight_name']}) ...")
+        pipe.load_ip_adapter(cfg['repo'], subfolder=cfg['subfolder'], weight_name=cfg['weight_name'])
+        ip_adapter_loaded_pipelines.add(id(pipe))
+        print("✅ IP-Adapter loaded into ControlNet pipeline.")
+        return True
+    except Exception as e:
+        print(f"⚠️  Failed to load IP-Adapter: {e}")
+        return False
 
 # HF model IDs for SD1.5-compatible T2I-Adapters from TencentARC.
 ADAPTER_REGISTRY = {
@@ -289,6 +369,7 @@ CONTROLNET_REGISTRY = {
         'canny_sd15':   'lllyasviel/sd-controlnet-canny',
         'sketch_sd15':  'lllyasviel/control_v11p_sd15_scribble',
         'lineart_sd15': 'lllyasviel/control_v11p_sd15_lineart',
+        'tile_sd15':    'lllyasviel/control_v11f1e_sd15_tile',
     },
     'sd21': {
         'depth_sd15': 'thibaud/controlnet-sd21-depth-diffusers',
@@ -297,6 +378,7 @@ CONTROLNET_REGISTRY = {
     'xl': {
         'depth_sd15': 'diffusers/controlnet-depth-sdxl-1.0',
         'canny_sd15': 'diffusers/controlnet-canny-sdxl-1.0',
+        'tile_sd15':  'xinsir/controlnet-tile-sdxl-1.0',
     },
 }
 
@@ -635,6 +717,17 @@ def _make_conditioning_image(data, source_image, kind: str, width: int, height: 
         return _b64_to_pil(data['control_image']).resize((width, height), Image.LANCZOS)
 
     kind_root = kind.split('_')[0]
+    # Tile ControlNet is special: it does NOT use an edge/depth preprocessor.
+    # Its conditioning image is just the source image (typically downsampled
+    # and re-upsampled to give the model headroom to add detail). We pass the
+    # source through a 0.5× → 1× resize cycle to soften it, which is the
+    # standard recipe for tile-style refinement.
+    if kind_root == 'tile':
+        small = source_image.convert('RGB').resize(
+            (max(8, width // 2), max(8, height // 2)), Image.BILINEAR
+        )
+        return small.resize((width, height), Image.BILINEAR)
+
     proc = get_preprocessor(kind_root)
     conditioning_image = proc(source_image)
     if not isinstance(conditioning_image, Image.Image):
@@ -895,7 +988,16 @@ def generate_with_controlnet():
     width = int(data.get('width', 512))
     height = int(data.get('height', 512))
     steps = int(data.get('steps', 30))
+    # SDXL Lightning has its LoRA baked for a fixed number of steps. Honour it
+    # regardless of what the client sent; otherwise the output collapses.
+    _model_cfg = MODEL_REGISTRY.get(model_key, {})
+    if _model_cfg.get('lightning'):
+        steps = int(_model_cfg['lightning_steps'])
     guidance = float(data.get('guidance_scale', 7.5))
+    # Few-step distilled models (turbo / lightning) require guidance_scale=0
+    # (CFG=1) — anything higher destroys the output.
+    if _model_cfg.get('turbo') or _model_cfg.get('lightning'):
+        guidance = 0.0
     cond_scale = float(data.get('controlnet_conditioning_scale', data.get('adapter_conditioning_scale', 1.0)))
     seed = data.get('seed', None)
     if seed is None:
@@ -952,19 +1054,61 @@ def generate_with_controlnet():
         pipe = load_controlnet_pipeline(model_key, controlnet_kind, img2img=use_img2img)
         generator = torch.Generator(device=pipe.device).manual_seed(int(seed))
 
+        # ── Optional IP-Adapter style reference ─────────────────────────────
+        # Caller passes `style_image` (base64) to inject visual style/detail
+        # density from a reference image. Geometry stays locked by ControlNet.
+        # Only works for SD1.5 / SDXL families — SD-Turbo (sd21) is skipped
+        # with a warning and the request proceeds without IP-Adapter.
+        style_image_b64 = data.get('style_image') or data.get('styleImage')
+        ip_adapter_active = False
+        ip_adapter_image_pil = None
+        ip_adapter_scale = 0.0
+        if style_image_b64:
+            family = _model_family(model_key)
+            if ensure_ip_adapter(pipe, family):
+                try:
+                    ip_adapter_scale = float(data.get('style_scale', 0.6))
+                    ip_adapter_scale = max(0.0, min(1.5, ip_adapter_scale))
+                    pipe.set_ip_adapter_scale(ip_adapter_scale)
+                    ip_adapter_image_pil = _b64_to_pil(style_image_b64).convert('RGB').resize(
+                        (224, 224), Image.LANCZOS
+                    )
+                    ip_adapter_active = True
+                    print(f"🎨 IP-Adapter active: scale={ip_adapter_scale:.2f}, "
+                          f"family={family}, model={model_key}")
+                except Exception as e:
+                    print(f"⚠️  IP-Adapter setup failed, continuing without: {e}")
+                    ip_adapter_active = False
+            else:
+                print(f"⚠️  style_image ignored — model '{model_key}' (family {family}) "
+                      f"is not supported by IP-Adapter. Use a SD1.5 model "
+                      f"(lite, dreamshaper, realistic, ...).")
+        else:
+            # Make sure stale IP-Adapter scale from a previous request is
+            # neutralised when no style reference is sent now.
+            if id(pipe) in ip_adapter_loaded_pipelines:
+                try:
+                    pipe.set_ip_adapter_scale(0.0)
+                except Exception:
+                    pass
+
         if data.get('transparent_background', False):
             prompt, negative_prompt = _with_background_constraints(prompt, negative_prompt)
 
         if use_img2img:
             # ControlNet+img2img potrebuje viac iterácií ako čistý SD-Turbo img2img,
             # inak nestihne v posledných (CN-free) krokoch dorobiť detaily.
-            min_cn_steps = 8
-            requested_steps = max(steps, min_cn_steps)
-            # diffusers requires effective steps (num_inference_steps * strength) >= 1.
-            i2i_steps = max(requested_steps, int(round(1 / max(strength, 0.05))) + 1)
+            # SDXL-Lightning má LoRA „zapečenú" na fixný počet krokov — nesmieme ho zvýšiť.
+            if _model_cfg.get('lightning'):
+                i2i_steps = int(_model_cfg['lightning_steps'])
+            else:
+                min_cn_steps = 8
+                requested_steps = max(steps, min_cn_steps)
+                # diffusers requires effective steps (num_inference_steps * strength) >= 1.
+                i2i_steps = max(requested_steps, int(round(1 / max(strength, 0.05))) + 1)
             print(f"⚙️  ControlNet+img2img: steps={i2i_steps}, strength={strength:.2f}, "
                   f"cn_scale={cond_scale}, cn_window={cn_guidance_start:.2f}..{cn_guidance_end:.2f}")
-            result = pipe(
+            i2i_kwargs = dict(
                 prompt=prompt,
                 negative_prompt=negative_prompt or None,
                 image=src_image,
@@ -978,9 +1122,12 @@ def generate_with_controlnet():
                 control_guidance_start=cn_guidance_start,
                 control_guidance_end=cn_guidance_end,
                 generator=generator,
-            ).images[0]
+            )
+            if ip_adapter_active and ip_adapter_image_pil is not None:
+                i2i_kwargs['ip_adapter_image'] = ip_adapter_image_pil
+            result = pipe(**i2i_kwargs).images[0]
         else:
-            result = pipe(
+            t2i_kwargs = dict(
                 prompt=prompt,
                 negative_prompt=negative_prompt or None,
                 image=control_image,
@@ -992,7 +1139,10 @@ def generate_with_controlnet():
                 control_guidance_start=cn_guidance_start,
                 control_guidance_end=cn_guidance_end,
                 generator=generator,
-            ).images[0]
+            )
+            if ip_adapter_active and ip_adapter_image_pil is not None:
+                t2i_kwargs['ip_adapter_image'] = ip_adapter_image_pil
+            result = pipe(**t2i_kwargs).images[0]
 
         if data.get('transparent_background', False):
             result = _apply_source_alpha(result, source_with_alpha)
@@ -1030,12 +1180,113 @@ def list_controlnets():
 def health():
     loaded = list(pipelines.keys())
     available_loras = get_available_loras()
-    return jsonify({
+    info = {
         'status': 'ok',
         'models_loaded': loaded,
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         'loras_available': available_loras,
         'current_lora': current_lora['name'],
+    }
+    if torch.cuda.is_available():
+        try:
+            free, total = torch.cuda.mem_get_info()
+            info['vram_free_mb'] = round(free / (1024 ** 2), 1)
+            info['vram_total_mb'] = round(total / (1024 ** 2), 1)
+            info['vram_used_mb'] = round((total - free) / (1024 ** 2), 1)
+        except Exception:
+            pass
+    return jsonify(info)
+
+
+@app.route('/clear-gpu', methods=['POST'])
+def clear_gpu():
+    """Drop all cached pipelines / controlnets / adapters and free VRAM.
+
+    Use after experimenting with several models — diffusers caches every
+    pipeline you load, and CUDA memory accumulates because PyTorch keeps a
+    reservation pool. This endpoint clears Python references, runs gc, and
+    asks the CUDA allocator to release back to the driver.
+
+    Optional JSON body: {"keep": ["lite", "sdxl-lightning-4"]} — preserves
+    those model_keys and only drops the rest.
+    """
+    global pipelines, controlnets, controlnet_pipelines, adapters, adapter_pipelines
+    global preprocessors, ip_adapter_loaded_pipelines, current_lora
+
+    data = request.get_json(silent=True) or {}
+    keep = set(data.get('keep') or [])
+
+    before = None
+    if torch.cuda.is_available():
+        try:
+            free_b, total_b = torch.cuda.mem_get_info()
+            before = round((total_b - free_b) / (1024 ** 2), 1)
+        except Exception:
+            pass
+
+    # Snapshot what we are dropping so we can report it.
+    dropped_models = [k for k in pipelines.keys() if k not in keep]
+    dropped_cn = list(controlnet_pipelines.keys())
+    dropped_adapters = list(adapter_pipelines.keys())
+
+    # 1. Drop full pipelines (except `keep`). ControlNet / adapter pipelines
+    #    share UNet/VAE refs with these, so they MUST go too — otherwise the
+    #    model weights stay alive in VRAM via the shared references.
+    for k in list(pipelines.keys()):
+        if k in keep:
+            continue
+        entry = pipelines.pop(k)
+        try:
+            entry.get('pipe', None)
+            entry.get('img2img', None)
+        except Exception:
+            pass
+        del entry
+
+    # 2. ControlNet + adapter pipelines: drop ALL (they reference the base
+    #    pipelines we just dropped; even if some bases are kept, rebuilding
+    #    these on next request is cheap).
+    controlnet_pipelines.clear()
+    adapter_pipelines.clear()
+    controlnets.clear()
+    adapters.clear()
+
+    # 3. IP-Adapter tracking set is now stale.
+    ip_adapter_loaded_pipelines.clear()
+
+    # 4. Preprocessors (Midas/Canny/etc) hold model weights too.
+    preprocessors.clear()
+
+    # 5. Reset LoRA bookkeeping (we just nuked the pipelines that had it loaded).
+    current_lora['name'] = None
+    current_lora['scale'] = None
+
+    # 6. Force Python GC + CUDA empty cache.
+    import gc
+    gc.collect()
+    after = None
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+            free_b, total_b = torch.cuda.mem_get_info()
+            after = round((total_b - free_b) / (1024 ** 2), 1)
+        except Exception:
+            pass
+
+    print(f"🧹 /clear-gpu: dropped {len(dropped_models)} pipelines "
+          f"({dropped_models}), {len(dropped_cn)} CN pipelines, "
+          f"{len(dropped_adapters)} adapter pipelines. "
+          f"VRAM {before}→{after} MB used.")
+
+    return jsonify({
+        'ok': True,
+        'kept': sorted(list(keep & set(pipelines.keys()))),
+        'dropped_models': dropped_models,
+        'dropped_controlnet_pipelines': dropped_cn,
+        'dropped_adapter_pipelines': dropped_adapters,
+        'vram_used_mb_before': before,
+        'vram_used_mb_after': after,
     })
 
 @app.route('/generate', methods=['POST'])
