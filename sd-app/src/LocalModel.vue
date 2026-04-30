@@ -2276,13 +2276,13 @@ const loadProjectJSON = () => {
               <label class="grid-thickness-label">Čiary na priesečníkoch: <strong>{{ gridLineThickness }}px</strong></label>
               <input
                 type="range"
-                min="1"
+                min="0.2"
                 max="30"
-                step="1"
+                step="0.1"
                 v-model.number="gridLineThickness"
                 :disabled="isGenerating"
                 class="grid-thickness-range"
-                title="Hrúbka tmavých čiar v miestach kde sa objekty pretínajú medzi sebou alebo s podkladom — pomáha SD držať siluety."
+                title="Hrúbka tmavých čiar v miestach kde sa objekty pretínajú medzi sebou alebo s podkladom — pomáha SD držať siluety. Pod 1px sa čiara zoslabí priehľadnosťou (vyzerá tenšie)."
               />
             </div>
           </div>

@@ -187,7 +187,11 @@ function drawFaceGrid(octx, outW, outH, minX, minY, cw, ch, thicknessPx) {
 // composite over the already-rendered screenshot.
 function drawInterObjectEdges(octx, outW, outH, minX, minY, cw, ch, thicknessPx) {
   if (!placed || placed.length === 0) return
-  const thick = Math.max(1, Math.min(30, thicknessPx | 0))
+  // Allow fractional thickness < 1 — at sub-pixel widths we keep a 1-output-px
+  // line and lower its alpha instead, which visually reads as a thinner stroke.
+  const rawThick = Math.max(0.1, Math.min(30, Number(thicknessPx) || 1))
+  const thick = Math.max(1, Math.round(rawThick))
+  const lineAlpha = rawThick < 1 ? rawThick : 1
 
   // --- ID pass: unique flat colour per mesh + a distinct colour for the plane ---
   const restorers = []
@@ -254,23 +258,66 @@ function drawInterObjectEdges(octx, outW, outH, minX, minY, cw, ch, thicknessPx)
   maskCanvas.width = cw; maskCanvas.height = ch
   maskCanvas.getContext('2d').putImageData(mask, 0, 0)
 
-  // --- Dilate to requested thickness via offset draws ---
-  // Scale the destination radius from input crop pixels to output pixels so
-  // thickness reads consistently regardless of crop resize.
-  const scale = outW / cw
-  const r = Math.max(1, Math.round((thick / 2) * scale))
-  octx.save()
-  octx.imageSmoothingEnabled = true
-  // Center pass:
-  octx.drawImage(maskCanvas, 0, 0, outW, outH)
-  // Disc-shaped offset passes for thickening:
-  for (let dy = -r; dy <= r; dy++) {
-    for (let dx = -r; dx <= r; dx++) {
-      if (dx === 0 && dy === 0) continue
-      if (dx * dx + dy * dy > r * r) continue
-      octx.drawImage(maskCanvas, 0, 0, cw, ch, dx, dy, outW, outH)
+  // --- Render at OUTPUT resolution with nearest-neighbour upscaling so a
+  // 1-pixel mask stays a crisp 1 output-pixel line (no bilinear softening
+  // that visually inflates thickness). All compositing happens with smoothing
+  // OFF and the alpha is forced binary, so:
+  //   • overlapping passes never accumulate alpha (idempotent)
+  //   • thickness is exactly `thick` output pixels regardless of how many
+  //     edges meet at a point.
+  const dil = document.createElement('canvas')
+  dil.width = outW; dil.height = outH
+  const dctx = dil.getContext('2d')
+  dctx.imageSmoothingEnabled = false
+  dctx.mozImageSmoothingEnabled = false
+  dctx.webkitImageSmoothingEnabled = false
+  dctx.msImageSmoothingEnabled = false
+  // 1) Upscale the 1-px source mask to output resolution (nearest).
+  dctx.drawImage(maskCanvas, 0, 0, cw, ch, 0, 0, outW, outH)
+  // 2) Threshold to binary alpha so the source mask is clean before dilation.
+  let baseImg = dctx.getImageData(0, 0, outW, outH)
+  let baseData = baseImg.data
+  for (let i = 0; i < baseData.length; i += 4) {
+    if (baseData[i + 3] > 0) {
+      baseData[i] = 0; baseData[i + 1] = 0; baseData[i + 2] = 0; baseData[i + 3] = 255
     }
   }
+  dctx.putImageData(baseImg, 0, 0)
+
+  // 3) Dilate in OUTPUT pixels (so thick==1 stays 1px, thick==2 stays 2px…).
+  // Radius such that the resulting line width equals `thick` output pixels.
+  // For thick=1 → r=0 (no dilation, just the 1-px upscaled mask).
+  // For thick=N → r=floor((N-1)/2) with an optional extra half-step for even N.
+  if (thick > 1) {
+    // Snapshot of the 1-px base to draw offset copies from.
+    const baseCanvas = document.createElement('canvas')
+    baseCanvas.width = outW; baseCanvas.height = outH
+    baseCanvas.getContext('2d').drawImage(dil, 0, 0)
+    const r = Math.floor(thick / 2)
+    const start = (thick % 2 === 0) ? -(r - 1) : -r
+    const end = r
+    for (let dy = start; dy <= end; dy++) {
+      for (let dx = start; dx <= end; dx++) {
+        if (dx === 0 && dy === 0) continue
+        dctx.drawImage(baseCanvas, dx, dy)
+      }
+    }
+    // Re-threshold so any sub-pixel drift stays binary (no soft edges).
+    const dImg = dctx.getImageData(0, 0, outW, outH)
+    const dData = dImg.data
+    for (let i = 0; i < dData.length; i += 4) {
+      if (dData[i + 3] > 0) {
+        dData[i] = 0; dData[i + 1] = 0; dData[i + 2] = 0; dData[i + 3] = 255
+      }
+    }
+    dctx.putImageData(dImg, 0, 0)
+  }
+
+  // 4) Composite onto the final image — straight 1:1 blit, no resize.
+  octx.save()
+  octx.imageSmoothingEnabled = false
+  if (lineAlpha < 1) octx.globalAlpha = lineAlpha
+  octx.drawImage(dil, 0, 0)
   octx.restore()
 }
 
