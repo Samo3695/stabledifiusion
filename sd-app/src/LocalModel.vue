@@ -11,6 +11,12 @@ import { buildRoad } from './utils/roadBuilder.js'
 const BASE_URL = import.meta.env.BASE_URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const REMOTE_API_URL = import.meta.env.VITE_REMOTE_API_URL || ''
+// RunPod Serverless config — set in .env.development (gitignored).
+// Endpoint ID is part of the URL (https://api.runpod.ai/v2/<id>/runsync).
+// API key is a Bearer token from RunPod Settings → API Keys.
+const RUNPOD_ENDPOINT_ID = import.meta.env.VITE_RUNPOD_ENDPOINT_ID || ''
+const RUNPOD_API_KEY = import.meta.env.VITE_RUNPOD_API_KEY || ''
+const RUNPOD_CONFIGURED = !!(RUNPOD_ENDPOINT_ID && RUNPOD_API_KEY)
 const PYTHON_SD_TURBO_MODEL = 'sd-turbo-pytorch-fp16'
 
 const router = useRouter()
@@ -46,12 +52,130 @@ const useRemoteBackend = ref(false)
 const activeApiBase = computed(() =>
   useRemoteBackend.value && REMOTE_API_URL ? REMOTE_API_URL : API_BASE_URL
 )
+// RunPod Serverless toggle. When on, every backend call is wrapped in the
+// serverless protocol: POST https://api.runpod.ai/v2/{id}/runsync with body
+// {"input": {"endpoint": "/path", "data": {...}}} and Bearer auth. The
+// backend handler (rp_handler.py) unwraps to the same Flask routes, so the
+// rest of this file's request payloads stay identical.
+//
+// RunPod is server-side only — it has no concept of the browser WebGPU/ONNX
+// path. So toggling it on must imply `usePythonSdTurbo = true`; otherwise
+// the rest of the UI (ControlNet panel, model variants) hides the controls
+// the user actually needs and Generate ends up running locally in WebGPU
+// instead of on RunPod.
+const useRunpodServerless = ref(RUNPOD_CONFIGURED)
+
+/**
+ * Unified backend caller. Handles three deployment shapes:
+ *   • Local Flask (default)         → fetch(`${activeApiBase}${path}`)
+ *   • RunPod Pod (URL proxy)        → same as local, just different host
+ *   • RunPod Serverless (queue API) → wraps body, posts to /runsync, unwraps output
+ *
+ * Always returns the parsed JSON body the route would have returned. Throws
+ * on HTTP errors with the backend's error string when available.
+ */
+async function apiFetch(path, body, opts = {}) {
+  const method = opts.method || (body !== undefined && body !== null ? 'POST' : 'GET')
+
+  if (useRunpodServerless.value && RUNPOD_CONFIGURED) {
+    const baseUrl = `https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}`
+    const headers = {
+      'Authorization': `Bearer ${RUNPOD_API_KEY}`,
+      'Content-Type': 'application/json',
+    }
+
+    // POST /runsync — blocks up to ~90 s. If the job finishes within that
+    // window we get COMPLETED right away (warm worker, common case).
+    // Otherwise RunPod returns IN_QUEUE / IN_PROGRESS + a job id, and we
+    // have to poll /status/{id} until terminal.
+    const r = await fetch(`${baseUrl}/runsync`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        input: { endpoint: path, data: body || {} },
+      }),
+    })
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '')
+      throw new Error(`RunPod ${r.status}: ${txt || 'request failed'}`)
+    }
+    let json = await r.json()
+
+    // Poll loop. 5 min max — enough for SDXL cold start + first model
+    // download from HF on a fresh worker. Tune POLL_TIMEOUT_MS if you're
+    // genuinely waiting on huge cold downloads (e.g., empty network volume).
+    const POLL_INTERVAL_MS = 2500
+    const POLL_TIMEOUT_MS = 5 * 60 * 1000
+    const pollStart = Date.now()
+    while (json.status === 'IN_QUEUE' || json.status === 'IN_PROGRESS') {
+      if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
+        throw new Error(`RunPod job stuck in ${json.status} > 5 min (id=${json.id})`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+      const sr = await fetch(`${baseUrl}/status/${json.id}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${RUNPOD_API_KEY}` },
+      })
+      if (!sr.ok) {
+        const txt = await sr.text().catch(() => '')
+        throw new Error(`RunPod status ${sr.status}: ${txt || 'poll failed'}`)
+      }
+      json = await sr.json()
+    }
+
+    if (json.status === 'FAILED' || json.status === 'CANCELLED' || json.status === 'TIMED_OUT') {
+      throw new Error(json.error || `RunPod job ${json.status}`)
+    }
+    if (json.status !== 'COMPLETED') {
+      throw new Error(`Unexpected RunPod status: ${json.status}`)
+    }
+    const out = json.output ?? {}
+    // Handler shapes route errors as {error, status} — re-throw so call sites
+    // see the same exception shape as direct fetch errors.
+    if (out && typeof out === 'object' && out.error && out.status >= 400) {
+      throw new Error(out.error)
+    }
+    return out
+  }
+
+  // Direct path (local Flask or RunPod Pod)
+  const init = { method }
+  if (body !== undefined && body !== null && method !== 'GET') {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+  const r = await fetch(`${activeApiBase.value}${path}`, init)
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    throw new Error(data.error || `Backend returned ${r.status}`)
+  }
+  return data
+}
 // Lightning runs through the Python backend only. If the user toggles it on
 // while the WebGPU/ONNX path is still selected, flip them to the Python path
 // automatically — otherwise the Lightning model_key never reaches the server.
 watch(useSdxlLightning, (on) => {
   if (on) usePythonSdTurbo.value = true
 })
+// RunPod Serverless is also server-side only. Toggle on → also enable the
+// Python backend so the ControlNet panel + model controls appear, and so
+// Generate sends a POST instead of running browser-side WebGPU.
+// `immediate: true` covers the boot case where the toggle is auto-true
+// because env vars are set; without immediate, usePythonSdTurbo would stay
+// false until the user manually toggles RunPod off and on again.
+//
+// Also enable SDXL Lightning by default — RunPod is paying for a 24 GB GPU
+// and the only ControlNet kinds we ship for the sd21 (sd-turbo) family are
+// Depth + Canny. Tile and the rest of the modern toolchain only exist for
+// sd15 / xl. Defaulting to Lightning makes Tile and IP-Adapter "just work";
+// user can still untick Lightning manually if they specifically want
+// sd-turbo on RunPod.
+watch(useRunpodServerless, (on) => {
+  if (on) {
+    usePythonSdTurbo.value = true
+    useSdxlLightning.value = true
+  }
+}, { immediate: true })
 const pythonControlNetEnabled = ref(false)
 const pythonControlNetKind = ref('depth_sd15')
 const pythonControlNetScale = ref(0.4)
@@ -61,6 +185,23 @@ const pythonControlNetScale = ref(0.4)
 // to the depth/canny hint. Tile typically wants higher (0.7–0.9) because
 // Tile IS the refinement signal.
 const pythonControlNetEnd = ref(0.45)
+// Two-pass: explore with non-distilled SDXL base (handles arbitrary strength
+// → real variability), then refine with the selected Lightning model at low
+// strength for crisp detail. Backend handles both passes in one request.
+// Costs ~6× more GPU time per generation but gives the "shape stays + detail
+// changes" behaviour Lightning alone can't deliver at high strength.
+const useTwoPass = ref(false)
+// Backend CONTROLNET_REGISTRY has Tile only for sd15 / xl families. Picking
+// Tile while sd-turbo (sd21) is the active model returns a 400 from the
+// route — surface that mismatch in the UI instead of waiting for the error.
+const controlNetCompatibilityWarning = computed(() => {
+  if (!pythonControlNetEnabled.value) return ''
+  if (pythonControlNetKind.value !== 'tile_sd15') return ''
+  // Lightning routes to xl family which has Tile — no warning.
+  if (useSdxlLightning.value) return ''
+  return 'Tile vyžaduje SDXL alebo SD1.5. Zaškrtni „Use SDXL Lightning" alebo prepni na Depth/Canny.'
+})
+
 // Tile ControlNet is itself the refinement signal — pulling it out early
 // defeats the purpose. Depth/Canny are structural locks, so a short window
 // is better. Auto-tune the default when the user switches kinds; the user
@@ -78,6 +219,35 @@ watch(pythonControlNetKind, (kind) => {
 // stays exactly as before so existing behaviour is preserved.
 const improveCanny = ref(false)         // Pre-process the 3D screenshot to give Canny clearer edges.
 const noiseMaskEnabled = ref(false)     // Reveal the noise-mask paint tool inside the 3D editor.
+const gridTextureOverlay = ref(false)   // Paint a procedural grid + intersection edges onto every 3D object before screenshotting — pseudo-ControlNet shape signal.
+const gridLineThickness = ref(6)        // Intersection-edge thickness in output pixels (1–30).
+const faceGridLineThickness = ref(4)    // Face-grid line thickness in texture pixels (1–20). Bends on curves so SD distinguishes cylinder/cone from cube/pyramid.
+
+const SIZE_MULTIPLIERS = [1, 1.2, 1.5]
+const outputSizeMultiplier = ref(1)     // Scales the generation dimensions (snapped to multiples of 64). 1× = baseline.
+
+// Apply outputSizeMultiplier to a {width, height} pair and snap to 64 px.
+// Used for both the Python backend request body and the ONNX img2img/txt2img
+// pipeline call so the chosen multiplier is honoured regardless of backend.
+const applyOutputSizeMultiplier = (dims) => {
+  const m = outputSizeMultiplier.value
+  if (!m || m === 1) return dims
+  const SNAP = 64
+  return {
+    width: Math.max(SNAP, Math.round((dims.width * m) / SNAP) * SNAP),
+    height: Math.max(SNAP, Math.round((dims.height * m) / SNAP) * SNAP),
+  }
+}
+
+// Preview of the actual generated size after the multiplier kicks in. Used by
+// the UI underneath the Size row so the user sees exactly what the SD pass
+// will receive. Mirrors the dimensions logic at the top of generate().
+const scaledOutputSize = computed(() => {
+  const base = (mode.value === 'img2img' && inputImageSize.value)
+    ? computeGenSizeForAspect(inputImageSize.value.width, inputImageSize.value.height)
+    : { width: genWidth.value, height: genHeight.value }
+  return applyOutputSizeMultiplier(base)
+})
 // Optional IP-Adapter style reference. When the user uploads a reference image
 // the backend pulls visual style / detail density from it (windows, textures,
 // vegetation) while ControlNet still locks the silhouette of the 3D scene.
@@ -627,9 +797,7 @@ const loadModel = async () => {
 
   try {
     if (usePythonSdTurbo.value) {
-      const response = await fetch(`${activeApiBase.value}/health`)
-      if (!response.ok) throw new Error(`Backend returned ${response.status}`)
-      const data = await response.json()
+      const data = await apiFetch('/health', null, { method: 'GET' })
       backendProvider.value = `python/${data.device || 'backend'}`
       modelLoaded.value = true
       mode.value = 'img2img'
@@ -736,14 +904,15 @@ const generateWithPythonBackend = async () => {
     noiseMaskDataUrl = editor3dRef.value.getNoiseMask()
   }
 
-  const dimensions = mode.value === 'img2img' && inputImageSize.value
+  const baseDimensions = mode.value === 'img2img' && inputImageSize.value
     ? computeGenSizeForAspect(inputImageSize.value.width, inputImageSize.value.height)
     : { width: genWidth.value, height: genHeight.value }
+  const dimensions = applyOutputSizeMultiplier(baseDimensions)
 
   const useControlNetRequest = mode.value === 'img2img' && pythonControlNetEnabled.value && sourceImage
-  const endpoint = useControlNetRequest
-    ? `${activeApiBase.value}/generate-with-controlnet`
-    : `${activeApiBase.value}/generate`
+  const endpointPath = useControlNetRequest
+    ? '/generate-with-controlnet'
+    : '/generate'
 
   // When a style reference is provided (IP-Adapter), force a SD1.5 model
   // because turbo (sd21) has no IP-Adapter weights. Also bump guidance > 0 so
@@ -800,6 +969,11 @@ const generateWithPythonBackend = async () => {
     // from the 3D scene so the model only adds details on top.
     requestBody.use_img2img = true
     requestBody.strength = strength.value
+    // Two-pass: only meaningful when refining with a Lightning model. Backend
+    // ignores the flag for non-Lightning paths so this is safe to always send.
+    if (useTwoPass.value && useSdxlLightning.value) {
+      requestBody.two_pass = true
+    }
     // Pass-through hints for backend (ignored if endpoint doesn't recognise them).
     if (cannyEdgeMap) requestBody.control_image = cannyEdgeMap
     if (improveCanny.value) requestBody.enhance_canny = true
@@ -817,16 +991,7 @@ const generateWithPythonBackend = async () => {
     if (noiseMaskDataUrl) requestBody.noise_mask = noiseMaskDataUrl
   }
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
-  })
-
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(data.error || `Backend returned ${response.status}`)
-  }
+  const data = await apiFetch(endpointPath, requestBody)
 
   return data.image
 }
@@ -868,30 +1033,44 @@ const generate = async () => {
       const modelLabel = useSdxlLightning.value
         ? `SDXL Lightning (${sdxlLightningSteps.value} steps)`
         : 'SD Turbo'
-      status.value = pythonControlNetEnabled.value && mode.value === 'img2img'
-        ? `Generating with Python ${modelLabel} + ControlNet...`
-        : `Generating with Python ${modelLabel}...`
+      const twoPassActive = useTwoPass.value && useSdxlLightning.value
+        && pythonControlNetEnabled.value && mode.value === 'img2img'
+      if (twoPassActive) {
+        status.value = `Two-pass: SDXL explore → Lightning refine (~30–40 s)...`
+      } else {
+        status.value = pythonControlNetEnabled.value && mode.value === 'img2img'
+          ? `Generating with Python ${modelLabel} + ControlNet...`
+          : `Generating with Python ${modelLabel}...`
+      }
       imageDataUrl = await generateWithPythonBackend()
     } else if (mode.value === 'img2img') {
+      const onnxDims = applyOutputSizeMultiplier({ width: genWidth.value, height: genHeight.value })
       imageDataUrl = await pipeline.generateImg2Img(prompt.value, inputImageEl.value, {
         numSteps: numSteps.value,
         strength: strength.value,
-        width: genWidth.value,
-        height: genHeight.value,
+        width: onnxDims.width,
+        height: onnxDims.height,
         useT2IAdapter: useT2IAdapter.value,
         onStep: (step, total) => {
           status.value = `Denoising step ${step + 1}/${total}...`
         }
       })
-      // Resize output to match input image dimensions
-      if (inputImageSize.value && (inputImageSize.value.width !== genWidth.value || inputImageSize.value.height !== genHeight.value)) {
+      // Resize output to match input image dimensions — but ONLY when the
+      // user didn't ask for an upscaled output. With multiplier > 1× we keep
+      // the larger generated size so the requested upscale survives.
+      if (
+        outputSizeMultiplier.value === 1
+        && inputImageSize.value
+        && (inputImageSize.value.width !== onnxDims.width || inputImageSize.value.height !== onnxDims.height)
+      ) {
         imageDataUrl = await resizeDataUrl(imageDataUrl, inputImageSize.value.width, inputImageSize.value.height)
       }
     } else {
+      const onnxDims = applyOutputSizeMultiplier({ width: genWidth.value, height: genHeight.value })
       imageDataUrl = await pipeline.generate(prompt.value, {
         numSteps: numSteps.value,
-        width: genWidth.value,
-        height: genHeight.value,
+        width: onnxDims.width,
+        height: onnxDims.height,
         onStep: (step, total) => {
           status.value = `Denoising step ${step + 1}/${total}...`
         }
@@ -1412,14 +1591,9 @@ const clearGpuMemory = async () => {
   try {
     status.value = 'Clearing GPU memory…'
     statusType.value = 'info'
-    const r = await fetch(`${activeApiBase.value}/clear-gpu`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    })
-    const data = await r.json().catch(() => ({}))
-    if (!r.ok || !data.ok) {
-      throw new Error(data.error || `Backend returned ${r.status}`)
+    const data = await apiFetch('/clear-gpu', {})
+    if (!data.ok) {
+      throw new Error(data.error || 'clear-gpu did not return ok')
     }
     const before = data.vram_used_mb_before
     const after = data.vram_used_mb_after
@@ -1908,7 +2082,7 @@ const loadProjectJSON = () => {
             <span class="preview3d-caption">{{ inputImageSize ? `${inputImageSize.width} × ${inputImageSize.height}` : 'preview' }}{{ modelLoaded ? ' → img2img input' : '' }}</span>
           </div>
           <div class="editor3d-frame">
-            <Editor3D ref="editor3dRef" :custom-textures="editor3dCustomTextures" :enable-noise-paint="noiseMaskEnabled" />
+            <Editor3D ref="editor3dRef" :custom-textures="editor3dCustomTextures" :enable-noise-paint="noiseMaskEnabled" :grid-overlay="gridTextureOverlay" :grid-thickness="gridLineThickness" :face-grid-thickness="faceGridLineThickness" />
           </div>
         </div>
 
@@ -1924,6 +2098,20 @@ const loadProjectJSON = () => {
                 <input type="checkbox" v-model="usePythonSdTurbo" :disabled="isLoading" />
                 <span class="variant-text">Python SD Turbo FP16 + ControlNet</span>
                 <span class="variant-hint">(PyTorch backend, merged HF model via SD_TURBO_MERGED_MODEL_ID)</span>
+              </label>
+            </div>
+            <!-- RunPod Serverless toggle. Routes every backend call through
+                 the serverless queue API instead of localhost:5000. Only shown
+                 when env vars are present so users without RunPod don't see
+                 a non-functional checkbox. -->
+            <div v-if="RUNPOD_CONFIGURED" class="backend-toggle">
+              <label class="variant-radio">
+                <input type="checkbox" v-model="useRunpodServerless" :disabled="isLoading" />
+                <span class="variant-text">Run on RunPod Serverless</span>
+                <span class="variant-hint">
+                  (endpoint <code>{{ RUNPOD_ENDPOINT_ID }}</code> — pay-per-second GPU,
+                   first request after idle ≈ 30–60 s cold start)
+                </span>
               </label>
             </div>
             <!-- SDXL Lightning toggle. Always visible — checking it auto-enables
@@ -2067,6 +2255,38 @@ const loadProjectJSON = () => {
             >3D</button>
           </div>
 
+          <!-- Backend-agnostic 3D-input tweaks (visible for both ONNX WebGPU and Python). -->
+          <div v-if="mode === 'img2img' && inputSource === '3d'" class="input-group threeD-extras">
+            <label class="prompt-extra-checkbox" title="Po screenshote pridá (1) mriežku na plochách objektov ktorá sa krúti na zakrivení — pomôže SD rozlíšiť valec od kvádra a kužeľ od pyramídy; (2) hrubé tmavé čiary na priesečníkoch objektov. Textúry aj podklad zostanú zachované — obe vrstvy sú čisté overlay nad výsledkom.">
+              <input type="checkbox" v-model="gridTextureOverlay" :disabled="isGenerating" />
+              <span>Grid + edge overlay (test presnosti)</span>
+            </label>
+            <div v-if="gridTextureOverlay" class="grid-thickness-row">
+              <label class="grid-thickness-label">Mriežka na plochách: <strong>{{ faceGridLineThickness }}px</strong></label>
+              <input
+                type="range"
+                min="1"
+                max="20"
+                step="1"
+                v-model.number="faceGridLineThickness"
+                :disabled="isGenerating"
+                class="grid-thickness-range"
+                title="Hrúbka čiar mriežky na plochách objektov. Krúti sa na zakrivených povrchoch (valec, kužeľ, guľa) a zostáva rovná na rovných (kocka, pyramída) — tým SD pochopí o aký tvar ide."
+              />
+              <label class="grid-thickness-label">Čiary na priesečníkoch: <strong>{{ gridLineThickness }}px</strong></label>
+              <input
+                type="range"
+                min="1"
+                max="30"
+                step="1"
+                v-model.number="gridLineThickness"
+                :disabled="isGenerating"
+                class="grid-thickness-range"
+                title="Hrúbka tmavých čiar v miestach kde sa objekty pretínajú medzi sebou alebo s podkladom — pomáha SD držať siluety."
+              />
+            </div>
+          </div>
+
           <!-- Python ControlNet settings -->
           <div v-if="usePythonSdTurbo && mode === 'img2img'" class="input-group python-controlnet-group">
             <label class="variant-radio controlnet-toggle-label">
@@ -2092,6 +2312,12 @@ const loadProjectJSON = () => {
                 />
               </label>
             </div>
+            <div
+              v-if="pythonControlNetEnabled && controlNetCompatibilityWarning"
+              class="controlnet-warning"
+            >
+              ⚠ {{ controlNetCompatibilityWarning }}
+            </div>
             <!-- ControlNet active window: where during the schedule the CN is on.
                  End < 1.0 means the last fraction of denoising runs CN-free, which
                  lets the model add detail without being yanked back to the hint. -->
@@ -2112,6 +2338,23 @@ const loadProjectJSON = () => {
                 {{ pythonControlNetEnd >= 0.99
                     ? 'CN drží štruktúru po celý čas (málo detailu)'
                     : `posledných ${Math.round((1 - pythonControlNetEnd) * 100)} % krokov bez CN` }}
+              </span>
+            </div>
+            <!-- Two-pass: explore on plain SDXL (handles strength properly),
+                 then Lightning refine for sharp detail. Only meaningful when
+                 Lightning is the active model. -->
+            <div
+              v-if="pythonControlNetEnabled && useSdxlLightning"
+              class="python-controlnet-row two-pass-row"
+            >
+              <label class="variant-radio">
+                <input type="checkbox" v-model="useTwoPass" :disabled="isGenerating" />
+                <span class="variant-text">Two-pass (high quality)</span>
+              </label>
+              <span class="cn-window-hint">
+                {{ useTwoPass
+                    ? 'SDXL base explore + Lightning refine — ~6× pomalšie, oveľa lepší detail pri vyššom strength'
+                    : 'Lightning solo: rýchle, ale pri strength > 0.6 vznikajú artefakty' }}
               </span>
             </div>
             <!-- Style reference (IP-Adapter). Pulls texture/detail density from
@@ -2263,6 +2506,20 @@ const loadProjectJSON = () => {
                 <input type="number" v-model.number="genWidth" min="64" max="2048" step="64" :disabled="isGenerating" class="size-input" />
                 <span class="size-x">&times;</span>
                 <input type="number" v-model.number="genHeight" min="64" max="2048" step="64" :disabled="isGenerating" class="size-input" />
+              </div>
+              <div class="size-multiplier-buttons">
+                <button
+                  v-for="m in SIZE_MULTIPLIERS"
+                  :key="m"
+                  type="button"
+                  :class="['mult-btn', { active: outputSizeMultiplier === m }]"
+                  :disabled="isGenerating"
+                  @click="outputSizeMultiplier = m"
+                  :title="m === 1 ? 'Generuj v základnej veľkosti' : `Generuj ${m}× väčšie (snap na 64 px)`"
+                >{{ m }}×</button>
+              </div>
+              <div v-if="outputSizeMultiplier !== 1" class="size-multiplier-preview">
+                → {{ scaledOutputSize.width }} &times; {{ scaledOutputSize.height }}
               </div>
             </div>
           </div>
@@ -3067,6 +3324,31 @@ const loadProjectJSON = () => {
   cursor: pointer;
 }
 
+.threeD-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+.grid-thickness-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.grid-thickness-label {
+  font-size: 0.82rem;
+  color: #cfcfd8;
+}
+.grid-thickness-range {
+  width: 100%;
+  accent-color: #ff50c8;
+  cursor: pointer;
+}
+
 .controlnet-toggle-label {
   margin-bottom: 0.45rem;
 }
@@ -3117,6 +3399,17 @@ const loadProjectJSON = () => {
 .clear-gpu-btn:hover:not(:disabled) {
   background: rgba(244, 96, 54, 0.22);
   color: #fff;
+}
+
+.controlnet-warning {
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  background: rgba(244, 96, 54, 0.12);
+  border: 1px solid rgba(244, 96, 54, 0.45);
+  border-radius: 6px;
+  color: #ffb89c;
+  font-size: 0.75rem;
+  line-height: 1.35;
 }
 
 /* ControlNet guidance window */
@@ -3427,6 +3720,42 @@ const loadProjectJSON = () => {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.size-multiplier-buttons {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.mult-btn {
+  flex: 1;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.mult-btn:hover:not(:disabled) {
+  background: rgba(102,126,234,0.25);
+  color: #fff;
+}
+.mult-btn.active {
+  background: rgba(102,126,234,0.7);
+  border-color: rgba(102,126,234,0.9);
+  color: #fff;
+}
+.mult-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.size-multiplier-preview {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.55);
 }
 
 .size-input {

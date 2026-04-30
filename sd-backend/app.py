@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import torch
 from diffusers import (
@@ -1095,6 +1095,159 @@ def generate_with_controlnet():
         if data.get('transparent_background', False):
             prompt, negative_prompt = _with_background_constraints(prompt, negative_prompt)
 
+        # ── Optional two-pass: non-distilled explore + Lightning refine ─────
+        # Distilled few-step models (Lightning) collapse at intermediate img2img
+        # strength because their trailing schedule + tiny step budget can't
+        # synthesise coherent detail from a heavily-noised init. Two-pass fixes
+        # that: pass 1 uses plain SDXL base (handles arbitrary strength) for
+        # composition/variability, pass 2 hands off to Lightning at low strength
+        # for crisp final detail. Only meaningful when current model is Lightning
+        # and we're on the img2img path.
+        two_pass_active = (
+            bool(data.get('two_pass', False))
+            and use_img2img
+            and _model_cfg.get('lightning')
+        )
+        if two_pass_active:
+            explore_key = data.get('explore_model', 'sdxl')
+            explore_cfg = MODEL_REGISTRY.get(explore_key, {})
+            if (not explore_cfg
+                    or explore_cfg.get('lightning')
+                    or explore_cfg.get('turbo')
+                    or explore_cfg.get('type') != 'xl'):
+                print(f"⚠️  two_pass: explore_model '{explore_key}' must be a "
+                      f"non-distilled SDXL model — falling back to 'sdxl'")
+                explore_key = 'sdxl'
+
+            # Helper: evict a model + all its controlnet/img2img pipes from
+            # VRAM. Both pipes share UNet/VAE refs, so we MUST drop the base
+            # entry too, otherwise the weights stay alive via shared refs.
+            import gc
+            def _evict_pipeline(victim_key):
+                cn_keys_to_drop = [
+                    k for k in list(controlnet_pipelines.keys())
+                    if k.startswith(f"{victim_key}__")
+                ]
+                for k in cn_keys_to_drop:
+                    controlnet_pipelines.pop(k, None)
+                pipelines.pop(victim_key, None)
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            def _vram_report(tag):
+                if not torch.cuda.is_available():
+                    return
+                try:
+                    free, total = torch.cuda.mem_get_info()
+                    print(f"💾 {tag}: VRAM free {free/(1024**2):.0f} / "
+                          f"{total/(1024**2):.0f} MB")
+                except Exception:
+                    pass
+
+            # Snapshot IP-Adapter intent (we lose pipe state when we evict it).
+            saved_ip_adapter = None
+            if ip_adapter_active and ip_adapter_image_pil is not None:
+                saved_ip_adapter = {
+                    'family': _model_family(model_key),
+                    'scale': ip_adapter_scale,
+                    'image': ip_adapter_image_pil,
+                }
+
+            # ── Free EVERYTHING evictable BEFORE pass 1 ──────────────────────
+            # On 8 GB GPUs we can't hold two SDXL backbones at once. Evict
+            # Lightning AND any other cached models (e.g. 'lite' preloaded at
+            # startup) so the explore pipe has maximum headroom.
+            # base_entry (line ~1009) is a local Python ref to the same dict
+            # that's in pipelines[model_key] — popping the global dict alone
+            # leaves base_entry holding the weights alive. del it explicitly.
+            del pipe
+            try:
+                del base_entry
+            except NameError:
+                pass
+            for victim in [k for k in list(pipelines.keys()) if k != explore_key]:
+                _evict_pipeline(victim)
+            _vram_report("After full evict (pre pass-1)")
+
+            # ── Pass 1: explore on plain SDXL base ───────────────────────────
+            explore_pipe = load_controlnet_pipeline(
+                explore_key, controlnet_kind, img2img=True
+            )
+            # 8 GB GPUs can't fit SDXL base UNet+VAE+TE (~7 GB) + ControlNet
+            # (~2.5 GB) resident at once. CPU offload keeps weights on CPU and
+            # streams them in per-module — peak VRAM drops to ~3-4 GB. Slows
+            # pass 1 ~2-3× but actually fits. Toggle off via low_vram=False.
+            low_vram = bool(data.get('low_vram', True))
+            if low_vram and torch.cuda.is_available():
+                try:
+                    free_b, total_b = torch.cuda.mem_get_info()
+                    free_gb = free_b / (1024 ** 3)
+                    if free_gb < 12.0:
+                        explore_pipe.enable_model_cpu_offload()
+                        print(f"💡 CPU offload enabled on explore pipe "
+                              f"(free VRAM {free_gb:.1f} GB < 12 GB threshold)")
+                except Exception as e:
+                    print(f"⚠️  cpu_offload setup failed: {e}")
+            explore_steps = int(data.get('explore_steps', 25))
+            explore_guidance = float(data.get('explore_guidance', 6.5))
+            explore_cn_end = max(cn_guidance_end, float(data.get('explore_cn_end', 0.7)))
+            explore_kwargs = dict(
+                prompt=prompt,
+                negative_prompt=negative_prompt or None,
+                image=src_image,
+                control_image=control_image,
+                strength=strength,
+                width=width,
+                height=height,
+                num_inference_steps=explore_steps,
+                guidance_scale=explore_guidance,
+                controlnet_conditioning_scale=cond_scale,
+                control_guidance_start=cn_guidance_start,
+                control_guidance_end=explore_cn_end,
+                generator=torch.Generator(device=explore_pipe.device).manual_seed(int(seed)),
+            )
+            print(f"🧭 Two-pass · explore: model={explore_key}, steps={explore_steps}, "
+                  f"strength={strength:.2f}, guidance={explore_guidance}, "
+                  f"cn_scale={cond_scale}, cn_end={explore_cn_end:.2f}")
+            pass1_image = explore_pipe(**explore_kwargs).images[0]
+
+            # ── Free explore pipe BEFORE pass 2 ──────────────────────────────
+            del explore_pipe
+            _evict_pipeline(explore_key)
+            _vram_report("After explore evict (pre pass-2)")
+
+            # ── Reload Lightning pipe for pass 2 ─────────────────────────────
+            pipe = load_controlnet_pipeline(model_key, controlnet_kind, img2img=use_img2img)
+
+            # Re-apply IP-Adapter on the freshly loaded pipe if it was active.
+            if saved_ip_adapter is not None:
+                try:
+                    if ensure_ip_adapter(pipe, saved_ip_adapter['family']):
+                        pipe.set_ip_adapter_scale(saved_ip_adapter['scale'])
+                        ip_adapter_image_pil = saved_ip_adapter['image']
+                        ip_adapter_active = True
+                        print(f"🎨 IP-Adapter re-applied on pass-2 pipe "
+                              f"(scale={saved_ip_adapter['scale']:.2f})")
+                except Exception as e:
+                    print(f"⚠️  IP-Adapter re-apply failed, continuing without: {e}")
+                    ip_adapter_active = False
+
+            # Hand off to the existing Lightning refine path. Replace the init
+            # image, drop strength way down (Lightning just polishes), and ease
+            # the CN grip — pass 1 already locked the geometry.
+            src_image = pass1_image
+            strength = float(data.get('refine_strength', 0.35))
+            cond_scale = min(cond_scale, float(data.get('refine_cn_scale', 0.4)))
+            cn_guidance_end = min(cn_guidance_end, float(data.get('refine_cn_end', 0.5)))
+            # Fresh generator for pass 2 — also pinned to the *new* pipe.device.
+            generator = torch.Generator(device=pipe.device).manual_seed(
+                (int(seed) ^ 0xA1B2C3D4) & 0xFFFFFFFF
+            )
+            print(f"🧭 Two-pass · refine: model={model_key}, "
+                  f"strength={strength:.2f}, cn_scale={cond_scale}, "
+                  f"cn_end={cn_guidance_end:.2f}")
+
         if use_img2img:
             # ControlNet+img2img potrebuje viac iterácií ako čistý SD-Turbo img2img,
             # inak nestihne v posledných (CN-free) krokoch dorobiť detaily.
@@ -1174,6 +1327,71 @@ def list_controlnets():
         'controlnets': CONTROLNET_REGISTRY,
         'loaded': list(controlnets.keys()),
     })
+
+
+# --- Merged FP16 UNet download (extracted Isometric LoRA fused into SD Turbo) ---
+MERGED_UNET_DIR = Path(__file__).parent / "lora_extraction" / "sd_turbo_isometric" / "unet"
+MERGED_UNET_FP32 = MERGED_UNET_DIR / "diffusion_pytorch_model.safetensors"
+MERGED_UNET_FP16 = MERGED_UNET_DIR / "diffusion_pytorch_model.fp16.safetensors"
+
+
+def _ensure_merged_fp16():
+    """Lazily create FP16 copy of the merged UNet. Returns the FP16 file path or None."""
+    if not MERGED_UNET_FP32.exists():
+        return None
+    if MERGED_UNET_FP16.exists():
+        return MERGED_UNET_FP16
+    print(f"🔧 Konvertujem merged UNet FP32 -> FP16: {MERGED_UNET_FP32}")
+    from safetensors.torch import load_file as _st_load, save_file as _st_save
+    state = _st_load(str(MERGED_UNET_FP32))
+    state_fp16 = {k: v.detach().to(torch.float16).contiguous() for k, v in state.items()}
+    tmp = MERGED_UNET_FP16.with_suffix('.tmp')
+    _st_save(state_fp16, str(tmp))
+    tmp.replace(MERGED_UNET_FP16)
+    size_mb = MERGED_UNET_FP16.stat().st_size / (1024 ** 2)
+    print(f"✅ FP16 UNet uložený ({size_mb:.1f} MB): {MERGED_UNET_FP16}")
+    return MERGED_UNET_FP16
+
+
+@app.route('/merged-fp16-info', methods=['GET'])
+def merged_fp16_info():
+    """Vráti info o dostupnosti merged FP16 UNet súboru."""
+    info = {
+        'fp32_exists': MERGED_UNET_FP32.exists(),
+        'fp16_exists': MERGED_UNET_FP16.exists(),
+        'fp32_path': str(MERGED_UNET_FP32),
+        'fp16_path': str(MERGED_UNET_FP16),
+    }
+    if MERGED_UNET_FP32.exists():
+        info['fp32_size_mb'] = round(MERGED_UNET_FP32.stat().st_size / (1024 ** 2), 1)
+    if MERGED_UNET_FP16.exists():
+        info['fp16_size_mb'] = round(MERGED_UNET_FP16.stat().st_size / (1024 ** 2), 1)
+    info['download_url'] = '/download-merged-fp16-unet'
+    return jsonify(info)
+
+
+@app.route('/download-merged-fp16-unet', methods=['GET'])
+def download_merged_fp16_unet():
+    """
+    Stiahne merged (LoRA fused) UNet vo FP16 safetensors formáte (~1.65 GB).
+    Zdroj: lora_extraction/sd_turbo_isometric/unet/diffusion_pytorch_model.safetensors (FP32, ~3.46 GB).
+    Pri prvom volaní sa FP32 -> FP16 konverzia spraví na disku a zacachuje.
+    """
+    fp16_path = _ensure_merged_fp16()
+    if fp16_path is None:
+        return jsonify({
+            'error': 'Merged UNet sa nenašiel.',
+            'expected': str(MERGED_UNET_FP32),
+            'hint': 'Spusti najprv: python extract_and_merge_lora.py --step all'
+        }), 404
+
+    return send_file(
+        str(fp16_path),
+        as_attachment=True,
+        download_name='unet_fp16_merged.safetensors',
+        mimetype='application/octet-stream',
+        conditional=True,
+    )
 
 
 @app.route('/health', methods=['GET'])

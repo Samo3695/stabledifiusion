@@ -11,7 +11,22 @@ const props = defineProps({
   customTextures: { type: Array, default: () => [] },
   // When true, expose a 'Noise Mask' tool in the toolbar that lets the user
   // paint a 2D mask (camera-aligned) on top of the 3D canvas.
-  enableNoisePaint: { type: Boolean, default: false }
+  enableNoisePaint: { type: Boolean, default: false },
+  // When true, captureScreenshot adds two extra passes on top of the textured
+  // screenshot, both purely additive (original textures + plane tile pattern
+  // stay untouched):
+  //   1. Face grid — every mesh re-rendered with a transparent grid texture
+  //      so the grid lines bend on cylinders/cones/spheres but stay straight
+  //      on cubes/pyramids — this is the signal SD uses to tell curved vs
+  //      faceted geometry apart.
+  //   2. Intersection edges — ID-pass + boundary detection draws thick lines
+  //      where two objects (or an object and the plane) meet on screen.
+  gridOverlay: { type: Boolean, default: false },
+  // Intersection-line thickness in output pixels (1–30).
+  gridThickness: { type: Number, default: 6 },
+  // Face-grid line thickness in texture pixels (1–20). Drawn into a 256×256
+  // CanvasTexture and tiled per object — bigger = chunkier seams on faces.
+  faceGridThickness: { type: Number, default: 4 }
 })
 
 const container = ref(null)
@@ -86,6 +101,178 @@ let resizeObserver
 let animId
 let needsRender = true
 let stoneTexture = null
+
+const faceGridTexCache = new Map() // key: thickness px → THREE.CanvasTexture
+
+// Procedural face-grid texture: transparent base + dark seams on top + left
+// edge of the tile. RepeatWrapping turns it into a full grid when tiled.
+// Cached per thickness so repeated screenshots reuse the same canvas.
+function getFaceGridTexture(thicknessPx) {
+  const t = Math.max(1, Math.min(20, thicknessPx | 0))
+  const cached = faceGridTexCache.get(t)
+  if (cached) return cached
+  const size = 256
+  const c = document.createElement('canvas')
+  c.width = size; c.height = size
+  const ctx = c.getContext('2d')
+  ctx.clearRect(0, 0, size, size)
+  ctx.strokeStyle = 'rgba(15, 15, 22, 0.92)'
+  ctx.lineWidth = t
+  ctx.beginPath()
+  ctx.moveTo(0, 0); ctx.lineTo(size, 0)
+  ctx.moveTo(0, 0); ctx.lineTo(0, size)
+  ctx.stroke()
+  const tex = new THREE.CanvasTexture(c)
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.anisotropy = 4
+  faceGridTexCache.set(t, tex)
+  return tex
+}
+
+// Composite a face-aligned grid pattern over the textured screenshot. Each
+// placed object + plane is briefly re-rendered with a transparent grid
+// material that follows the geometry's UVs — so the grid bends on curved
+// surfaces (cylinder, cone, sphere) and stays straight on faceted geometry
+// (cube, pyramid). That curvature signal is what SD reads to distinguish
+// shapes that share a silhouette.
+function drawFaceGrid(octx, outW, outH, minX, minY, cw, ch, thicknessPx) {
+  if (!placed || placed.length === 0) return
+  const baseTex = getFaceGridTexture(thicknessPx)
+  const restorers = []
+  const _bbox = new THREE.Box3()
+  const _sz = new THREE.Vector3()
+  const swap = (mesh, fallbackRepeat) => {
+    if (!mesh) return
+    const orig = mesh.material
+    _bbox.setFromObject(mesh)
+    _bbox.getSize(_sz)
+    // ~2 grid cells per world unit so a 1m cube gets a 2×2 grid per face.
+    const rx = fallbackRepeat ?? Math.max(1, Math.round(Math.max(_sz.x, _sz.z) * 2))
+    const ry = fallbackRepeat ?? Math.max(1, Math.round(Math.max(_sz.y, _sz.z) * 2))
+    const t = baseTex.clone()
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.repeat.set(rx, ry)
+    t.needsUpdate = true
+    mesh.material = new THREE.MeshBasicMaterial({
+      map: t, transparent: true, color: 0xffffff
+    })
+    restorers.push(() => {
+      mesh.material.map?.dispose()
+      mesh.material.dispose()
+      mesh.material = orig
+    })
+  }
+  for (const o of placed) swap(o)
+  // Plane gets a denser grid so the floor reads as tiled.
+  if (plane && plane.visible) swap(plane, 20)
+
+  renderer.render(scene, camera)
+  const src = renderer.domElement
+  octx.save()
+  octx.imageSmoothingEnabled = true
+  octx.drawImage(src, minX, minY, cw, ch, 0, 0, outW, outH)
+  octx.restore()
+
+  for (const r of restorers) r()
+}
+
+// Composite thick dark lines onto an output canvas at the screen-space
+// boundaries where placed objects meet each other or meet the plane. Works by
+// rendering an "ID pass" (each mesh = unique flat hue, plane = its own dark
+// hue), reading pixels back, finding 4-neighbour colour discontinuities, and
+// then dilating that 1-pixel mask up to the requested thickness via repeated
+// offset draws (cheap morphological dilation in canvas).
+//
+// The original textures + colours stay untouched — this is purely additive
+// composite over the already-rendered screenshot.
+function drawInterObjectEdges(octx, outW, outH, minX, minY, cw, ch, thicknessPx) {
+  if (!placed || placed.length === 0) return
+  const thick = Math.max(1, Math.min(30, thicknessPx | 0))
+
+  // --- ID pass: unique flat colour per mesh + a distinct colour for the plane ---
+  const restorers = []
+  const _col = new THREE.Color()
+  const swap = (mesh, hex) => {
+    if (!mesh) return
+    const orig = mesh.material
+    mesh.material = new THREE.MeshBasicMaterial({ color: hex })
+    restorers.push(() => {
+      mesh.material.dispose()
+      mesh.material = orig
+    })
+  }
+  for (let i = 0; i < placed.length; i++) {
+    // Spread hues so neighbouring objects always have very different RGB.
+    const hue = ((i * 73) % 360) / 360
+    const hex = _col.setHSL(hue, 0.95, 0.55).getHex()
+    swap(placed[i], hex)
+  }
+  if (plane && plane.visible) swap(plane, 0x101820)
+  renderer.render(scene, camera)
+
+  const src = renderer.domElement
+  const tmp = document.createElement('canvas')
+  tmp.width = cw; tmp.height = ch
+  tmp.getContext('2d').drawImage(src, minX, minY, cw, ch, 0, 0, cw, ch)
+  const id = tmp.getContext('2d').getImageData(0, 0, cw, ch)
+  const px = id.data
+
+  // Restore materials before any further rendering uses them.
+  for (const r of restorers) r()
+
+  // --- Build 1-pixel edge mask (where 4-neighbour RGB differs significantly) ---
+  // Skip background→object boundaries (alpha discontinuity) so we don't stroke
+  // the whole silhouette — we only want intra-scene intersection lines.
+  const mask = new ImageData(cw, ch)
+  const m = mask.data
+  const W = cw
+  const ALPHA_MIN = 16
+  const RGB_THRESH = 24
+  const diff = (i, j) =>
+    Math.abs(px[i] - px[j]) +
+    Math.abs(px[i + 1] - px[j + 1]) +
+    Math.abs(px[i + 2] - px[j + 2])
+  for (let y = 0; y < ch; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4
+      if (px[i + 3] < ALPHA_MIN) continue
+      let isEdge = false
+      if (x + 1 < W) {
+        const j = i + 4
+        if (px[j + 3] >= ALPHA_MIN && diff(i, j) > RGB_THRESH) isEdge = true
+      }
+      if (!isEdge && y + 1 < ch) {
+        const j = i + W * 4
+        if (px[j + 3] >= ALPHA_MIN && diff(i, j) > RGB_THRESH) isEdge = true
+      }
+      if (isEdge) {
+        m[i] = 0; m[i + 1] = 0; m[i + 2] = 0; m[i + 3] = 255
+      }
+    }
+  }
+  const maskCanvas = document.createElement('canvas')
+  maskCanvas.width = cw; maskCanvas.height = ch
+  maskCanvas.getContext('2d').putImageData(mask, 0, 0)
+
+  // --- Dilate to requested thickness via offset draws ---
+  // Scale the destination radius from input crop pixels to output pixels so
+  // thickness reads consistently regardless of crop resize.
+  const scale = outW / cw
+  const r = Math.max(1, Math.round((thick / 2) * scale))
+  octx.save()
+  octx.imageSmoothingEnabled = true
+  // Center pass:
+  octx.drawImage(maskCanvas, 0, 0, outW, outH)
+  // Disc-shaped offset passes for thickening:
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx === 0 && dy === 0) continue
+      if (dx * dx + dy * dy > r * r) continue
+      octx.drawImage(maskCanvas, 0, 0, cw, ch, dx, dy, outW, outH)
+    }
+  }
+  octx.restore()
+}
 
 const OBJECT_COLOR = 0x9999a8
 const ROLLOVER_COLOR = 0x66aaff
@@ -1199,6 +1386,17 @@ function captureScreenshot(maxSize = 512) {
   octx.imageSmoothingEnabled = true
   octx.imageSmoothingQuality = 'high'
   octx.drawImage(srcCanvas, minX, minY, cw, ch, 0, 0, outW, outH)
+
+  // Two additive overlays composed on top of the textured screenshot — both
+  // preserve original textures because we draw on top of an already-finalised
+  // image of the scene:
+  //   1) Face grid first (follows UVs; signals curved vs flat surfaces).
+  //   2) Intersection edges last so they sit visually on top of the grid.
+  if (props.gridOverlay) {
+    drawFaceGrid(octx, outW, outH, minX, minY, cw, ch, props.faceGridThickness)
+    drawInterObjectEdges(octx, outW, outH, minX, minY, cw, ch, props.gridThickness)
+  }
+
   const dataUrl = out.toDataURL('image/png')
 
   // ----- Build aligned noise mask matching this screenshot's view + crop -----
