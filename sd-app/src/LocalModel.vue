@@ -1,12 +1,14 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
 import PhaserCanvas from './components/PhaserCanvas.vue'
 import BuildingSelector from './components/BuildingSelector.vue'
 import Modal from './components/Modal.vue'
 import Editor3D from './components/Editor3D.vue'
+import TilePositionManager from './components/TilePositionManager.vue'
 import { loadProject } from './utils/projectLoader.js'
 import { buildRoad } from './utils/roadBuilder.js'
+import roadTileManager, { NEW_ROAD_SPRITE_PATH, NEW_ROAD_TILE_DEFINITIONS, PASTROAD_TILE_DEFINITIONS } from './utils/roadTileManager.js'
 
 const BASE_URL = import.meta.env.BASE_URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
@@ -267,6 +269,12 @@ const inputImageEl = ref(null) // HTMLImageElement for pipeline
 const inputSource = ref('image') // 'image' | '3d'
 const editor3dRef = ref(null)
 const editor3dCustomTextures = ref([])
+// Mirror the begin.json texture & environment configuration so we can write it
+// back unchanged on save. Without this, saveProjectJSON drops the original
+// `customTexture` / colour grade, and the next load can't regenerate the
+// background tile from the right source — the grass disappears.
+const loadedTextureSettings = ref(null)
+const loadedEnvironmentColors = ref(null)
 const preview3dUrl = ref(null)
 
 const refresh3dPreview = async () => {
@@ -334,7 +342,7 @@ const buildCannyEdgeMap = async (dataUrl) => {
   return c.toDataURL('image/png')
 }
 const inputImageSize = ref(null) // { width, height } of original image
-const strength = ref(0.85)
+const strength = ref(0.65)
 
 // Phaser canvas state
 const canvasRef = ref(null)
@@ -353,13 +361,28 @@ const projectLoadStatus = ref('')
 
 // Left panel - buildings & tools
 const leftPanelCollapsed = ref(false)
+const showTilePositionManager = ref(false)
+const tilePositionSpriteUrl = computed(() => BASE_URL + encodeURI(NEW_ROAD_SPRITE_PATH))
 const projectImages = ref([]) // all images from loaded project
 const selectedBuildingId = ref(null)
 const roadBuildingMode = ref(false)
 const roadDeleteMode = ref(false)
 const deleteMode = ref(false)
 const recycleMode = ref(false)
-const roadTiles = ref([])
+// Tiles per štýl. roadTiles je computed union — aktívny štýl ide prvý, takže
+// `find(t => t.name === X)` v roadBuilder.js vyberie aktuálny tile,
+// ale `isRoadTile(url)` zostane true aj pre cesty zo starého štýlu (inak by
+// staré cesty na canvase blokovali novú cestu ako "budova").
+const classicRoadTiles = shallowRef([])
+const newRoadTiles = shallowRef([])
+const roadStyle = ref('classic')
+const isLoadingRoadStyle = ref(false)
+const roadTiles = computed(() => {
+  if (roadStyle.value === 'new') {
+    return [...newRoadTiles.value, ...classicRoadTiles.value]
+  }
+  return [...classicRoadTiles.value, ...newRoadTiles.value]
+})
 
 // === STAVANIE NOVEJ ŠTVRTE (New District Building) ===
 // Flow: 1) User picks generator type+size (e.g. House 2x2)
@@ -583,6 +606,166 @@ const selectFactoryCategory = (catKey) => {
   selectedImageId.value = null
 }
 
+// === 3D Projects (saved from Editor3D save panel) ===
+// Each entry: { id, projectName, category, subcategory, size, extraPrompt, modelData, createdAt }
+// Persists in-memory only — flushed to disk by saveProjectJSON / restored by loadProjectJSON.
+// Inference results (generated images) are intentionally NOT persisted here.
+const model3dProjects = ref([])
+
+// Subcategory taxonomy mirrored from Editor3D — keep in sync with MODEL3D_SUBCATEGORIES there.
+const M3D_SUBCATS = {
+  house: [
+    { key: 'family-house', label: 'Family House' },
+    { key: 'apartment', label: 'Apartment' },
+    { key: 'residential-building', label: 'Residential Building' },
+    { key: 'townhouse', label: 'Townhouse' }
+  ],
+  shop: [
+    { key: 'small-shop', label: 'Small Shop' },
+    { key: 'medium-shop', label: 'Medium Shop' },
+    { key: 'shopping-center', label: 'Shopping Center' },
+    { key: 'market-stall', label: 'Market Stall' }
+  ],
+  factory: [
+    { key: 'small-workshop', label: 'Small Workshop' },
+    { key: 'medium-factory', label: 'Medium Factory' },
+    { key: 'big-factory', label: 'Big Factory' },
+    { key: 'warehouse', label: 'Warehouse' }
+  ]
+}
+
+// Right-panel state filter. When set, Editor3D switches to list mode showing
+// only projects matching {category, subcategory}. Cleared by Editor3D when the
+// user picks a project or hits "+ New".
+const m3dPanelFilter = ref(null)
+
+// Dynamic subcategory lists for the left sidebar — only subcategories that
+// actually have ≥1 saved project show up. Brand-new users with zero saved
+// projects see no subcategories under House/Shop/Factory; they create their
+// first project via the right-panel form (which is in form mode by default).
+const m3dSubcatsForCategory = (category) => {
+  const taxonomy = M3D_SUBCATS[category] || []
+  const used = new Set(
+    model3dProjects.value
+      .filter(p => p.category === category)
+      .map(p => p.subcategory)
+  )
+  return taxonomy.filter(s => used.has(s.key))
+}
+const m3dHouseSubcats = computed(() => m3dSubcatsForCategory('house'))
+const m3dShopSubcats = computed(() => m3dSubcatsForCategory('shop'))
+const m3dFactorySubcats = computed(() => m3dSubcatsForCategory('factory'))
+
+// Composed prompt template — same shape as Editor3D's m3dPromptPreview.
+// Used to write the active project's prompt into the right-panel `prompt`
+// textarea so Generate picks it up automatically.
+// Story count derived from saved model height: ≤4m 1, ≤6m 2, ≤8m 3,
+// ≤10m 4, ≤12m 5, >12m 6 — then multiplied by footprint size (1×1 ×1,
+// 2×2 ×2, 3×3 ×3, 4×4 ×4). Mirrors storyCountForHeight in Editor3D.
+const storyCountForHeight = (h) => {
+  const m = Number(h) || 0
+  if (m > 12) return 6
+  if (m > 10) return 5
+  if (m > 8)  return 4
+  if (m > 6)  return 3
+  if (m > 4)  return 2
+  return 1
+}
+const storyWord = (n) => {
+  const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve']
+  return words[n] || String(n)
+}
+const composeM3dPrompt = (project) => {
+  if (!project) return ''
+  const taxonomy = M3D_SUBCATS[project.category] || []
+  const sub = taxonomy.find(s => s.key === project.subcategory)
+  const subText = sub ? sub.label.toLowerCase() : project.subcategory
+  const extra = (project.extraPrompt || '').trim()
+  const stories = storyCountForHeight(project.heightM) * (project.size || 1)
+  return `isometric ${storyWord(stories)} story ${subText}${extra ? ' ' + extra : ''}`
+}
+
+// Preview shown in the Editor3D save panel: most recent generator output,
+// otherwise the latest 3D screenshot, otherwise the newest gallery image.
+// Never persisted — purely a transient view for the user.
+const m3dInferencePreviewUrl = computed(() => {
+  if (generatorResult.value) return generatorResult.value
+  if (preview3dUrl.value) return preview3dUrl.value
+  const last = images.value[images.value.length - 1]
+  return last ? last.url : null
+})
+
+// Save handler — accepts full payload from Editor3D (incl. serialized 3D
+// model). When payload.id is set, updates the existing record in place;
+// otherwise creates a new one. Side-effect: writes the composed prompt into
+// the right-panel `prompt` textarea so Generate immediately uses it.
+const handleSave3dProject = (payload) => {
+  const entry = {
+    projectName: payload.projectName || 'Untitled',
+    category: payload.category,
+    subcategory: payload.subcategory,
+    size: payload.size || 1,
+    extraPrompt: payload.extraPrompt || '',
+    heightM: typeof payload.heightM === 'number' ? payload.heightM : 0,
+    modelData: payload.modelData || null,
+    groundState: payload.groundState || null,
+    updatedAt: new Date().toISOString()
+  }
+  let saved
+  if (payload.id) {
+    const idx = model3dProjects.value.findIndex(p => p.id === payload.id)
+    if (idx !== -1) {
+      const prev = model3dProjects.value[idx]
+      saved = { ...prev, ...entry, id: prev.id, createdAt: prev.createdAt }
+      model3dProjects.value.splice(idx, 1, saved)
+    }
+  }
+  if (!saved) {
+    saved = {
+      id: `m3d-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      createdAt: new Date().toISOString(),
+      ...entry
+    }
+    model3dProjects.value.push(saved)
+  }
+  prompt.value = composeM3dPrompt(saved)
+}
+
+// User clicked a subcategory under House/Shop/Factory in the left sidebar.
+// This now drives the right panel into list mode instead of entering legacy
+// placement mode — the project list lives in Editor3D's save panel.
+const selectM3dSubcat = (category, subKey) => {
+  m3dPanelFilter.value = { category, subcategory: subKey }
+}
+
+// Editor3D dispatches this when the user hits "+ New" in list mode or picks a
+// project to load. We just clear the filter — the rest is handled inside the
+// save panel.
+const handleCloseListFilter = () => {
+  m3dPanelFilter.value = null
+}
+
+// Editor3D fired select-3d-project after loading the project into its form.
+// Mirror its prompt into the right-panel textarea so Generate uses it.
+const handleSelect3dProject = (id) => {
+  const project = model3dProjects.value.find(p => p.id === id)
+  if (project) prompt.value = composeM3dPrompt(project)
+}
+
+// Editor3D's Remove button — drop the project from the local store. Form
+// state (incl. m3dCurrentProjectId) is reset inside Editor3D itself.
+const handleDelete3dProject = (id) => {
+  model3dProjects.value = model3dProjects.value.filter(p => p.id !== id)
+}
+
+// Live prompt updates from Editor3D — fired whenever the user types into
+// Extra Prompt or the 3D scene changes (height/size). Mirrors the preview
+// straight into the right-panel `prompt` textarea so Generate uses the
+// up-to-date string without requiring a Save round-trip.
+const handleUpdatePrompt = (text) => {
+  prompt.value = text
+}
+
 const openGeneratorModal = (type, size) => {
   generatorModalType.value = type
   generatorModalSize.value = size
@@ -765,8 +948,9 @@ onMounted(async () => {
         cellsY: img.cellsY || 1,
         buildingData: img.buildingData || null
       }))
-      roadTiles.value = loadedData.roadTiles || []
+      classicRoadTiles.value = loadedData.roadTiles || []
       tempBuildingSpriteUrl.value = loadedData.tempBuildingSpriteUrl || null
+      model3dProjects.value = Array.isArray(projectData.model3dProjects) ? projectData.model3dProjects : []
       // Feed Editor3D with custom textures from begin.json (already loaded above — don't refetch).
       const ct = projectData.textureSettings?.customTexture
       editor3dCustomTextures.value = ct ? (Array.isArray(ct) ? ct : [ct]) : []
@@ -1538,6 +1722,54 @@ const handleRoadModeToggled = (isEnabled) => {
     buildingPlacementMode.value = false
     expandedGenerator.value = null
     selectedGeneratorSize.value = null
+    // Ak sme predtým mali "new" štýl, vráť späť pôvodné tiles z pastroad.png
+    if (roadStyle.value !== 'classic') {
+      switchRoadStyle('classic')
+    }
+  }
+}
+
+// Prepne aktívny tile set pre stavanie ciest. 'classic' = pastroad.png,
+// 'new' = templates/buildings/new road.png. Tiles sa cachujú v classicRoadTiles
+// a newRoadTiles — roadTiles (computed) ich vždy spája dohromady, aby cesty
+// jedného štýlu na canvase neblokovali stavbu druhého (isRoadTile by inak vrátil false).
+const switchRoadStyle = async (style) => {
+  if (isLoadingRoadStyle.value) return
+  isLoadingRoadStyle.value = true
+  try {
+    const targetRef = style === 'new' ? newRoadTiles : classicRoadTiles
+    if (targetRef.value.length === 0) {
+      const spriteUrl = style === 'new'
+        ? BASE_URL + encodeURI(NEW_ROAD_SPRITE_PATH)
+        : BASE_URL + 'templates/roads/sprites/pastroad.png'
+      const definitions = style === 'new' ? NEW_ROAD_TILE_DEFINITIONS : PASTROAD_TILE_DEFINITIONS
+      const tiles = await roadTileManager.loadTiles(spriteUrl, 100, definitions)
+      targetRef.value = tiles
+      console.log(`🛣️ Načítaných ${tiles.length} tiles pre štýl '${style}'`)
+    }
+    roadStyle.value = style
+  } catch (err) {
+    console.error('❌ Nepodarilo sa načítať road tiles pre štýl', style, err)
+  } finally {
+    isLoadingRoadStyle.value = false
+  }
+}
+
+// Handler pre druhé "Road 2" tlačidlo — načíta tiles z new road.png.
+const handleRoadMode2Toggled = async (isEnabled) => {
+  if (isEnabled) {
+    selectedBuildingId.value = null
+    selectedImageId.value = null
+    roadDeleteMode.value = false
+    recycleMode.value = false
+    deleteMode.value = false
+    buildingPlacementMode.value = false
+    expandedGenerator.value = null
+    selectedGeneratorSize.value = null
+    await switchRoadStyle('new')
+    roadBuildingMode.value = true
+  } else {
+    roadBuildingMode.value = false
   }
 }
 
@@ -1688,7 +1920,8 @@ const saveProjectJSON = async () => {
     placedImages,
     backgroundTiles: bgTiles,
     roadSpriteUrl: roadTiles.value.length > 0 ? (BASE_URL + 'templates/roads/sprites/presentroad.png') : null,
-    tempBuildingSpriteUrl: tempBuildingSpriteUrl.value
+    tempBuildingSpriteUrl: tempBuildingSpriteUrl.value,
+    model3dProjects: model3dProjects.value
   }
 
   const jsonString = JSON.stringify(saveData, null, 2)
@@ -1782,8 +2015,9 @@ const loadProjectJSON = () => {
         buildingData: img.buildingData || null
       }))
 
-      roadTiles.value = loadedData.roadTiles || []
+      classicRoadTiles.value = loadedData.roadTiles || []
       tempBuildingSpriteUrl.value = loadedData.tempBuildingSpriteUrl || null
+      model3dProjects.value = Array.isArray(projectData.model3dProjects) ? projectData.model3dProjects : []
       console.log('📂 Project loaded from file')
     } catch (err) {
       console.error('Failed to load project:', err)
@@ -1835,8 +2069,8 @@ const loadProjectJSON = () => {
         <!-- Road & Delete Toolbar -->
         <div class="tools-toolbar">
           <button
-            :class="['tool-btn', { active: roadBuildingMode }]"
-            @click="handleRoadModeToggled(!roadBuildingMode)"
+            :class="['tool-btn', { active: roadBuildingMode && roadStyle === 'classic' }]"
+            @click="handleRoadModeToggled(!(roadBuildingMode && roadStyle === 'classic'))"
             title="Build Road"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1846,6 +2080,33 @@ const loadProjectJSON = () => {
               <circle cx="17" cy="12" r="1" fill="currentColor"/>
             </svg>
             <span>Road</span>
+          </button>
+
+          <button
+            :class="['tool-btn', { active: roadBuildingMode && roadStyle === 'new' }]"
+            @click="handleRoadMode2Toggled(!(roadBuildingMode && roadStyle === 'new'))"
+            :disabled="isLoadingRoadStyle"
+            title="Build Road 2 (new road.png)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 19l4-14M16 19l4-14"/>
+              <path d="M10 7h4M10 12h4M10 17h4"/>
+            </svg>
+            <span>Road 2</span>
+          </button>
+
+          <button
+            class="tool-btn"
+            @click="showTilePositionManager = true"
+            title="Tune tile positions for NEW_ROAD_TILE_DEFINITIONS"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7"/>
+              <rect x="14" y="3" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/>
+              <rect x="14" y="14" width="7" height="7"/>
+            </svg>
+            <span>Tile Position</span>
           </button>
 
           <button
@@ -1879,6 +2140,33 @@ const loadProjectJSON = () => {
             </svg>
             <span>Delete</span>
           </button>
+
+          <button
+            class="tool-btn"
+            @click="canvasRef?.zoomCamera(1.1)"
+            title="Zoom In +10%"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              <line x1="11" y1="8" x2="11" y2="14"/>
+              <line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+            <span>Zoom +</span>
+          </button>
+
+          <button
+            class="tool-btn"
+            @click="canvasRef?.zoomCamera(0.9)"
+            title="Zoom Out -10%"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              <line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+            <span>Zoom -</span>
+          </button>
         </div>
 
         <!-- Generator Buttons -->
@@ -1898,15 +2186,12 @@ const loadProjectJSON = () => {
             </button>
             <div v-if="expandedGenerator === 'house'" class="size-picker">
               <button
-                v-for="cat in [
-                  { key: 'family-house', label: 'Family House' },
-                  { key: 'apartment', label: 'Apartment' },
-                  { key: 'residential', label: 'Residential' }
-                ]"
-                :key="cat.key"
-                :class="['size-pick-btn category-pick-btn', { active: selectedCategory === cat.key }]"
-                @click="selectHouseCategory(cat.key)"
-              >{{ cat.label }}</button>
+                v-for="s in m3dHouseSubcats"
+                :key="s.key"
+                :class="['size-pick-btn category-pick-btn', { active: m3dPanelFilter && m3dPanelFilter.category === 'house' && m3dPanelFilter.subcategory === s.key }]"
+                @click="selectM3dSubcat('house', s.key)"
+              >{{ s.label }}</button>
+              <div v-if="m3dHouseSubcats.length === 0" class="m3d-subcat-empty">No saved house projects yet.</div>
             </div>
           </div>
 
@@ -1927,14 +2212,12 @@ const loadProjectJSON = () => {
             </button>
             <div v-if="expandedGenerator === 'shop'" class="size-picker">
               <button
-                v-for="cat in [
-                  { key: 'small-shop', label: 'Small Shop' },
-                  { key: 'medium-shop', label: 'Medium Shop' }
-                ]"
-                :key="cat.key"
-                :class="['size-pick-btn category-pick-btn', { active: selectedCategory === cat.key }]"
-                @click="selectShopCategory(cat.key)"
-              >{{ cat.label }}</button>
+                v-for="s in m3dShopSubcats"
+                :key="s.key"
+                :class="['size-pick-btn category-pick-btn', { active: m3dPanelFilter && m3dPanelFilter.category === 'shop' && m3dPanelFilter.subcategory === s.key }]"
+                @click="selectM3dSubcat('shop', s.key)"
+              >{{ s.label }}</button>
+              <div v-if="m3dShopSubcats.length === 0" class="m3d-subcat-empty">No saved shop projects yet.</div>
             </div>
           </div>
 
@@ -1954,14 +2237,12 @@ const loadProjectJSON = () => {
             </button>
             <div v-if="expandedGenerator === 'factory'" class="size-picker">
               <button
-                v-for="cat in [
-                  { key: 'small-factory', label: 'Small Factory' },
-                  { key: 'medium-factory', label: 'Medium Factory' }
-                ]"
-                :key="cat.key"
-                :class="['size-pick-btn category-pick-btn', { active: selectedCategory === cat.key }]"
-                @click="selectFactoryCategory(cat.key)"
-              >{{ cat.label }}</button>
+                v-for="s in m3dFactorySubcats"
+                :key="s.key"
+                :class="['size-pick-btn category-pick-btn', { active: m3dPanelFilter && m3dPanelFilter.category === 'factory' && m3dPanelFilter.subcategory === s.key }]"
+                @click="selectM3dSubcat('factory', s.key)"
+              >{{ s.label }}</button>
+              <div v-if="m3dFactorySubcats.length === 0" class="m3d-subcat-empty">No saved factory projects yet.</div>
             </div>
           </div>
         </div>
@@ -2082,7 +2363,22 @@ const loadProjectJSON = () => {
             <span class="preview3d-caption">{{ inputImageSize ? `${inputImageSize.width} × ${inputImageSize.height}` : 'preview' }}{{ modelLoaded ? ' → img2img input' : '' }}</span>
           </div>
           <div class="editor3d-frame">
-            <Editor3D ref="editor3dRef" :custom-textures="editor3dCustomTextures" :enable-noise-paint="noiseMaskEnabled" :grid-overlay="gridTextureOverlay" :grid-thickness="gridLineThickness" :face-grid-thickness="faceGridLineThickness" />
+            <Editor3D
+              ref="editor3dRef"
+              :custom-textures="editor3dCustomTextures"
+              :enable-noise-paint="noiseMaskEnabled"
+              :grid-overlay="gridTextureOverlay"
+              :grid-thickness="gridLineThickness"
+              :face-grid-thickness="faceGridLineThickness"
+              :inference-preview-url="m3dInferencePreviewUrl"
+              :model3d-projects="model3dProjects"
+              :list-filter="m3dPanelFilter"
+              @save-3d-project="handleSave3dProject"
+              @select-3d-project="handleSelect3dProject"
+              @close-list-filter="handleCloseListFilter"
+              @delete-3d-project="handleDelete3dProject"
+              @update-prompt="handleUpdatePrompt"
+            />
           </div>
         </div>
 
@@ -2594,6 +2890,14 @@ const loadProjectJSON = () => {
         </div>
       </div>
     </div>
+
+    <TilePositionManager
+      v-if="showTilePositionManager"
+      :sprite-url="tilePositionSpriteUrl"
+      :initial-definitions="NEW_ROAD_TILE_DEFINITIONS"
+      export-name="NEW_ROAD_TILE_DEFINITIONS"
+      @close="showTilePositionManager = false"
+    />
   </div>
 </template>
 
@@ -2914,6 +3218,72 @@ const loadProjectJSON = () => {
   font-size: 0.7rem !important;
   padding: 4px 8px !important;
   white-space: nowrap;
+}
+
+.m3d-subcat-empty {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 0.65rem;
+  color: rgba(255,255,255,0.4);
+  font-style: italic;
+  text-align: center;
+}
+
+/* Saved 3D-project rows (under the legacy category buttons in size-picker) */
+.m3d-projects-divider {
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px 6px;
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.5);
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.m3d-project-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+}
+.m3d-project-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem !important;
+  padding: 4px 8px !important;
+  text-align: left;
+}
+.m3d-project-row.active .m3d-project-btn {
+  background: rgba(102,126,234,0.45);
+  border-color: rgba(102,126,234,0.7);
+  color: #fff;
+}
+.m3d-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m3d-project-size {
+  margin-left: 6px;
+  font-size: 0.62rem;
+  color: rgba(255,255,255,0.55);
+  flex-shrink: 0;
+}
+.m3d-project-del {
+  width: 22px;
+  background: rgba(255,68,68,0.15);
+  border: 1px solid rgba(255,68,68,0.35);
+  border-radius: 4px;
+  color: rgba(255,180,180,0.9);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.m3d-project-del:hover {
+  background: rgba(255,68,68,0.3);
+  color: #fff;
 }
 
 /* Price slider */
@@ -3950,7 +4320,7 @@ const loadProjectJSON = () => {
   position: fixed;
   top: 4vh;
   right: 392px;
-  width: min(40vw, 480px);
+  width: min(58vw, 760px);
   height: min(92vh, 900px);
   background: rgba(10, 8, 28, 0.96);
   border: 1px solid rgba(102,126,234,0.4);

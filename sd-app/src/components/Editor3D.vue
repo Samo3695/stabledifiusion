@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as THREE from 'three'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -26,8 +26,273 @@ const props = defineProps({
   gridThickness: { type: Number, default: 6 },
   // Face-grid line thickness in texture pixels (1–20). Drawn into a 256×256
   // CanvasTexture and tiled per object — bigger = chunkier seams on faces.
-  faceGridThickness: { type: Number, default: 4 }
+  faceGridThickness: { type: Number, default: 4 },
+  // Latest SD-Turbo result image (or 3D preview screenshot) to show in the
+  // save-panel preview tile. Owned by parent — Editor3D only displays it.
+  // Never serialized into a project — it's a transient view of the latest run.
+  inferencePreviewUrl: { type: String, default: null },
+  // Full list of saved 3D projects (parent-owned). Used to render the list-mode
+  // panel when listFilter is active.
+  model3dProjects: { type: Array, default: () => [] },
+  // When non-null, the save panel switches from "edit form" mode to "project
+  // list" mode, filtered by these criteria. Shape: { category, subcategory }.
+  // Cleared when the user picks a project or hits "+ New" in the list.
+  listFilter: { type: Object, default: null }
 })
+
+const emit = defineEmits(['save-3d-project', 'select-3d-project', 'close-list-filter', 'delete-3d-project', 'update-prompt'])
+
+// 3D project taxonomy — keys are passed to SD-Turbo as part of the prompt
+// `isometric {subcategory-readable} {extraPrompt}`. Labels are display-only.
+const MODEL3D_SUBCATEGORIES = {
+  house: [
+    { key: 'family-house', label: 'Family House' },
+    { key: 'apartment', label: 'Apartment' },
+    { key: 'residential-building', label: 'Residential Building' },
+    { key: 'townhouse', label: 'Townhouse' }
+  ],
+  shop: [
+    { key: 'small-shop', label: 'Small Shop' },
+    { key: 'medium-shop', label: 'Medium Shop' },
+    { key: 'shopping-center', label: 'Shopping Center' },
+    { key: 'market-stall', label: 'Market Stall' }
+  ],
+  factory: [
+    { key: 'small-workshop', label: 'Small Workshop' },
+    { key: 'medium-factory', label: 'Medium Factory' },
+    { key: 'big-factory', label: 'Big Factory' },
+    { key: 'warehouse', label: 'Warehouse' }
+  ]
+}
+const MODEL3D_SIZES = [1, 2, 3, 4]
+
+const m3dProjectName = ref('')
+const m3dCategory = ref('house')
+const m3dSubcategory = ref('family-house')
+const m3dSize = ref(1)
+const m3dExtraPrompt = ref('')
+// Tracks the project currently loaded in the form. When non-null, Save updates
+// that record in-place (parent matches by id); when null, Save creates a new one.
+const m3dCurrentProjectId = ref(null)
+const m3dSaveError = ref('')
+// 'form' = edit/create UI; 'list' = browse saved projects matching listFilter.
+const panelMode = ref('form')
+
+// Tallest point of the placed model in metres (cellSize is 1 m by default,
+// so worldBB.max.y already equals metres). Declared up here — ahead of
+// m3dPromptPreview — because the computed reads it during setup and a
+// watch() below evaluates it eagerly. Updated by recomputeVolume().
+const heightM = ref(0)
+
+const m3dSubOptions = computed(() => MODEL3D_SUBCATEGORIES[m3dCategory.value] || [])
+// Map model height (in metres) to a story count. Thresholds:
+// ≤4m → 1, ≤6m → 2, ≤8m → 3, ≤10m → 4, ≤12m → 5, >12m → 6.
+function storyCountForHeight(h) {
+  const m = Number(h) || 0
+  if (m > 12) return 6
+  if (m > 10) return 5
+  if (m > 8)  return 4
+  if (m > 6)  return 3
+  if (m > 4)  return 2
+  return 1
+}
+// Convert numeric story count to its English-word form for the prompt.
+// Falls back to a digit + 'story' for counts beyond the table (e.g. 4×4 × 6 = 24).
+function storyWord(n) {
+  const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve']
+  return words[n] || String(n)
+}
+const m3dPromptPreview = computed(() => {
+  const sub = m3dSubOptions.value.find(s => s.key === m3dSubcategory.value)
+  const subText = sub ? sub.label.toLowerCase() : m3dSubcategory.value
+  const extra = (m3dExtraPrompt.value || '').trim()
+  // Footprint multiplier: 1×1 ×1, 2×2 ×2, 3×3 ×3, 4×4 ×4. Bigger footprint
+  // implies a bigger building, so the story count scales linearly with size.
+  const stories = storyCountForHeight(heightM.value) * (m3dSize.value || 1)
+  return `isometric ${storyWord(stories)} story ${subText}${extra ? ' ' + extra : ''}`
+})
+
+const subLabel = (catKey, subKey) => {
+  const list = MODEL3D_SUBCATEGORIES[catKey] || []
+  const item = list.find(s => s.key === subKey)
+  return item ? item.label : subKey
+}
+
+const filteredProjects = computed(() => {
+  const f = props.listFilter
+  if (!f) return []
+  return (props.model3dProjects || []).filter(p =>
+    p.category === f.category && p.subcategory === f.subcategory
+  )
+})
+
+const listFilterLabel = computed(() => {
+  const f = props.listFilter
+  if (!f) return ''
+  return subLabel(f.category, f.subcategory)
+})
+
+watch(m3dCategory, (cat) => {
+  const list = MODEL3D_SUBCATEGORIES[cat] || []
+  if (list.length && !list.find(s => s.key === m3dSubcategory.value)) {
+    m3dSubcategory.value = list[0].key
+  }
+})
+
+// Mirror the live prompt preview up to the parent so the right-panel
+// `prompt` textarea stays in sync as the user types into Extra Prompt or
+// adds/removes shapes on the 3D canvas (which mutates heightM → story
+// count). Only fires while the form panel is visible — list mode keeps the
+// previously-loaded prompt untouched.
+watch(m3dPromptPreview, (v) => {
+  if (panelMode.value !== 'form') return
+  emit('update-prompt', v)
+})
+
+// Whenever the parent activates a list filter, switch into list mode.
+// Clearing the filter (filter === null) reverts to form mode but does NOT
+// touch the form fields — the user may still be editing.
+watch(() => props.listFilter, (f) => {
+  panelMode.value = f ? 'list' : 'form'
+})
+
+function resetForm(presetCategory, presetSubcategory) {
+  m3dProjectName.value = ''
+  m3dCategory.value = presetCategory || 'house'
+  m3dSubcategory.value = presetSubcategory
+    || (MODEL3D_SUBCATEGORIES[m3dCategory.value]?.[0]?.key)
+    || ''
+  m3dSize.value = 1
+  m3dExtraPrompt.value = ''
+  m3dCurrentProjectId.value = null
+  m3dSaveError.value = ''
+}
+
+function startNewProject() {
+  // "+ New" inside list mode: keep the filter's category/subcat as a sensible
+  // default, but switch back to form mode and clear any loaded project id.
+  const f = props.listFilter
+  resetForm(f?.category, f?.subcategory)
+  emit('close-list-filter')
+}
+
+function removeCurrentProject() {
+  if (!m3dCurrentProjectId.value) return
+  const id = m3dCurrentProjectId.value
+  emit('delete-3d-project', id)
+  resetForm()
+  clearAll()
+}
+
+function loadProjectIntoForm(project) {
+  if (!project) return
+  m3dProjectName.value = project.projectName || ''
+  m3dCategory.value = project.category || 'house'
+  m3dSubcategory.value = project.subcategory || ''
+  m3dSize.value = project.size || 1
+  m3dExtraPrompt.value = project.extraPrompt || ''
+  m3dCurrentProjectId.value = project.id
+  m3dSaveError.value = ''
+  loadSerializedModel(project.modelData)
+  // Re-apply saved ground texture after clearAll() (called inside
+  // loadSerializedModel) reset it to the default tile.
+  applyGroundState(project.groundState)
+  emit('close-list-filter')
+  emit('select-3d-project', project.id)
+}
+
+function onProjectClickInList(p) {
+  loadProjectIntoForm(p)
+}
+
+async function emitSaveModel3dProject() {
+  if (!m3dCategory.value || !m3dSubcategory.value) return
+  if (!(m3dProjectName.value || '').trim()) {
+    m3dSaveError.value = 'Project name is required'
+    return
+  }
+  if (placed.length === 0) {
+    m3dSaveError.value = 'Add at least one shape before saving'
+    return
+  }
+  m3dSaveError.value = ''
+  let modelData = null
+  try {
+    modelData = await serializeModel()
+  } catch (err) {
+    console.error('serializeModel failed', err)
+    m3dSaveError.value = 'Failed to serialize 3D model'
+    return
+  }
+  // Snapshot the current ground-plane texture (default tile, painted canvas,
+  // or applied texture fill) so reload restores the same podklad — without
+  // this only the placed meshes round-trip and the ground falls back to the
+  // default texture-bottom.png on every project load.
+  const groundState = serializeGroundState()
+  emit('save-3d-project', {
+    id: m3dCurrentProjectId.value,
+    projectName: m3dProjectName.value.trim(),
+    category: m3dCategory.value,
+    subcategory: m3dSubcategory.value,
+    size: m3dSize.value,
+    extraPrompt: (m3dExtraPrompt.value || '').trim(),
+    heightM: heightM.value,
+    modelData,
+    groundState
+  })
+}
+
+// GLTF JSON serialization of the placed meshes only (excludes ground plane).
+// Returns a plain JS object that JSON.stringify can handle directly — avoids
+// the base64 round-trip a binary GLB would need.
+function serializeModel() {
+  return new Promise((resolve, reject) => {
+    if (!placed || placed.length === 0) { resolve(null); return }
+    const group = new THREE.Group()
+    for (const o of placed) group.add(o.clone(true))
+    const exporter = new GLTFExporter()
+    exporter.parse(
+      group,
+      (result) => resolve(result),
+      (err) => reject(err),
+      { binary: false, embedImages: true }
+    )
+  })
+}
+
+// Counterpart to serializeModel — clears current scene contents and re-attaches
+// meshes from a parsed GLTF JSON (or string). Mirrors loadModelFile but works
+// straight from in-memory data, which is what saved projects carry.
+function loadSerializedModel(gltfJson) {
+  if (!scene) return
+  clearAll()
+  if (!gltfJson) return
+  const loader = new GLTFLoader()
+  const jsonStr = typeof gltfJson === 'string' ? gltfJson : JSON.stringify(gltfJson)
+  loader.parse(
+    jsonStr,
+    '',
+    (gltf) => {
+      const toAdd = []
+      gltf.scene.traverse((obj) => {
+        if (obj.isMesh) {
+          obj.castShadow = true
+          obj.receiveShadow = true
+          toAdd.push(obj)
+        }
+      })
+      gltf.scene.updateMatrixWorld(true)
+      for (const m of toAdd) {
+        scene.attach(m)
+        placed.push(m)
+      }
+      objectCount.value = placed.length
+      recomputeVolume()
+      needsRender = true
+    },
+    (err) => console.error('GLTF restore failed', err)
+  )
+}
 
 const container = ref(null)
 const objectCount = ref(0)
@@ -40,7 +305,7 @@ const paintMode = ref('color') // 'color' | 'texture'
 const paintTexture = ref(null) // resolved URL/dataURL when mode=texture
 const paintPopupOpen = ref(false)
 const BASE_URL = import.meta.env.BASE_URL
-const PAINT_TEXTURE_FILES = ['concrate.jpg', 'concratedark.jpg', 'grass.jpg', 'water.jpg']
+const PAINT_TEXTURE_FILES = ['concrate.jpg', 'concratedark.jpg', 'grass.jpg', 'water.jpg', 'grid.jpg']
 const paintTextures = computed(() => {
   const builtin = PAINT_TEXTURE_FILES.map(f => ({ url: `${BASE_URL}templates/textures/${f}`, label: f }))
   const custom = (props.customTextures || []).map((u, i) => ({ url: u, label: `custom-${i + 1}` }))
@@ -101,8 +366,112 @@ let resizeObserver
 let animId
 let needsRender = true
 let stoneTexture = null
+// Shared transparent grid texture used by per-mesh overlay children.
+// Loaded once from public/templates/textures/grid_overlay.png.
+let gridOverlayTexture = null
 
 const faceGridTexCache = new Map() // key: thickness px → THREE.CanvasTexture
+
+// Build / fetch the shared grid overlay texture. Async-loaded; meshes that are
+// created before the load completes will get the texture attached when load
+// finishes (see attachGridOverlayToAll).
+function ensureGridOverlayTexture() {
+  if (gridOverlayTexture) return gridOverlayTexture
+  const loader = new THREE.TextureLoader()
+  gridOverlayTexture = loader.load(
+    `${import.meta.env.BASE_URL}templates/textures/grid_overlay.png`,
+    (t) => {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.anisotropy = 4
+      t.colorSpace = THREE.SRGBColorSpace
+      // Refresh any overlays that were created before the texture was ready.
+      attachGridOverlayToAll()
+      needsRender = true
+    }
+  )
+  gridOverlayTexture.wrapS = gridOverlayTexture.wrapT = THREE.RepeatWrapping
+  return gridOverlayTexture
+}
+
+// Compute UV repeat for a mesh: dense grid — ~8 cells per world unit on the
+// longest horizontal axis. The base texture is already 4×4 cells, so a repeat
+// of 2 means 8 grid cells across that axis. Denser = stronger SD signal.
+function computeOverlayRepeat(mesh) {
+  const _b = new THREE.Box3().setFromObject(mesh)
+  const _s = new THREE.Vector3()
+  _b.getSize(_s)
+  // 4 cells per unit on each axis (texture has 4 cells, * size in world units).
+  const rx = Math.max(1, Math.max(_s.x, _s.z) * 2)
+  const ry = Math.max(1, Math.max(_s.y, _s.z) * 2)
+  return [rx, ry]
+}
+
+// Add a child mesh that shares the parent's geometry but renders the grid
+// texture on top with polygonOffset so it sits visually above the parent's
+// material without z-fighting. depthWrite is off so subsequent renders aren't
+// disturbed; transparent so only line pixels darken the underlying surface.
+function addGridOverlay(parentMesh) {
+  if (!parentMesh || parentMesh.userData.isGridOverlay) return
+  // Avoid double-attaching.
+  for (const c of parentMesh.children) {
+    if (c.userData?.isGridOverlay) return
+  }
+  const tex = ensureGridOverlayTexture().clone()
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  const [rx, ry] = computeOverlayRepeat(parentMesh)
+  tex.repeat.set(rx, ry)
+  tex.needsUpdate = true
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    color: 0xffffff,
+    side: THREE.FrontSide,
+    depthWrite: false,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  })
+  // Reuse the same geometry instance — overlay deforms with parent.
+  const overlay = new THREE.Mesh(parentMesh.geometry, mat)
+  overlay.castShadow = false
+  overlay.receiveShadow = false
+  overlay.userData.isGridOverlay = true
+  overlay.visible = !!props.gridOverlay
+  // Render after the parent so blending sits on top.
+  overlay.renderOrder = (parentMesh.renderOrder || 0) + 1
+  parentMesh.add(overlay)
+}
+
+function removeGridOverlay(parentMesh) {
+  if (!parentMesh) return
+  const toRemove = []
+  for (const c of parentMesh.children) {
+    if (c.userData?.isGridOverlay) toRemove.push(c)
+  }
+  for (const c of toRemove) {
+    parentMesh.remove(c)
+    c.material.map?.dispose()
+    c.material.dispose()
+  }
+}
+
+function attachGridOverlayToAll() {
+  for (const o of placed) addGridOverlay(o)
+  if (plane) addGridOverlay(plane)
+}
+
+function setGridOverlayVisible(visible) {
+  const apply = (root) => {
+    if (!root) return
+    root.traverse(n => {
+      if (n.userData?.isGridOverlay) n.visible = visible
+    })
+  }
+  for (const o of placed) apply(o)
+  if (plane) apply(plane)
+  needsRender = true
+}
 
 // Procedural face-grid texture: transparent base + dark seams on top + left
 // edge of the tile. RepeatWrapping turns it into a full grid when tiled.
@@ -115,6 +484,10 @@ function getFaceGridTexture(thicknessPx) {
   const c = document.createElement('canvas')
   c.width = size; c.height = size
   const ctx = c.getContext('2d')
+  // Transparent base — only the grid lines are drawn. The material is rendered
+  // with transparent=true so source-over compositing will only overlay the
+  // dark line pixels onto the existing textured screenshot, leaving the rest
+  // of the texture completely intact.
   ctx.clearRect(0, 0, size, size)
   ctx.strokeStyle = 'rgba(15, 15, 22, 0.92)'
   ctx.lineWidth = t
@@ -153,8 +526,18 @@ function drawFaceGrid(octx, outW, outH, minX, minY, cw, ch, thicknessPx) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping
     t.repeat.set(rx, ry)
     t.needsUpdate = true
+    // Transparent material + FrontSide + depthWrite: front faces write to the
+    // depth buffer (occluding back faces) but only the dark line pixels are
+    // composited onto the output — transparent areas let the existing texture
+    // show through unchanged. This avoids multiply-blend pre-mult-alpha issues.
     mesh.material = new THREE.MeshBasicMaterial({
-      map: t, transparent: true, color: 0xffffff
+      map: t,
+      transparent: true,
+      opacity: 1,
+      color: 0xffffff,
+      side: THREE.FrontSide,
+      depthWrite: true,
+      depthTest: true
     })
     restorers.push(() => {
       mesh.material.map?.dispose()
@@ -166,13 +549,32 @@ function drawFaceGrid(octx, outW, outH, minX, minY, cw, ch, thicknessPx) {
   // Plane gets a denser grid so the floor reads as tiled.
   if (plane && plane.visible) swap(plane, 20)
 
+  // Hide every mesh's EdgesGeometry outline during this pass — those line
+  // segments exist on ALL geometry edges (incl. back/bottom of a cube) and
+  // depth-test poorly against a transparent front face, so they bleed
+  // through and look like "back/bottom" grid lines in the output.
+  const hiddenLines = []
+  const hideOutlines = (root) => {
+    root.traverse(n => {
+      if (n.isLineSegments && n.visible) {
+        hiddenLines.push(n)
+        n.visible = false
+      }
+    })
+  }
+  for (const o of placed) hideOutlines(o)
+
   renderer.render(scene, camera)
   const src = renderer.domElement
   octx.save()
   octx.imageSmoothingEnabled = true
+  // Default source-over: transparent areas of the grid pass are ignored,
+  // dark line pixels are drawn on top of the existing texture. No multiply
+  // needed — the transparent texture already acts as its own mask.
   octx.drawImage(src, minX, minY, cw, ch, 0, 0, outW, outH)
   octx.restore()
 
+  for (const ln of hiddenLines) ln.visible = true
   for (const r of restorers) r()
 }
 
@@ -212,6 +614,35 @@ function drawInterObjectEdges(octx, outW, outH, minX, minY, cw, ch, thicknessPx)
     swap(placed[i], hex)
   }
   if (plane && plane.visible) swap(plane, 0x101820)
+
+  // Hide each mesh's EdgesGeometry outline during the ID pass — those dark
+  // line segments overlay the flat ID colour and the diff() pass would then
+  // pick them up as fake "edges", including on the silhouette/back side
+  // where a real intersection doesn't exist.
+  // Also hide the per-mesh grid-overlay children: their dark line pixels
+  // would otherwise contaminate the flat ID colour the same way.
+  const hiddenLines = []
+  const hiddenOverlays = []
+  for (const o of placed) {
+    o.traverse(n => {
+      if (n.isLineSegments && n.visible) {
+        hiddenLines.push(n)
+        n.visible = false
+      } else if (n.userData?.isGridOverlay && n.visible) {
+        hiddenOverlays.push(n)
+        n.visible = false
+      }
+    })
+  }
+  if (plane) {
+    plane.traverse(n => {
+      if (n.userData?.isGridOverlay && n.visible) {
+        hiddenOverlays.push(n)
+        n.visible = false
+      }
+    })
+  }
+
   renderer.render(scene, camera)
 
   const src = renderer.domElement
@@ -221,7 +652,9 @@ function drawInterObjectEdges(octx, outW, outH, minX, minY, cw, ch, thicknessPx)
   const id = tmp.getContext('2d').getImageData(0, 0, cw, ch)
   const px = id.data
 
-  // Restore materials before any further rendering uses them.
+  // Restore wireframe + materials before any further rendering uses them.
+  for (const ln of hiddenLines) ln.visible = true
+  for (const ov of hiddenOverlays) ov.visible = true
   for (const r of restorers) r()
 
   // --- Build 1-pixel edge mask (where 4-neighbour RGB differs significantly) ---
@@ -448,6 +881,75 @@ function makeArchGeometry(s) {
   return geo
 }
 
+// Capture the current ground-plane material (map image + tiling repeat +
+// tint colour) into a JSON-safe object that survives serialisation to the
+// project file. We snapshot whatever pixels the plane currently shows —
+// default tile texture, painted canvas, or replaced fill texture — into a
+// PNG dataURL so the same image can be reattached on load without needing
+// to know which path produced it.
+function serializeGroundState() {
+  if (!plane || !plane.material) return null
+  const mat = plane.material
+  const map = mat.map
+  if (!map || !map.image) return null
+  const src = map.image
+  const w = src.width || src.naturalWidth || 256
+  const h = src.height || src.naturalHeight || 256
+  let imageDataUrl
+  try {
+    let canvas
+    if (src instanceof HTMLCanvasElement) {
+      canvas = src
+    } else {
+      canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      canvas.getContext('2d').drawImage(src, 0, 0, w, h)
+    }
+    imageDataUrl = canvas.toDataURL('image/png')
+  } catch (e) {
+    // Tainted canvas (cross-origin texture) — fall back to no snapshot so
+    // load just keeps the default ground rather than crashing the save.
+    console.warn('serializeGroundState: toDataURL failed', e)
+    return null
+  }
+  return {
+    imageDataUrl,
+    repeat: { x: map.repeat.x, y: map.repeat.y },
+    color: '#' + mat.color.getHexString()
+  }
+}
+
+// Counterpart to serializeGroundState — replaces the plane's material map
+// with the saved snapshot. Called after loadSerializedModel since clearAll()
+// inside it resets the ground to the default tile.
+function applyGroundState(state) {
+  if (!plane || !state || !state.imageDataUrl) return
+  const img = new Image()
+  img.onload = () => {
+    const tex = new THREE.Texture(img)
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+    tex.colorSpace = THREE.SRGBColorSpace
+    const rx = state.repeat?.x || 1
+    const ry = state.repeat?.y || 1
+    tex.repeat.set(rx, ry)
+    tex.anisotropy = 4
+    tex.needsUpdate = true
+    plane.material.map = tex
+    if (state.color) plane.material.color.set(state.color)
+    plane.material.needsUpdate = true
+    // Snapshot replaces any prior tile-paint canvas; subsequent paint strokes
+    // on the ground will re-initialise a fresh canvas via ensureFaceCanvas.
+    if (plane.material.userData) {
+      plane.material.userData.canvas = null
+      plane.material.userData.ctx = null
+      plane.material.userData.painted = true
+    }
+    needsRender = true
+  }
+  img.src = state.imageDataUrl
+}
+
 function applyDefaultGroundTexture() {
   if (!plane) return
   // Drop any previous tile-paint canvas state so re-paint re-initialises a fresh canvas.
@@ -567,6 +1069,9 @@ function init() {
   plane.receiveShadow = true
   plane.name = 'ground'
   scene.add(plane)
+  // Plane gets the same fake-controlnet grid overlay so the floor reads as
+  // a coherent gridded surface in screenshots.
+  addGridOverlay(plane)
 
   function applyStoneToGround() {
     if (!stoneTexture || !plane) return
@@ -1070,6 +1575,8 @@ function onPointerDown(e) {
   applyStoneMaterial(mesh)
   scene.add(mesh)
   placed.push(mesh)
+  // Attach the fake-controlnet grid overlay; visibility follows props.gridOverlay.
+  addGridOverlay(mesh)
   objectCount.value = placed.length
   recomputeVolume()
   needsRender = true
@@ -1077,6 +1584,8 @@ function onPointerDown(e) {
 
 function removeObject(obj) {
   clearHoverHighlight()
+  // Dispose the grid-overlay child first so its cloned material+texture are freed.
+  removeGridOverlay(obj)
   scene.remove(obj)
   placed = placed.filter(o => o !== obj)
   obj.geometry.dispose()
@@ -1137,7 +1646,6 @@ function bakeTiledTexture(srcTex, repeatX, repeatY, maxSize = 2048) {
 }
 
 function downloadModel() {
-  if (placed.length === 0) return
   const group = new THREE.Group()
   for (const o of placed) group.add(o.clone(true))
   if (includeGround.value && plane) {
@@ -1309,6 +1817,16 @@ function recomputeVolume() {
     }
   }
   volumeM3.value = occupied.size * VOXEL_VOL
+  // Height = max world-Y of any placed mesh (ground plane sits at y=0,
+  // every shape's base is ≥ 0, so this equals the model's height in metres).
+  let maxY = 0
+  for (const mesh of placed) {
+    mesh.updateMatrixWorld()
+    mesh.geometry.computeBoundingBox()
+    const wb = mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld)
+    if (wb.max.y > maxY) maxY = wb.max.y
+  }
+  heightM.value = maxY
 }
 
 function clearAll() {
@@ -1322,6 +1840,7 @@ function clearAll() {
   placed = []
   objectCount.value = 0
   volumeM3.value = 0
+  heightM.value = 0
   applyDefaultGroundTexture()
   needsRender = true
 }
@@ -1434,13 +1953,15 @@ function captureScreenshot(maxSize = 512) {
   octx.imageSmoothingQuality = 'high'
   octx.drawImage(srcCanvas, minX, minY, cw, ch, 0, 0, outW, outH)
 
-  // Two additive overlays composed on top of the textured screenshot — both
-  // preserve original textures because we draw on top of an already-finalised
-  // image of the scene:
-  //   1) Face grid first (follows UVs; signals curved vs flat surfaces).
-  //   2) Intersection edges last so they sit visually on top of the grid.
+  // Face-grid signal is now baked into the screenshot itself via per-mesh
+  // overlay children (see addGridOverlay) — they live in the 3D scene so
+  // grid lines deform with UVs (curve on cylinders/cones, stay straight on
+  // cubes). That gives SD a fake-controlnet geometry hint at any strength:
+  //   • low strength → high-frequency grid raises latent entropy → richer textures
+  //   • high strength → curved-vs-flat grid lines lock down the silhouette shape
+  // Intersection edges are still composited in 2D because they need the
+  // ID-pass + dilation that can't be done from a per-mesh overlay alone.
   if (props.gridOverlay) {
-    drawFaceGrid(octx, outW, outH, minX, minY, cw, ch, props.faceGridThickness)
     drawInterObjectEdges(octx, outW, outH, minX, minY, cw, ch, props.gridThickness)
   }
 
@@ -1515,7 +2036,7 @@ function captureScreenshot(maxSize = 512) {
   return dataUrl
 }
 
-defineExpose({ captureScreenshot, clearAll, getNoiseMask, clearNoiseMask, hasNoiseMask })
+defineExpose({ captureScreenshot, clearAll, getNoiseMask, clearNoiseMask, hasNoiseMask, loadProjectIntoForm })
 
 // ----- Noise mask painting overlay -----
 // A 2D canvas the same size as the WebGL canvas. When the 'noisepaint' tool is
@@ -1634,6 +2155,9 @@ onMounted(() => {
     noiseCanvas.value.addEventListener('contextmenu', (e) => e.preventDefault())
   }
 })
+// Toggle grid overlay visibility live when the prop flips. Overlays are
+// always attached (cheap second draw call); only their `visible` is flipped.
+watch(() => props.gridOverlay, (v) => setGridOverlayVisible(v))
 onBeforeUnmount(() => {
   if (animId) cancelAnimationFrame(animId)
   if (resizeObserver) resizeObserver.disconnect()
@@ -1885,7 +2409,92 @@ onBeforeUnmount(() => {
         </label>
 
         <span>Volume: {{ volumeM3.toFixed(2) }} m³</span>
+        <span>Height: {{ heightM.toFixed(2) }} m</span>
       </div>
+    </div>
+
+    <!-- 3D Project save panel — toggles between FORM mode (create/edit a
+         project) and LIST mode (browse saved projects, driven by parent's
+         listFilter). Saving only mutates the parent's in-memory list; the
+         JSON file write happens via the parent's header "Save Project"
+         button. The inference preview is purely transient — it is not part
+         of the saved project payload. -->
+    <div class="editor3d-savepanel">
+
+      <!-- LIST MODE: shown when parent set listFilter (e.g. user clicked a
+           subcategory in the left sidebar). -->
+      <template v-if="panelMode === 'list'">
+        <div class="m3d-list-header">
+          <span class="m3d-list-title">{{ listFilterLabel }}</span>
+          <button type="button" class="m3d-newbtn" @click="startNewProject" title="Start a new project">+ New</button>
+        </div>
+        <div class="m3d-list">
+          <div v-if="filteredProjects.length === 0" class="m3d-empty">No saved projects in this subcategory yet.</div>
+          <button
+            v-for="p in filteredProjects"
+            :key="p.id"
+            type="button"
+            class="m3d-list-item"
+            @click="onProjectClickInList(p)"
+            :title="p.extraPrompt"
+          >
+            <span class="m3d-list-name">{{ p.projectName || subLabel(p.category, p.subcategory) }}</span>
+            <span class="m3d-list-size">{{ p.size }}×{{ p.size }}</span>
+          </button>
+        </div>
+      </template>
+
+      <!-- FORM MODE: default — create new or edit currently-loaded project. -->
+      <template v-else>
+        <label class="m3d-label">Project Name</label>
+        <input class="m3d-input" v-model="m3dProjectName" placeholder="My Building" />
+
+        <label class="m3d-label">Category</label>
+        <select class="m3d-input" v-model="m3dCategory">
+          <option value="house">House</option>
+          <option value="shop">Shop</option>
+          <option value="factory">Factory</option>
+        </select>
+
+        <label class="m3d-label">Subcategory</label>
+        <select class="m3d-input" v-model="m3dSubcategory">
+          <option v-for="s in m3dSubOptions" :key="s.key" :value="s.key">{{ s.label }}</option>
+        </select>
+
+        <label class="m3d-label">Size</label>
+        <select class="m3d-input" v-model.number="m3dSize">
+          <option v-for="n in MODEL3D_SIZES" :key="n" :value="n">{{ n }}×{{ n }}</option>
+        </select>
+
+        <label class="m3d-label">Extra prompt</label>
+        <textarea class="m3d-input m3d-textarea" v-model="m3dExtraPrompt" rows="2" placeholder="extra style hints"></textarea>
+
+        <div class="m3d-prompt-preview" :title="m3dPromptPreview">{{ m3dPromptPreview }}</div>
+
+        <div class="m3d-label">Inference result</div>
+        <div class="m3d-preview">
+          <img v-if="inferencePreviewUrl" :src="inferencePreviewUrl" alt="inference preview" />
+          <div v-else class="m3d-preview-placeholder">
+            <svg viewBox="0 0 40 40" width="28" height="28" aria-hidden="true">
+              <rect x="6" y="8" width="28" height="24" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+              <circle cx="14" cy="16" r="2.5" fill="currentColor"/>
+              <path d="M8 30 L18 20 L26 28 L32 22 L34 24" fill="none" stroke="currentColor" stroke-width="2"/>
+            </svg>
+            <span>preview will appear<br>after generation</span>
+          </div>
+        </div>
+
+        <div v-if="m3dSaveError" class="m3d-error">{{ m3dSaveError }}</div>
+        <button type="button" class="m3d-save-btn" @click="emitSaveModel3dProject">
+          {{ m3dCurrentProjectId ? 'Update' : 'Save' }}
+        </button>
+        <button
+          v-if="m3dCurrentProjectId"
+          type="button"
+          class="m3d-remove-btn"
+          @click="removeCurrentProject"
+        >Remove</button>
+      </template>
     </div>
   </div>
 </template>
@@ -2174,4 +2783,183 @@ onBeforeUnmount(() => {
   border-color: rgba(102,126,234,0.9);
   box-shadow: 0 0 0 1px rgba(102,126,234,0.5);
 }
+.editor3d-savepanel {
+  flex-shrink: 0;
+  width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: rgba(255,255,255,0.85);
+  font-size: 0.72rem;
+}
+.m3d-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255,255,255,0.55);
+  margin-top: 0.2rem;
+}
+.m3d-input {
+  background: rgba(20,20,40,0.7);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 4px;
+  color: #fff;
+  padding: 4px 6px;
+  font-size: 0.75rem;
+  width: 100%;
+}
+.m3d-input:focus { outline: 1px solid rgba(102,126,234,0.7); }
+.m3d-textarea { resize: vertical; font-family: inherit; }
+.m3d-prompt-preview {
+  font-size: 0.65rem;
+  color: rgba(255,255,255,0.6);
+  background: rgba(0,0,0,0.25);
+  padding: 4px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m3d-preview {
+  width: 100%;
+  aspect-ratio: 1;
+  background: rgba(0,0,0,0.35);
+  border: 1px dashed rgba(255,255,255,0.2);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.m3d-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.m3d-preview-empty {
+  color: rgba(255,255,255,0.35);
+  font-size: 0.7rem;
+}
+.m3d-preview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: rgba(255,255,255,0.32);
+  font-size: 0.65rem;
+  text-align: center;
+  line-height: 1.2;
+}
+.m3d-error {
+  font-size: 0.68rem;
+  color: rgba(255,120,120,0.95);
+  background: rgba(255,68,68,0.1);
+  border: 1px solid rgba(255,68,68,0.35);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.m3d-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.m3d-list-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m3d-newbtn {
+  background: rgba(102,126,234,0.25);
+  border: 1px solid rgba(102,126,234,0.5);
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.68rem;
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.m3d-newbtn:hover { background: rgba(102,126,234,0.45); }
+.m3d-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  overflow-y: auto;
+  max-height: 100%;
+}
+.m3d-empty {
+  color: rgba(255,255,255,0.4);
+  font-size: 0.7rem;
+  text-align: center;
+  padding: 20px 6px;
+}
+.m3d-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 5px;
+  color: rgba(255,255,255,0.85);
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.m3d-list-item:hover {
+  background: rgba(102,126,234,0.18);
+  border-color: rgba(102,126,234,0.5);
+}
+.m3d-list-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m3d-list-size {
+  font-size: 0.62rem;
+  color: rgba(255,255,255,0.55);
+  flex-shrink: 0;
+}
+.m3d-save-btn {
+  margin-top: 0.4rem;
+  padding: 0.55rem;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: transform 0.1s, filter 0.15s;
+}
+.m3d-save-btn:hover { filter: brightness(1.1); }
+.m3d-save-btn:active { transform: translateY(1px); }
+.m3d-remove-btn {
+  margin-top: 0.3rem;
+  padding: 0.45rem;
+  background: rgba(255,68,68,0.15);
+  border: 1px solid rgba(255,68,68,0.5);
+  border-radius: 6px;
+  color: rgba(255,180,180,0.95);
+  font-weight: 600;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.m3d-remove-btn:hover { background: rgba(255,68,68,0.3); color: #fff; }
 </style>

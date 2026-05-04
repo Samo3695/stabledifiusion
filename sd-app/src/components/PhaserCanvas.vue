@@ -2968,7 +2968,7 @@ class IsoScene extends Phaser.Scene {
 
   handleWheel(pointer, gameObjects, deltaX, deltaY, deltaZ) {
     const zoomChange = deltaY > 0 ? 0.9 : 1.1
-    const newZoom = Phaser.Math.Clamp(this.cameras.main.zoom * zoomChange, 0.3, 3)
+    const newZoom = Phaser.Math.Clamp(this.cameras.main.zoom * zoomChange, 0.1, 8)
     this.cameras.main.setZoom(newZoom)
   }
 
@@ -4642,6 +4642,13 @@ defineExpose({
         }
       }
     }
+  },
+  // Zoom the camera by a factor (e.g. 1.1 = +10%, 0.9 = -10%)
+  zoomCamera: (factor) => {
+    if (!mainScene) return
+    const cam = mainScene.cameras.main
+    const newZoom = Phaser.Math.Clamp(cam.zoom * factor, 0.1, 8)
+    cam.setZoom(newZoom)
   }
 })
 

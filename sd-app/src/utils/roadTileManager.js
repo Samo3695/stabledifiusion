@@ -3,25 +3,76 @@
  * Samostatný manager pre road tiles - načítava a spravuje road tiles bez závislosti na UI komponentoch
  */
 
+// Tile definície pre pôvodný sprite (pastroad.png / presentroad.png — 1024 x 585)
+export const PASTROAD_TILE_DEFINITIONS = [
+  { name: 'Rovná ↘', x: 570, y: 266, width: 205, height: 105, rotation: 0 },
+  { name: 'Rovná ↙', x: 20, y: 152, width: 205, height: 105, rotation: 0 },
+  { name: 'Roh ↙', x: 580, y: 413, width: 205, height: 105, rotation: 0 },
+  { name: 'Roh ↘', x: 727, y: 342, width: 205, height: 105, rotation: 0 },
+  { name: 'Roh ↖', x: 309, y: 275, width: 205, height: 105, rotation: 0 },
+  { name: 'Roh ↗', x: 437, y: 78, width: 205, height: 105, rotation: 0 },
+  { name: 'T ↖', x: 576, y: 146, width: 205, height: 105, rotation: 0 },
+  { name: 'T ↘', x: 176, y: 73, width: 205, height: 105, rotation: 0 },
+  { name: 'T ↗', x: 313, y: 141, width: 205, height: 105, rotation: 1 },
+  { name: 'T ↙', x: 726, y: 74, width: 205, height: 105, rotation: 0 },
+  { name: 'Križovatka +', x: 449, y: 206, width: 205, height: 105, rotation: 0 },
+  { name: 'Koniec', x: 768, y: 384, width: 256, height: 128, rotation: 0 },
+]
+
+// Tile definície pre new road.png (1456 x 730).
+// Auto-detegované cez block-component flood-fill + lattice klasifikácia.
+// Lattice: origin (732, 223), tile = 292 × 145.
+// Pre každý tile typ je vybraný cell ktorého graphic najlepšie zodpovedá danému
+// patternu (rohy a T-križovatky podľa screenshotu od usera s farebnými kruhmi).
+// Pixel-perfekt: top-left = center - (146, 72), veľkosť (292, 145).
+export const NEW_ROAD_TILE_DEFINITIONS = [
+  { name: 'Rovná ↘', x: 440, y: 224, width: 292, height: 145, rotation: 0 },
+  { name: 'Rovná ↙', x: 732, y: 224, width: 292, height: 145, rotation: 0 },
+  { name: 'Roh ↙', x: 2, y: 6, width: 292, height: 145, rotation: 0 },
+  { name: 'Roh ↘', x: 2, y: 6, width: 292, height: 145, rotation: 0 },
+  { name: 'Roh ↖', x: 2, y: 6, width: 292, height: 145, rotation: 0 },
+  { name: 'Roh ↗', x: 586, y: 6, width: 292, height: 145, rotation: 0 },
+  { name: 'T ↖', x: 295, y: 150, width: 292, height: 145, rotation: 0 },
+  { name: 'T ↗', x: 293, y: 442, width: 292, height: 145, rotation: 0 },
+  { name: 'T ↘', x: 295, y: 150, width: 292, height: 145, rotation: 0 },
+  { name: 'T ↙', x: 295, y: 150, width: 292, height: 145, rotation: 0 },
+  { name: 'Križovatka +', x: 586, y: 296, width: 292, height: 145, rotation: 0 },
+  { name: 'Koniec', x: 1024, y: 78, width: 292, height: 145, rotation: 0 },
+]
+const NEW_ROAD_SPRITE_PATH = 'templates/buildings/new road.png'
+
+function pickDefinitionsForSprite(spriteUrl) {
+  if (!spriteUrl) return PASTROAD_TILE_DEFINITIONS
+  // Match new road.png aj keď je URL encoded (new%20road.png).
+  if (/new[%\s_-]*road\.png/i.test(spriteUrl)) {
+    return NEW_ROAD_TILE_DEFINITIONS
+  }
+  return PASTROAD_TILE_DEFINITIONS
+}
+
 class RoadTileManager {
   constructor() {
     this.tiles = []
     this.spriteUrl = (typeof import.meta !== 'undefined' ? import.meta.env.BASE_URL : '/') + 'templates/roads/sprites/pastroad.png'
     this.opacity = 100
     this.isLoading = false
+    this.tileDefinitions = PASTROAD_TILE_DEFINITIONS
   }
 
   /**
    * Načíta road tiles zo sprite sheetu
    * @param {string} spriteUrl - URL sprite sheetu
    * @param {number} opacity - Opacity (0-100)
+   * @param {Array<Object>=} tileDefinitions - Voliteľné explicitné tile definície.
+   *   Ak nie sú zadané, vyberú sa podľa názvu sprite (pastroad/new road).
    * @returns {Promise<Array>} - Pole road tiles
    */
-  async loadTiles(spriteUrl = null, opacity = 100) {
+  async loadTiles(spriteUrl = null, opacity = 100, tileDefinitions = null) {
     if (spriteUrl) {
       this.spriteUrl = spriteUrl
     }
     this.opacity = opacity
+    this.tileDefinitions = tileDefinitions || pickDefinitionsForSprite(this.spriteUrl)
 
     if (this.isLoading) {
       console.log('⚠️ RoadTileManager: Už prebieha načítavanie tiles')
@@ -40,21 +91,7 @@ class RoadTileManager {
           const canvas = document.createElement('canvas')
           const ctx = canvas.getContext('2d', { willReadFrequently: true })
 
-          // Tile definície (rovnaké ako v ImageGallery)
-          const tileDefinitions = [
-            { name: 'Rovná ↘', x: 570, y: 266, width: 205, height: 105, rotation: 0 },
-            { name: 'Rovná ↙', x: 20, y: 152, width: 205, height: 105, rotation: 0 },
-            { name: 'Roh ↙', x: 580, y: 413, width: 205, height: 105, rotation: 0},
-            { name: 'Roh ↘', x: 727, y: 342, width: 205, height: 105, rotation: 0 },
-            { name: 'Roh ↖', x: 309, y: 275, width: 205, height: 105, rotation: 0 },
-            { name: 'Roh ↗', x: 437, y: 78, width: 205, height: 105, rotation: 0 },
-            { name: 'T ↖', x: 576, y: 146, width: 205, height: 105, rotation: 0 },
-            { name: 'T ↘', x: 176, y: 73, width: 205, height: 105, rotation: 0 },
-            { name: 'T ↗', x: 313, y: 141, width: 205, height: 105, rotation: 1 },
-            { name: 'T ↙', x: 726, y: 74, width: 205, height: 105, rotation: 0 },
-            { name: 'Križovatka +', x: 449, y: 206, width: 205, height: 105, rotation: 0 },
-            { name: 'Koniec', x: 768, y: 384, width: 256, height: 128, rotation: 0 },
-          ]
+          const tileDefinitions = this.tileDefinitions
 
           const TILE_WIDTH = 200
           const TILE_HEIGHT = 100
@@ -188,11 +225,12 @@ class RoadTileManager {
     }
 
     console.log(`🎨 RoadTileManager: Mením opacity z ${this.opacity}% na ${newOpacity}%`)
-    return await this.loadTiles(this.spriteUrl, newOpacity)
+    return await this.loadTiles(this.spriteUrl, newOpacity, this.tileDefinitions)
   }
 }
 
 // Singleton instance
 const roadTileManager = new RoadTileManager()
 
+export { NEW_ROAD_SPRITE_PATH }
 export default roadTileManager
