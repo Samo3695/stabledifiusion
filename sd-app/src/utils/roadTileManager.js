@@ -26,18 +26,18 @@ export const PASTROAD_TILE_DEFINITIONS = [
 // patternu (rohy a T-križovatky podľa screenshotu od usera s farebnými kruhmi).
 // Pixel-perfekt: top-left = center - (146, 72), veľkosť (292, 145).
 export const NEW_ROAD_TILE_DEFINITIONS = [
-  { name: 'Rovná ↘', x: 440, y: 224, width: 292, height: 145, rotation: 0 },
-  { name: 'Rovná ↙', x: 732, y: 224, width: 292, height: 145, rotation: 0 },
-  { name: 'Roh ↙', x: 588, y: 587, width: 292, height: 145, rotation: 0 },
-  { name: 'Roh ↘', x: 1173, y: 297, width: 292, height: 145, rotation: 0 },
-  { name: 'Roh ↖', x: 2, y: 295, width: 292, height: 145, rotation: 0 },
-  { name: 'Roh ↗', x: 586, y: 6, width: 292, height: 145, rotation: 0 },
-  { name: 'T ↖', x: 879, y: 442, width: 292, height: 145, rotation: 0 },
-  { name: 'T ↗', x: 293, y: 442, width: 292, height: 145, rotation: 0 },
-  { name: 'T ↘', x: 295, y: 151, width: 292, height: 145, rotation: 0 },
-  { name: 'T ↙', x: 884, y: 151, width: 292, height: 145, rotation: 0 },
-  { name: 'Križovatka +', x: 586, y: 296, width: 292, height: 145, rotation: 0 },
-  { name: 'Koniec', x: 1024, y: 78, width: 292, height: 145, rotation: 0 },
+  { name: 'Rovná ↘', x: 440, y: 224, width: 282, height: 135, rotation: 0 },
+  { name: 'Rovná ↙', x: 732, y: 224, width: 282, height: 135, rotation: 0 },
+  { name: 'Roh ↙', x: 588, y: 587, width: 282, height: 135, rotation: 0 },
+  { name: 'Roh ↘', x: 1171, y: 297, width: 282, height: 135, rotation: 0 },
+  { name: 'Roh ↖', x: 2, y: 297, width: 282, height: 135, rotation: 0 },
+  { name: 'Roh ↗', x: 586, y: 6, width: 282, height: 135, rotation: 0 },
+  { name: 'T ↖', x: 879, y: 442, width: 282, height: 135, rotation: 0 },
+  { name: 'T ↗', x: 293, y: 442, width: 282, height: 135, rotation: 0 },
+  { name: 'T ↘', x: 295, y: 151, width: 282, height: 135, rotation: 0 },
+  { name: 'T ↙', x: 875, y: 151, width: 282, height: 135, rotation: 0 },
+  { name: 'Križovatka +', x: 586, y: 296, width: 282, height: 135, rotation: 0 },
+  { name: 'Koniec', x: 1024, y: 78, width: 282, height: 135, rotation: 0 },
 ]
 const NEW_ROAD_SPRITE_PATH = 'templates/buildings/new road.png'
 
