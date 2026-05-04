@@ -14,6 +14,17 @@ const TILE_W = 200
 const TILE_H = 100
 const SPRITE_DISPLAY_W = 720
 
+// Mini iso playground inside the modal
+const ISO_TILE_W = 80
+const ISO_TILE_H = 40
+const ISO_ROWS = 6
+const ISO_COLS = 6
+const ISO_PAD = 8
+const ISO_CANVAS_W = (ISO_ROWS + ISO_COLS) * (ISO_TILE_W / 2) + ISO_PAD * 2
+const ISO_CANVAS_H = (ISO_ROWS + ISO_COLS) * (ISO_TILE_H / 2) + ISO_PAD * 2 + ISO_TILE_H
+const ISO_ORIGIN_X = ISO_ROWS * (ISO_TILE_W / 2) + ISO_PAD
+const ISO_ORIGIN_Y = ISO_PAD
+
 const definitions = reactive(JSON.parse(JSON.stringify(props.initialDefinitions)))
 const selectedIndex = ref(0)
 const tileCanvases = ref([])
@@ -22,6 +33,12 @@ const spriteLoaded = ref(false)
 const spriteW = ref(1456)
 const spriteH = ref(730)
 const copyHint = ref('')
+
+// Drawn road cells on the iso playground — keys "row-col"
+const roadCells = ref(new Set())
+const isoCanvasEl = ref(null)
+const isoIsDrawing = ref(false)
+const isoDrawMode = ref('add') // 'add' | 'remove'
 
 const selectedDef = computed(() => definitions[selectedIndex.value])
 const spriteScale = computed(() => SPRITE_DISPLAY_W / spriteW.value)
@@ -92,13 +109,183 @@ function renderAllTiles() {
   }
 }
 
+// Mirrors selectTileByDirection from utils/roadBuilder.js — same neighbour logic,
+// but returns the tile *name* (we don't have placed tiles, just the live defs).
+function pickTileName(direction, topLeft, topRight, bottomLeft, bottomRight) {
+  if (topLeft && bottomLeft && topRight && bottomRight) return 'Križovatka +'
+  if (!topLeft && !bottomRight && bottomLeft && topRight) return 'Rovná ↙'
+  if (topLeft && bottomRight && !bottomLeft && !topRight) return 'Rovná ↘'
+  if (topLeft && !bottomRight && !bottomLeft && topRight) return 'Roh ↙'
+  if (topLeft && !bottomRight && bottomLeft && !topRight) return 'Roh ↘'
+  if (!topLeft && bottomRight && !bottomLeft && topRight) return 'Roh ↖'
+  if (!topLeft && bottomRight && bottomLeft && !topRight) return 'Roh ↗'
+  if (topLeft && !bottomRight && bottomLeft && topRight) return 'T ↖'
+  if (!topLeft && bottomRight && bottomLeft && topRight) return 'T ↘'
+  if (topLeft && bottomRight && !bottomLeft && topRight) return 'T ↗'
+  if (topLeft && bottomRight && bottomLeft && !topRight) return 'T ↙'
+  return direction === 'vertical' ? 'Rovná ↙' : 'Rovná ↘'
+}
+
+function cellCenter(r, c) {
+  return {
+    x: (c - r) * (ISO_TILE_W / 2) + ISO_ORIGIN_X,
+    y: (c + r) * (ISO_TILE_H / 2) + ISO_ORIGIN_Y + ISO_TILE_H / 2,
+  }
+}
+
+function drawDiamond(ctx, cx, cy, w, h) {
+  ctx.beginPath()
+  ctx.moveTo(cx, cy - h / 2)
+  ctx.lineTo(cx + w / 2, cy)
+  ctx.lineTo(cx, cy + h / 2)
+  ctx.lineTo(cx - w / 2, cy)
+  ctx.closePath()
+}
+
+function drawTileOnIso(ctx, def, r, c) {
+  const { x: cx, y: cy } = cellCenter(r, c)
+  const drawX = cx - ISO_TILE_W / 2
+  const drawY = cy - ISO_TILE_H / 2
+
+  ctx.save()
+  drawDiamond(ctx, cx, cy, ISO_TILE_W, ISO_TILE_H)
+  ctx.clip()
+
+  const w = Math.max(1, def.width)
+  const h = Math.max(1, def.height)
+  const scale = ISO_TILE_W / w
+  const scaledH = h * scale
+  const offsetY = (ISO_TILE_H - scaledH) / 2
+
+  try {
+    ctx.drawImage(
+      spriteImg.value,
+      def.x, def.y, w, h,
+      drawX, drawY + offsetY, ISO_TILE_W, scaledH
+    )
+  } catch (e) { /* ignore out-of-bounds */ }
+  ctx.restore()
+}
+
+function renderIsoGrid() {
+  const canvas = isoCanvasEl.value
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  ctx.clearRect(0, 0, ISO_CANVAS_W, ISO_CANVAS_H)
+
+  // Background
+  ctx.fillStyle = '#14141a'
+  ctx.fillRect(0, 0, ISO_CANVAS_W, ISO_CANVAS_H)
+
+  // Faint grid diamonds
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+  ctx.lineWidth = 1
+  for (let r = 0; r < ISO_ROWS; r++) {
+    for (let c = 0; c < ISO_COLS; c++) {
+      const { x, y } = cellCenter(r, c)
+      drawDiamond(ctx, x, y, ISO_TILE_W, ISO_TILE_H)
+      ctx.stroke()
+    }
+  }
+
+  if (!spriteLoaded.value) return
+
+  // Draw tile for each road cell, picking the right tile by neighbour pattern
+  const has = (r, c) => roadCells.value.has(`${r}-${c}`)
+  const cells = Array.from(roadCells.value).map(k => {
+    const [r, c] = k.split('-').map(Number)
+    return { r, c }
+  })
+  // Paint back-to-front so closer tiles render on top
+  cells.sort((a, b) => (a.r + a.c) - (b.r + b.c))
+
+  for (const { r, c } of cells) {
+    // Same neighbour mapping as roadBuilder.js:
+    //   topleft = (row, col-1), topright = (row-1, col),
+    //   bottomleft = (row+1, col), bottomright = (row, col+1)
+    const topLeft = has(r, c - 1)
+    const topRight = has(r - 1, c)
+    const bottomLeft = has(r + 1, c)
+    const bottomRight = has(r, c + 1)
+    const name = pickTileName('horizontal', topLeft, topRight, bottomLeft, bottomRight)
+    const def = definitions.find(d => d.name === name) || definitions[0]
+    drawTileOnIso(ctx, def, r, c)
+  }
+}
+
+function pointToCell(px, py) {
+  const dx = px - ISO_ORIGIN_X
+  const dy = py - ISO_ORIGIN_Y - ISO_TILE_H / 2
+  const sumCR = dy / (ISO_TILE_H / 2)   // (c + r)
+  const diffCR = dx / (ISO_TILE_W / 2)  // (c - r)
+  const c = Math.round((sumCR + diffCR) / 2)
+  const r = Math.round((sumCR - diffCR) / 2)
+  if (r < 0 || r >= ISO_ROWS || c < 0 || c >= ISO_COLS) return null
+  return { r, c }
+}
+
+function isoEventToCell(e) {
+  const canvas = isoCanvasEl.value
+  if (!canvas) return null
+  const rect = canvas.getBoundingClientRect()
+  const px = (e.clientX - rect.left) * (canvas.width / rect.width)
+  const py = (e.clientY - rect.top) * (canvas.height / rect.height)
+  return pointToCell(px, py)
+}
+
+function onIsoDown(e) {
+  const cell = isoEventToCell(e)
+  if (!cell) return
+  const key = `${cell.r}-${cell.c}`
+  isoIsDrawing.value = true
+  isoDrawMode.value = roadCells.value.has(key) ? 'remove' : 'add'
+  applyIsoCell(cell)
+}
+
+function onIsoMove(e) {
+  if (!isoIsDrawing.value) return
+  const cell = isoEventToCell(e)
+  if (!cell) return
+  applyIsoCell(cell)
+}
+
+function onIsoUp() { isoIsDrawing.value = false }
+
+function applyIsoCell(cell) {
+  const key = `${cell.r}-${cell.c}`
+  const next = new Set(roadCells.value)
+  if (isoDrawMode.value === 'add') next.add(key)
+  else next.delete(key)
+  if (next.size === roadCells.value.size && Array.from(next).every(k => roadCells.value.has(k))) return
+  roadCells.value = next
+  renderIsoGrid()
+}
+
+function clearIso() {
+  roadCells.value = new Set()
+  renderIsoGrid()
+}
+
+function fillDemoIso() {
+  // A small + with a corner branch — exercises straight, corner and T tiles
+  const demo = [
+    '2-1','2-2','2-3','2-4',
+    '1-3','3-3','4-3',
+    '4-2','4-1',
+  ]
+  roadCells.value = new Set(demo)
+  renderIsoGrid()
+}
+
 function onFieldChange() {
   renderTile(selectedIndex.value)
+  renderIsoGrid()
 }
 
 function nudge(field, delta) {
   selectedDef.value[field] = (selectedDef.value[field] || 0) + delta
   renderTile(selectedIndex.value)
+  renderIsoGrid()
 }
 
 async function copyJson() {
@@ -118,12 +305,14 @@ function resetAll() {
     Object.assign(definitions[i], fresh[i])
   }
   renderAllTiles()
+  renderIsoGrid()
 }
 
 function resetSelected() {
   const fresh = JSON.parse(JSON.stringify(props.initialDefinitions[selectedIndex.value]))
   Object.assign(selectedDef.value, fresh)
   renderTile(selectedIndex.value)
+  renderIsoGrid()
 }
 
 function handleEsc(e) {
@@ -145,6 +334,7 @@ onMounted(async () => {
   }
   await nextTick()
   renderAllTiles()
+  fillDemoIso()
 })
 
 onUnmounted(() => {
@@ -269,6 +459,28 @@ onUnmounted(() => {
                   Sprite: {{ spriteW }} × {{ spriteH }} px (display scale: {{ spriteScale.toFixed(3) }}×)
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Iso playground — draw roads, see them update live -->
+          <div class="tpm-section">
+            <div class="tpm-section-title">
+              Iso playground
+              <span class="tpm-hint">Click / drag cells to draw roads. Tiles re-render live as you tune coordinates.</span>
+              <button class="tpm-mini-btn" @click="fillDemoIso" title="Demo road that uses straight + corner + T tiles">Demo</button>
+              <button class="tpm-mini-btn" @click="clearIso">Clear</button>
+            </div>
+            <div class="tpm-iso-wrap">
+              <canvas
+                ref="isoCanvasEl"
+                :width="ISO_CANVAS_W"
+                :height="ISO_CANVAS_H"
+                class="tpm-iso-canvas"
+                @mousedown="onIsoDown"
+                @mousemove="onIsoMove"
+                @mouseup="onIsoUp"
+                @mouseleave="onIsoUp"
+              ></canvas>
             </div>
           </div>
 
@@ -506,6 +718,21 @@ onUnmounted(() => {
 .tpm-sprite-info {
   font-size: 0.75rem;
   color: #8a8a98;
+}
+
+.tpm-iso-wrap {
+  display: flex;
+  justify-content: center;
+  background: #0e0e14;
+  border: 1px solid #3a3a44;
+  border-radius: 6px;
+  padding: 8px;
+}
+.tpm-iso-canvas {
+  cursor: crosshair;
+  user-select: none;
+  display: block;
+  image-rendering: pixelated;
 }
 
 .tpm-export {
